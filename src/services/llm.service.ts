@@ -1,3 +1,7 @@
+// The key goes in the `x-goog-api-key` header, never the URL (`?key=`):
+// URLs get written to logs, monitoring tools and error messages, headers
+// usually do not. `?? ''` because a header value must be a string
+// (a missing key then gets Google's normal "API key not valid" error).
 const API_KEY = process.env.GEMINI_API_KEY
 const GENERATE_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent'
@@ -11,9 +15,9 @@ export async function generateAnswer(
   prompt: string,
   generationConfig?: Record<string, unknown>,
 ): Promise<string> {
-  const res = await fetch(`${GENERATE_URL}?key=${API_KEY}`, {
+  const res = await fetch(GENERATE_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       ...(generationConfig && { generationConfig }),
@@ -89,9 +93,9 @@ export async function generateTurn(req: {
   // this model, so leaving the tools out is the only reliable "answer now".
   tools?: FunctionDeclaration[]
 }): Promise<{ turn: Content; usage: TurnUsage | null; finishReason: string | null }> {
-  const res = await fetch(`${GENERATE_URL}?key=${API_KEY}`, {
+  const res = await fetch(GENERATE_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: turnRequestBody(req),
   })
 
@@ -163,9 +167,9 @@ export async function* streamTurn(req: {
   // omitted = the model can only answer (same as generateTurn)
   tools?: FunctionDeclaration[]
 }): AsyncGenerator<TurnEvent, TurnResult> {
-  const res = await fetch(`${STREAM_URL}?alt=sse&key=${API_KEY}`, {
+  const res = await fetch(`${STREAM_URL}?alt=sse`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: turnRequestBody(req),
   })
 
@@ -246,9 +250,9 @@ export function textOfTurn(turn: Content): string {
 // ("data: {...}\n\n"), so we decode raw bytes, split on SSE event boundaries,
 // parse each JSON payload, and yield just the new text out of it.
 export async function* streamAnswer(prompt: string): AsyncGenerator<string> {
-  const res = await fetch(`${STREAM_URL}?alt=sse&key=${API_KEY}`, {
+  const res = await fetch(`${STREAM_URL}?alt=sse`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
     }),

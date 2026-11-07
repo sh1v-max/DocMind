@@ -1,11 +1,15 @@
+// The key goes in the `x-goog-api-key` header, never the URL (`?key=`):
+// URLs get written to logs, monitoring tools and error messages, headers
+// usually do not. `?? ''` because a header value must be a string
+// (a missing key then gets Google's normal "API key not valid" error).
 const API_KEY = process.env.GEMINI_API_KEY
 const EMBED_URL =
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent'
 
 export async function getEmbedding(text: string): Promise<number[]> {
-  const res = await fetch(`${EMBED_URL}?key=${API_KEY}`, {
+  const res = await fetch(EMBED_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify({
       content: { parts: [{ text }] },
     }),
@@ -40,9 +44,9 @@ const BATCH_EMBED_URL =
 export async function getEmbeddings(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
 
-  const res = await fetch(`${BATCH_EMBED_URL}?key=${API_KEY}`, {
+  const res = await fetch(BATCH_EMBED_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify({
       // one request object per text; the model name is repeated in each
       requests: texts.map((text) => ({

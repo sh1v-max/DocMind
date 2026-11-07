@@ -285,9 +285,9 @@ async function callGemini(body: object, label: string) {
   await pace()
   outgoing('generateContent', label)
   const started = Date.now()
-  const res = await fetch(`${MODEL_URL}:generateContent?key=${API_KEY}`, {
+  const res = await fetch(`${MODEL_URL}:generateContent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify(body),
   })
   const ms = Date.now() - started
@@ -319,9 +319,9 @@ async function streamGemini(body: object, label: string) {
   await pace()
   outgoing('streamGenerateContent', label)
   const started = Date.now()
-  const res = await fetch(`${MODEL_URL}:streamGenerateContent?alt=sse&key=${API_KEY}`, {
+  const res = await fetch(`${MODEL_URL}:streamGenerateContent?alt=sse`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify(body),
   })
   if (!res.ok || !res.body) {

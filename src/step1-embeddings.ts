@@ -19,9 +19,9 @@ async function getEmbedding(text: string): Promise<number[]> {
   //   }),
   // })
 
-  const res = await fetch(`${EMBED_URL}?key=${API_KEY}`, {
+  const res = await fetch(EMBED_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify({
       content: { parts: [{ text }] },
     }),
