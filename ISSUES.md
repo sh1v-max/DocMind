@@ -12,7 +12,7 @@ When an open item gets fixed, move it to "Fixed" with the date and the commit.
 | | Count |
 |---|---|
 | **Open** | **33**: bugs 7 · robustness 8 · known gaps 8 · slowness 3 · hygiene 7 |
-| **Fixed** | **43** app bugs, design problems and doc fixes, plus 12 testing/tooling traps and 5 environment problems |
+| **Fixed** | **44** app bugs, design problems and doc fixes, plus 12 testing/tooling traps and 5 environment problems |
 
 ---
 
@@ -54,7 +54,7 @@ When an open item gets fixed, move it to "Fixed" with the date and the commit.
 | 20 | `searchSimilar` doesn't return chunk ids | An eval or a citation feature would need them |
 | 21 | No token/cost logging, and Gemini's `generationConfig` shape leaks into `quiz.service.ts` | `generateAnswer` drops `usageMetadata` |
 | 22 | Errors are logged to the terminal only | File logging deliberately deferred (CLAUDE §10) |
-| 23 | If a vector index is ever added, the ANN top-k runs before the owner join filter | Only matters once an index exists (CLAUDE §8) |
+| 23 | If a vector index is ever added, the ANN top-k runs before the owner join filter. Also: pgvector's HNSW/IVFFlat indexes support at most 2,000 dimensions for the `vector` type, so `vector(3072)` can't be indexed as is (use `halfvec`, up to 4,000, or ask Gemini for shorter vectors and re-embed). Noted 2026-11-07 | Only matters once an index exists (CLAUDE §8) |
 
 ## Slowness
 
@@ -127,6 +127,7 @@ When an open item gets fixed, move it to "Fixed" with the date and the commit.
 | F41 | 2026-11-02 | A quiz request was answered as a document question (a search + an answer, no quiz) | A code-written offer + a Create quiz button; the quiz only runs on the click (AG.5) |
 | F42 | 2026-10-14 | Uploads made the user wait for every chunk's embedding inside the HTTP request | Parse in the request, embed on a BullMQ worker, 202 + `processing` → `ready` (Phase 6) |
 | F43 | 2026-11-04 | CODE_EXPLAINED linked `UploadDropzone.tsx` (removed in the redesign), Step 4.1 code that had moved to `quiz.service.ts`, and dozens of line ranges in the chat files that Phase 7 rewrote (was open item #33) | Re-mapped by reading the code each link points at; steps whose code no longer exists say so instead of linking (AG.7) |
+| F44 | 2026-11-07 | The Gemini API key was sent as `?key=` in the URL of every call (`llm.service.ts` ×4, `embeddings.service.ts` ×2, the step1/2/6 scripts), and URLs end up in logs and error trackers (was open item #35) | Sent as the `x-goog-api-key` header instead (`?alt=sse` stays in the stream URLs). Checked: all 6 functions answered with the real key, all 6 got Google's 400 "API key not valid" with a wrong one. Not committed yet |
 
 ## Testing and tooling traps (not app bugs, but they cost time)
 

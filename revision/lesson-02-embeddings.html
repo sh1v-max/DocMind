@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embeddings and Similarity</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: the same lab notebook as lessons 0, 1 and 6. Blue = the
+   question / the model, amber = stored chunks and matches, five muted
+   topic colours on the meaning map. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #142030;
+  --muted: #586779;
+  --line: #d8dfe8;
+  --accent: #2450d8;
+  --accent-soft: #e4ebfd;
+  --hit: #b86e00;
+  --hit-soft: #fff0d4;
+  --good: #1d8549;
+  --good-soft: #e1f4e8;
+  --bad: #c0352a;
+  --bad-soft: #fbe5e2;
+  --code-bg: #edf1f6;
+  --t0: #2f6fd6; --t1: #c2410c; --t2: #15803d; --t3: #7c3aed; --t4: #be185d;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+    --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+    --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+    --t0: #79a8ff; --t1: #ff9a5c; --t2: #5fd38d; --t3: #b79bff; --t4: #ff7fb8;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+  --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+  --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+  --t0: #79a8ff; --t1: #ff9a5c; --t2: #5fd38d; --t3: #b79bff; --t4: #ff7fb8;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px 80px; }
+.read { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; }
+h3 { font-size: 1.1rem; font-weight: 600; }
+p { margin: 0; }
+code, pre, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.top { padding: 40px 0 28px; display: grid; gap: 16px; border-bottom: 1px solid var(--line); }
+.eyebrow { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.lede { font-size: 1.12rem; color: var(--muted); max-width: 62ch; }
+.lessons { display: flex; flex-wrap: wrap; gap: 6px; }
+.lesson-chip { font-family: var(--font-mono); font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); text-decoration: none; }
+a.lesson-chip { color: var(--accent); border-color: var(--accent); }
+a.lesson-chip:hover { background: var(--accent-soft); }
+.lesson-chip.current { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; color: var(--muted); font-size: 0.92rem; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500; transition: background 150ms, border-color 150ms; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.btn.done { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.btn.small { padding: 4px 10px; font-size: 0.85rem; }
+.btn.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.toc { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 0.92rem; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.toc b { font-family: var(--font-mono); color: var(--accent); font-weight: 600; margin-right: 4px; }
+section { padding: 48px 0 8px; display: grid; gap: 18px; }
+.sec-num { font-family: var(--font-mono); color: var(--accent); font-size: 0.85rem; font-weight: 600; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.stack { display: grid; gap: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 0.88rem; }
+.note { font-size: 0.85rem; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; }
+.analogy { border-left: 4px solid var(--hit); background: var(--hit-soft); border-radius: 0 var(--radius) var(--radius) 0; padding: 14px 18px; }
+.tag { font-family: var(--font-mono); font-size: 0.74rem; border-radius: 6px; padding: 2px 7px; background: var(--accent-soft); color: var(--accent); }
+.tag.grey { background: var(--code-bg); color: var(--muted); }
+.tag.bonus { background: var(--bad-soft); color: var(--bad); }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+.box-title { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px; }
+.verdict { border-radius: 8px; padding: 10px 12px; font-size: 0.92rem; }
+.verdict.good { background: var(--good-soft); color: var(--good); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+.verdict.warn { background: var(--hit-soft); color: var(--hit); }
+.readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+.readout { background: var(--bg); border-radius: 8px; padding: 10px; }
+.readout b { display: block; font-family: var(--font-display); font-size: 1.35rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.readout span { font-size: 0.75rem; color: var(--muted); }
+.pg { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 820px) { .pg { grid-template-columns: 1fr; } }
+canvas.plot { width: 100%; display: block; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); touch-action: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.fact b { display: block; font-family: var(--font-display); font-size: 1.5rem; color: var(--accent); line-height: 1.1; }
+
+/* embed demo */
+.embed-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.4fr); gap: 12px; align-items: center; }
+@media (max-width: 640px) { .embed-row { grid-template-columns: 1fr; } }
+.q-pill { background: var(--surface); border: 1px solid var(--accent); border-radius: 999px; padding: 6px 14px; display: inline-block; font-size: 0.92rem; }
+.arrowtxt { font-family: var(--font-mono); color: var(--muted); font-size: 0.8rem; text-align: center; }
+.mini-vec { display: flex; gap: 2px; }
+.mini-vec i { flex: 1; height: 26px; border-radius: 2px; transition: background 400ms; }
+
+/* ranking list */
+.rank { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.rank li { display: grid; grid-template-columns: 14px minmax(0, 1fr) 54px; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; font-size: 0.85rem; }
+.rank li.top { border-color: var(--hit); background: var(--hit-soft); }
+.rank .sw { width: 10px; height: 10px; border-radius: 50%; }
+.rank .v { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.8rem; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+
+/* real numbers */
+.bars { display: grid; gap: 10px; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr) 60px; gap: 10px; align-items: center; font-size: 0.88rem; }
+.bar-row .track { height: 16px; background: var(--code-bg); border-radius: 5px; overflow: hidden; }
+.bar-row .track i { display: block; height: 100%; border-radius: 5px; }
+.bar-row .v { font-family: var(--font-mono); text-align: right; }
+@media (max-width: 560px) { .bar-row { grid-template-columns: 1fr 1fr 54px; } }
+
+table.cmp { width: 100%; border-collapse: collapse; font-size: 0.9rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+table.cmp th, table.cmp td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.cmp th { background: var(--code-bg); font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+table.cmp td:first-child { font-weight: 600; white-space: nowrap; }
+table.cmp td.path { font-family: var(--font-mono); font-size: 0.8rem; }
+.table-scroll { overflow-x: auto; }
+.bit { display: grid; gap: 8px; align-content: start; }
+.bit .big { font-family: var(--font-display); font-weight: 800; font-size: 1.5rem; color: var(--hit); line-height: 1.05; }
+
+/* drill */
+.qa-group { display: grid; gap: 8px; }
+.qa-group h3 { display: flex; gap: 10px; align-items: baseline; margin-top: 10px; }
+.qa-group h3 span { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+details.qa { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+details.qa summary { cursor: pointer; padding: 12px 16px; font-weight: 600; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+details.qa summary::-webkit-details-marker { display: none; }
+details.qa summary::before { content: "+"; font-family: var(--font-mono); color: var(--accent); width: 1ch; flex: none; }
+details.qa[open] summary::before { content: "−"; }
+details.qa .ans { padding: 2px 16px 16px; display: grid; gap: 12px; font-size: 0.95rem; }
+details.qa .ans p { margin: 0; }
+details.qa .ans ol, details.qa .ans ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.ans .lab { display: block; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.ans .say { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 10px 12px; }
+.ans .say .lab { color: var(--accent); }
+.ans .say p { font-weight: 500; }
+.ans .part { display: grid; gap: 6px; }
+.ans .dm { background: var(--hit-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .dm .lab { color: var(--hit); }
+.ans .push { border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; }
+.ans .trap { background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .trap .lab { color: var(--bad); }
+.ans pre.ex { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; font-size: 0.78rem; line-height: 1.5; white-space: pre; overflow-x: auto; }
+.lvl { font-family: var(--font-mono); font-size: 0.68rem; border-radius: 5px; padding: 1px 6px; margin-left: auto; flex: none; font-weight: 500; }
+.lvl.e { background: var(--good-soft); color: var(--good); }
+.lvl.m { background: var(--hit-soft); color: var(--hit); }
+.lvl.h { background: var(--bad-soft); color: var(--bad); }
+.drill-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.script { border: 2px solid var(--accent); }
+.script p { font-size: 1.02rem; }
+
+/* quiz */
+.quiz { display: grid; gap: 14px; }
+.qq { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 8px; margin: 0; }
+.qq legend { font-weight: 600; padding: 0 4px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; font-size: 0.94rem; }
+.opt:hover { background: var(--bg); }
+.opt input { margin-top: 5px; accent-color: var(--accent); }
+.opt.right { border-color: var(--good); background: var(--good-soft); }
+.opt.wrong { border-color: var(--bad); background: var(--bad-soft); }
+.why { font-size: 0.88rem; color: var(--muted); display: none; }
+.checked .why { display: block; }
+.score { font-family: var(--font-display); font-weight: 800; font-size: 1.3rem; }
+.next { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">DocMind revision · Track A, AI foundations</div>
+  <h1>Lesson 2 · Embeddings and similarity</h1>
+  <p class="lede">How text becomes a list of numbers that captures its meaning, how you measure "similar", and where it goes wrong. This is the idea every search, RAG system and router in DocMind sits on.</p>
+  <div class="lessons" aria-label="All lessons">
+    <a class="lesson-chip" href="https://claude.ai/artifact/U3SBL3JuXPaY9PSbD3qBHs">0 Foundations</a><a class="lesson-chip" href="https://claude.ai/artifact/8aiEhWxvtnuMzvuKEKmHqu">1 LLMs</a><span class="lesson-chip current">2 Embeddings</span><a class="lesson-chip" href="https://claude.ai/artifact/34tmJf8BuMMEGgMZ4qRUqN">3 Calling the model</a><span class="lesson-chip">4 Ingestion</span><span class="lesson-chip">5 Vector DBs</span><a class="lesson-chip" href="https://claude.ai/artifact/SRRQhczagqJqFcQqwcVq6t">6 RAG</a><span class="lesson-chip">7 Streaming</span><span class="lesson-chip">8 Structured output</span><span class="lesson-chip">9 Background jobs</span><span class="lesson-chip">10 Auth</span><span class="lesson-chip">11 Deploy</span><span class="lesson-chip">12 Routing</span><span class="lesson-chip">13 Agents</span><span class="lesson-chip">14 Not built yet</span><span class="lesson-chip">15 Mock interview</span>
+  </div>
+  <div class="meta-row">
+    <span>About 50 minutes · 9 parts · 25 interview questions</span>
+    <button class="btn" id="doneBtn" type="button">Mark lesson as done</button>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Parts of this lesson">
+  <a href="#idea"><b>1</b>The idea</a>
+  <a href="#map"><b>2</b>The meaning map</a>
+  <a href="#cosine"><b>3</b>Cosine by hand</a>
+  <a href="#training"><b>4</b>How it learns meaning</a>
+  <a href="#real"><b>5</b>Your real numbers</a>
+  <a href="#uses"><b>6</b>Uses and gotchas</a>
+  <a href="#code"><b>7</b>In your code</a>
+  <a href="#drill"><b>8</b>Interview drill</a>
+  <a href="#quiz"><b>9</b>Quiz</a>
+</nav>
+
+<!-- ============ 1. IDEA ============ -->
+<section id="idea">
+  <div class="sec-num">PART 1 · THE IDEA IN 60 SECONDS</div>
+  <h2>Turn text into numbers so that similar meaning means nearby numbers</h2>
+  <div class="read stack">
+    <p>A computer can't compare the <i>meaning</i> of two sentences, only numbers. An <b>embedding model</b> turns any text into a fixed-length list of numbers (a <b>vector</b>), trained so that texts with similar meaning get vectors pointing in similar directions. Then "find text about this" becomes "find the nearest vectors", which a database can do fast.</p>
+  </div>
+  <div class="card stack">
+    <div class="embed-row">
+      <div class="q-pill" id="embText">Who built the lighthouse?</div>
+      <div class="arrowtxt">→ gemini-embedding-001 →</div>
+      <div class="stack" style="gap:4px"><div class="mini-vec" id="embVec"></div><span class="small muted mono" id="embNums"></span></div>
+    </div>
+    <div class="controls">
+      <span class="small muted">Try another text:</span>
+      <button class="btn small" type="button" data-t="0">Who built the lighthouse?</button>
+      <button class="btn small" type="button" data-t="1">Who constructed the tower?</button>
+      <button class="btn small" type="button" data-t="2">Fresh fish at the market</button>
+    </div>
+    <p class="note">Showing 40 of the 3072 numbers, as colours (example values). Notice the first two look alike and the third doesn't: similar meaning, similar pattern, even with no words in common.</p>
+  </div>
+  <div class="analogy read"><b>Analogy: coordinates for meaning.</b> A city has a latitude and longitude, and nearby cities have nearby coordinates. An embedding is a coordinate for a piece of text, on a map with 3072 directions instead of 2. "Who built the lighthouse?" and "Who constructed the tower?" end up neighbours; "fresh fish at the market" lives across town.</div>
+  <div class="facts">
+    <div class="card fact"><b>3072</b><p class="small muted">numbers per text from <code>gemini-embedding-001</code>, whether you send one word or a whole page.</p></div>
+    <div class="card fact"><b>No single meaning</b><p class="small muted">Number #42 isn't "lighthouse-ness". Only the whole vector, compared with others, means anything.</p></div>
+    <div class="card fact"><b>One way</b><p class="small muted">You can't turn the numbers back into the sentence. It's a fingerprint, not a compression.</p></div>
+    <div class="card fact"><b>Same model, both sides</b><p class="small muted">Chunks and questions must be embedded by the same model, or the numbers aren't comparable.</p></div>
+  </div>
+</section>
+
+<!-- ============ 2. MEANING MAP ============ -->
+<section id="map">
+  <div class="sec-num">PART 2 · THE MEANING MAP</div>
+  <h2>Ask a question, find its nearest neighbours</h2>
+  <p class="read muted">Each dot is a sentence, drawn as an arrow from the corner. Similar sentences point in similar directions. Pick a question (or click any dot) and the closest sentences light up, ranked by <b>cosine similarity</b>. This is semantic search in miniature.</p>
+  <div class="card pg">
+    <div class="stack">
+      <canvas class="plot" id="mapCv" height="380" aria-label="Sentences as arrows; the question and its nearest neighbours are highlighted"></canvas>
+      <div class="legend" id="mapLegend"></div>
+    </div>
+    <div class="stack">
+      <div class="box-title">Ask</div>
+      <div class="controls" id="mapQs"></div>
+      <div class="box-title">Closest sentences</div>
+      <ol class="rank" id="mapRank"></ol>
+      <div class="verdict" id="mapVerdict"></div>
+    </div>
+  </div>
+  <p class="note">A 2-direction toy so you can see it. Real vectors have 3072 directions and all scores sit higher (your "unrelated" pair still scored 0.59), but the ranking idea is identical. The dot's distance from the corner doesn't matter, only its direction.</p>
+</section>
+
+<!-- ============ 3. COSINE ============ -->
+<section id="cosine">
+  <div class="sec-num">PART 3 · COSINE SIMILARITY BY HAND</div>
+  <h2>Similarity is the angle between two arrows</h2>
+  <div class="read stack">
+    <p>Drag the tips of arrow <b style="color:var(--accent)">A</b> and arrow <b style="color:var(--hit)">B</b>. <b>Cosine similarity</b> only looks at the angle between them: 1 = same direction, 0 = at right angles (unrelated), −1 = opposite. pgvector's <code>&lt;=&gt;</code> returns <b>cosine distance</b> = 1 − similarity, so there <b>smaller is closer</b>.</p>
+  </div>
+  <div class="card pg">
+    <div class="stack">
+      <canvas class="plot" id="cosCv" height="340" aria-label="Two draggable arrows A and B from the centre"></canvas>
+      <div class="controls">
+        <button class="btn small" type="button" id="cosSame">Same direction, B longer</button>
+        <button class="btn small" type="button" id="cosRight">Right angle</button>
+        <button class="btn small" type="button" id="cosOpp">Opposite</button>
+        <button class="btn small" type="button" id="cosClose">Close</button>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="readouts">
+        <div class="readout"><b id="cAng">0°</b><span>angle</span></div>
+        <div class="readout"><b id="cSim">0</b><span>cosine similarity</span></div>
+        <div class="readout"><b id="cDist">0</b><span>cosine distance (pgvector &lt;=&gt;)</span></div>
+        <div class="readout"><b id="cEuc">0</b><span>straight-line distance</span></div>
+      </div>
+      <div class="box">
+        <div class="box-title">The formula, with these numbers</div>
+        <pre class="mono" id="cMath" style="margin:0;white-space:pre-wrap;font-size:0.8rem"></pre>
+      </div>
+      <div class="verdict" id="cVerdict"></div>
+    </div>
+  </div>
+  <p class="note read">Press "Same direction, B longer": cosine stays 1.00 while the straight-line distance grows. That's why cosine is the usual choice for text: a long chunk and a short question about the same thing should still count as a match. (Gemini's vectors already come with length 1, so for them cosine and dot product rank the same way.)</p>
+</section>
+
+<!-- ============ 4. TRAINING ============ -->
+<section id="training">
+  <div class="sec-num">PART 4 · HOW IT LEARNS MEANING</div>
+  <h2>Pull matching texts together, push unrelated ones apart</h2>
+  <div class="read stack">
+    <p>Nobody writes rules saying "lighthouse is near tower". The model learns it from huge numbers of pairs that belong together: a question and its answer, a title and its article, two ways of saying the same thing. Training pulls each pair's vectors closer and pushes random unrelated texts away. Repeat millions of times and topics form neighbourhoods. This is called <b>contrastive learning</b>.</p>
+  </div>
+  <div class="card stack">
+    <canvas class="plot" id="trCv" height="300" aria-label="Dots start scattered and group into topics as training runs"></canvas>
+    <div class="controls">
+      <button class="btn primary" type="button" id="trPlay">▶ Train</button>
+      <button class="btn" type="button" id="trReset">Scatter again</button>
+      <span class="small muted mono" id="trRound">round 0</span>
+    </div>
+    <div class="legend" id="trLegend"></div>
+    <p class="note">A toy simulation of the idea, not the real training maths. The point: meaning-based closeness isn't programmed, it emerges from which texts appeared together.</p>
+  </div>
+</section>
+
+<!-- ============ 5. REAL NUMBERS ============ -->
+<section id="real">
+  <div class="sec-num">PART 5 · YOUR REAL NUMBERS</div>
+  <h2>What you measured, and what it taught you</h2>
+  <div class="card stack">
+    <h3>Step 1.1: the first test</h3>
+    <div class="bars">
+      <div class="bar-row"><span>"The cat sat on the mat." vs "A kitten was resting on the rug."</span><span class="track"><i style="width:76.28%;background:var(--good)"></i></span><span class="v">0.7628</span></div>
+      <div class="bar-row"><span>"The cat sat on the mat." vs "The stock market crashed on Tuesday."</span><span class="track"><i style="width:58.79%;background:var(--muted)"></i></span><span class="v">0.5879</span></div>
+    </div>
+    <div class="verdict warn">The related pair wins, so it works. But "unrelated" scored 0.59, nowhere near 0. With this model, scores only mean something <b>compared to each other</b>. Never hard-code "above 0.7 = relevant" without measuring.</div>
+  </div>
+  <div class="grid2">
+    <div class="card bit"><div class="big">0.450 vs 0.452</div><h3>Close calls are common</h3><p class="small">"and who founded it?" picked the right chunk by 0.002 (lesson 6). A message with no subject has no clear direction, so many chunks score about the same.</p></div>
+    <div class="card bit"><div class="big">~0.5 to everything</div><h3>Specific questions sit in the middle</h3><p class="small">In your router, real document questions scored about 0.5 against <i>every</i> example phrase, so the gap between the top two intents was tiny (0.006 to 0.014).</p></div>
+    <div class="card bit"><div class="big">margin 0.141</div><h3>Shared words fool vectors</h3><p class="small">"compare the two pdfs" landed nearest to "quiz me about the pdf", with a clear margin. Similar words, different intent. That's why a vector "quiz" always gets a second opinion from the LLM.</p></div>
+    <div class="card bit"><div class="big">70 texts = 70 requests</div><h3>Batching saves time, not quota</h3><p class="small">One batch call with 70 texts counted as 70 against the 100-per-minute embedding limit. Two eval runs back to back hit a 429.</p></div>
+  </div>
+</section>
+
+<!-- ============ 6. USES & GOTCHAS ============ -->
+<section id="uses">
+  <div class="sec-num">PART 6 · USES AND GOTCHAS</div>
+  <h2>What embeddings are good for, and where they fail</h2>
+  <div class="grid3">
+    <div class="card"><h3>Semantic search</h3><p class="small muted">Find passages by meaning, not exact words. The R in RAG. <b>DocMind: chunk search.</b></p></div>
+    <div class="card"><h3>Routing and classification</h3><p class="small muted">Compare a message with example phrases per category; nearest category wins. <b>DocMind: the intent router.</b></p></div>
+    <div class="card"><h3>Recommendations</h3><p class="small muted">"Users who read this also liked…": nearest articles or products.</p></div>
+    <div class="card"><h3>Duplicate detection</h3><p class="small muted">Two support tickets with near-identical vectors are probably the same issue.</p></div>
+    <div class="card"><h3>Clustering</h3><p class="small muted">Group thousands of feedback messages into themes without reading them all.</p></div>
+    <div class="card"><h3>Caching</h3><p class="small muted">Reuse work for a repeated question (exact repeats are safe; "similar" is risky).</p></div>
+  </div>
+  <h3>Where embeddings go wrong</h3>
+  <div class="table-scroll">
+    <table class="cmp">
+      <thead><tr><th>Problem</th><th>Example</th><th>What to do</th></tr></thead>
+      <tbody>
+        <tr><td>Shared words, different intent</td><td>"compare the two pdfs" ≈ "quiz me about the pdf"</td><td>Second opinion (an LLM) on close or risky calls</td></tr>
+        <tr><td>Negation</td><td>"flights that are <b>not</b> delayed" ≈ "delayed flights"</td><td>Filters in code, or let an LLM read the results</td></tr>
+        <tr><td>Exact codes and IDs</td><td>"error E1042" ≈ "error E1043"</td><td>Keyword search alongside (hybrid search)</td></tr>
+        <tr><td>Vague follow-ups</td><td>"and who founded it?"</td><td>Rewrite into a full question before embedding</td></tr>
+        <tr><td>Mixed models</td><td>chunks from model A, question from model B</td><td>One model everywhere; re-embed everything when switching</td></tr>
+        <tr><td>Too much text in one vector</td><td>a 20-page chunk becomes a blurry average</td><td>Chunk into short passages (lesson 4)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card stack read">
+    <h3>Storage and cost, quick maths</h3>
+    <p class="small">Each number is stored as 4 bytes, so one 3072-number vector ≈ <b>12 KB</b>. A million chunks ≈ 12 GB of vectors alone. Embedding calls are cheap and fast compared with generating text, but they still count against rate limits (100 per minute on your free tier).</p>
+    <p class="small muted"><span class="tag bonus">bonus</span> Smaller vectors (768 or 1536 numbers) take less space and search faster, with a small quality loss; Gemini's embedding model can return shorter vectors if you ask. pgvector's fast indexes support at most 2,000 dimensions for the normal <code>vector</code> type, so a <code>vector(3072)</code> column would need <code>halfvec</code> or shorter vectors before an index can be added.</p>
+  </div>
+</section>
+
+<!-- ============ 7. CODE ============ -->
+<section id="code">
+  <div class="sec-num">PART 7 · IN YOUR CODE</div>
+  <h2>Where embeddings live in DocMind</h2>
+  <div class="table-scroll">
+    <table class="cmp">
+      <thead><tr><th>What</th><th>File · function</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>First experiment</td><td class="path">src/step1-embeddings.ts</td><td>Cosine similarity written by hand; 0.7628 vs 0.5879.</td></tr>
+        <tr><td>Embed one text</td><td class="path">src/services/embeddings.service.ts · getEmbedding</td><td>Plain <code>fetch</code> to <code>…/gemini-embedding-001:embedContent</code>, returns 3072 numbers.</td></tr>
+        <tr><td>Embed many</td><td class="path">src/services/embeddings.service.ts · getEmbeddings</td><td><code>batchEmbedContents</code>: one round trip, but each text counts against the rate limit.</td></tr>
+        <tr><td>Store</td><td class="path">src/db/schema.ts · chunks</td><td><code>embedding vector(3072)</code> next to the chunk text.</td></tr>
+        <tr><td>Embed chunks</td><td class="path">src/workers/ingest.worker.ts</td><td>The background job embeds every chunk after upload (lesson 9).</td></tr>
+        <tr><td>Search</td><td class="path">src/repositories/chunks.repository.ts · searchSimilar</td><td><code>cosineDistance</code> → <code>&lt;=&gt;</code>, smallest first.</td></tr>
+        <tr><td>Route</td><td class="path">src/services/router.service.ts · cosineSimilarity, scoreIntents</td><td>28 example phrases embedded once per process; the question's vector is reused.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note read">The roadmap still mentions <code>text-embedding-004</code> with 768 numbers; that model was retired, and the code uses <code>gemini-embedding-001</code> with 3072. If an interviewer asks why 3072: it's simply that model's default size.</p>
+</section>
+
+<!-- ============ 8. DRILL ============ -->
+<section id="drill">
+  <div class="sec-num">PART 8 · INTERVIEW DRILL</div>
+  <h2>25 questions you could get. Answer out loud first, then open.</h2>
+  <div class="card script stack">
+    <h3>Say it in 60 seconds: "What are embeddings, and how did you use them?"</h3>
+    <p>"An embedding is a list of numbers that represents the meaning of a piece of text. A trained embedding model produces it, and texts with similar meaning get vectors pointing in similar directions, so you can measure similarity with cosine similarity. In my project, DocMind, I split every uploaded PDF into chunks, embed each chunk with Gemini's embedding model into 3072 numbers, and store them in Postgres with pgvector. When a user asks something, I embed the question with the same model and fetch the closest chunks for the LLM to answer from. I also reuse the same embedding to route messages, by comparing it with example phrases for each intent. One thing I learned measuring it: scores are relative. My unrelated test pair still scored 0.59."</p>
+  </div>
+  <p class="read muted">Each answer opens with <b>Say this first</b>: the 10-second version to lead with. <span class="lvl h">bonus</span> questions go beyond most intern interviews.</p>
+  <div class="drill-bar">
+    <button class="btn small" type="button" id="openAll">Open all answers</button>
+    <button class="btn small" type="button" id="closeAll">Close all</button>
+    <span class="small muted">Levels: <span class="lvl e">basic</span> <span class="lvl m">solid</span> <span class="lvl h">bonus</span></span>
+  </div>
+  <div class="stack" id="qaList"></div>
+</section>
+
+<!-- ============ 9. QUIZ ============ -->
+<section id="quiz">
+  <div class="sec-num">PART 9 · QUIZ</div>
+  <h2>Eight questions. No peeking.</h2>
+  <form class="quiz" id="quizForm"></form>
+  <div class="next">
+    <button class="btn primary" type="button" id="checkBtn">Check answers</button>
+    <span class="score" id="scoreOut" aria-live="polite"></span>
+  </div>
+</section>
+
+<section>
+  <div class="card next">
+    <div><div class="sec-num">UP NEXT</div><h3>Lesson 3 · Calling the model</h3><p class="small muted">Prompts, roles, few-shot examples, generation settings, and handling rate limits and errors.</p></div>
+    <a class="btn primary" href="https://claude.ai/artifact/34tmJf8BuMMEGgMZ4qRUqN" style="text-decoration:none">Open lesson 3 →</a>
+  </div>
+</section>
+
+</div>
+
+<script>
+(() => {
+'use strict';
+const RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function gauss(rnd) { const u = Math.max(rnd(), 1e-9), v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth || 500, h = Number(c.getAttribute('height'));
+  c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); c.style.height = h + 'px';
+  const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+const TOPIC_VARS = ['--t0', '--t1', '--t2', '--t3', '--t4'];
+const topicCol = (i) => css(TOPIC_VARS[i]);
+const VCOL = (v) => `color-mix(in srgb, ${v >= 0 ? 'var(--hit)' : 'var(--accent)'} ${Math.round(Math.min(1, Math.abs(v)) * 85 + 10)}%, var(--surface))`;
+
+/* ================= Part 1: embed demo ================= */
+const base = mulberry32(3);
+const VLight = Array.from({ length: 40 }, () => gauss(base) * 0.6);
+const vr2 = mulberry32(9);
+const EMB = [
+  { t: 'Who built the lighthouse?', v: VLight },
+  { t: 'Who constructed the tower?', v: VLight.map((x) => x * 0.85 + gauss(vr2) * 0.18) },
+  { t: 'Fresh fish at the market', v: Array.from({ length: 40 }, () => gauss(vr2) * 0.6) },
+];
+$('#embVec').innerHTML = VLight.map(() => '<i></i>').join('');
+function showEmb(i) {
+  const e = EMB[i];
+  $('#embText').textContent = e.t;
+  [...$('#embVec').children].forEach((c, k) => { c.style.background = VCOL(e.v[k]); });
+  $('#embNums').textContent = `[${e.v.slice(0, 4).map((x) => (x * 0.03).toFixed(4)).join(', ')}, … 3068 more]`;
+  document.querySelectorAll('[data-t]').forEach((b) => b.classList.toggle('sel', Number(b.dataset.t) === i));
+}
+document.querySelectorAll('[data-t]').forEach((b) => b.addEventListener('click', () => showEmb(Number(b.dataset.t))));
+showEmb(0);
+
+/* ================= Part 2: meaning map ================= */
+const TOPICS = ['Lighthouse', 'Lantern Festival', 'Food and ferries', 'Small talk', 'Quiz requests'];
+const deg = (d) => d * Math.PI / 180;
+const S = [
+  [0, 6, 0.95, 'The lighthouse was built in 1874'], [0, 9, 0.7, 'Orla Vantris designed the tower'], [0, 4, 0.6, 'The lighthouse is 31 metres tall'],
+  [1, 26, 0.9, 'The Lantern Festival is held every autumn'], [1, 30, 0.65, 'Tomas Reyk founded the festival'], [1, 24, 0.75, 'Lanterns are carried to the harbour'],
+  [2, 47, 0.85, 'Fresh fish is sold at the morning market'], [2, 51, 0.6, 'Ferries leave the harbour at 9:00'], [2, 45, 0.7, 'Try the smoked mackerel'],
+  [3, 66, 0.9, 'hello'], [3, 70, 0.7, 'thank you so much'], [3, 68, 0.55, 'see you later'],
+  [4, 84, 0.85, 'give me a quiz'], [4, 87, 0.65, 'test my knowledge of this'], [4, 82, 0.75, 'quiz me about the pdf'],
+].map(([t, a, r, s]) => ({ t, a, r, s, x: Math.cos(deg(a)) * r, y: Math.sin(deg(a)) * r }));
+const QS = [
+  { s: 'Who built the lighthouse?', a: 7, note: 'Clear winner: all three lighthouse sentences, far ahead of everything else.' },
+  { s: 'When is the festival?', a: 27, note: 'Festival sentences first. The lighthouse ones are next door, because both are "Velmora history".' },
+  { s: 'Where can I eat seafood?', a: 49, note: 'No shared words with "smoked mackerel" or "fish market", yet they win. That\'s semantic search: meaning, not keywords.' },
+  { s: 'hi there!', a: 69, note: 'Small talk lands with small talk. Your router uses exactly this to skip the document search.' },
+  { s: 'and who founded it?', a: 17, note: 'Lands between two topics with almost equal scores. No subject, no clear direction: the 0.450 vs 0.452 problem.' },
+  { s: 'compare the two pdfs', a: 80, note: 'Lands next to the quiz phrases because of the shared word "pdf". Similar words, different intent: why your router double-checks a vector "quiz".' },
+].map((q) => ({ ...q, x: Math.cos(deg(q.a)) * 0.9, y: Math.sin(deg(q.a)) * 0.9 }));
+const cosSim = (a, b) => (a.x * b.x + a.y * b.y) / (Math.hypot(a.x, a.y) * Math.hypot(b.x, b.y));
+let mapQ = QS[0];
+$('#mapLegend').innerHTML = TOPICS.map((t, i) => `<span><i style="background:var(${TOPIC_VARS[i]})"></i>${t}</span>`).join('') + '<span><i style="background:var(--ink)"></i>Your question</span>';
+$('#mapQs').innerHTML = QS.map((q, i) => `<button class="btn small" type="button" data-q="${i}">${esc(q.s)}</button>`).join('');
+let mapGeom = null;
+function drawMap() {
+  const ranked = S.map((p) => ({ p, sim: cosSim(mapQ, p) })).filter((r) => r.p !== mapQ).sort((a, b) => b.sim - a.sim);
+  const top = new Set(ranked.slice(0, 3).map((r) => r.p));
+  const { ctx, w, h } = setupCanvas($('#mapCv'));
+  const ox = 30, oy = h - 26, R = Math.min(w - 60, h - 50);
+  mapGeom = { ox, oy, R };
+  const P = (x, y) => [ox + x * R, oy - y * R];
+  ctx.strokeStyle = css('--line'); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(ox, oy, R, -Math.PI / 2, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + R + 10, oy); ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - R - 10); ctx.stroke();
+  // arrows to the top 3
+  ranked.slice(0, 3).forEach(({ p }) => { const [x, y] = P(p.x, p.y); ctx.strokeStyle = topicCol(p.t); ctx.globalAlpha = 0.55; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(x, y); ctx.stroke(); ctx.globalAlpha = 1; });
+  // question arrow
+  const [qx, qy] = P(mapQ.x, mapQ.y);
+  ctx.strokeStyle = css('--ink'); ctx.lineWidth = 3; ctx.setLineDash([6, 4]); ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(qx, qy); ctx.stroke(); ctx.setLineDash([]);
+  S.forEach((p) => {
+    const [x, y] = P(p.x, p.y);
+    ctx.globalAlpha = top.has(p) || p === mapQ ? 1 : 0.45;
+    ctx.fillStyle = topicCol(p.t); ctx.beginPath(); ctx.arc(x, y, top.has(p) ? 7 : 5, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+  });
+  ctx.fillStyle = css('--ink'); ctx.beginPath(); ctx.arc(qx, qy, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.font = '600 12px IBM Plex Sans, sans-serif';
+  const label = mapQ.s.length > 28 ? mapQ.s.slice(0, 27) + '…' : mapQ.s;
+  const lw = ctx.measureText(label).width;
+  const lx = Math.min(qx + 10, w - lw - 6);
+  ctx.fillStyle = css('--surface'); ctx.fillRect(lx - 3, qy - 22, lw + 6, 17);
+  ctx.fillStyle = css('--ink'); ctx.fillText(label, lx, qy - 9);
+  $('#mapRank').innerHTML = ranked.slice(0, 6).map((r, i) => `<li class="${i < 3 ? 'top' : ''}"><span class="sw" style="background:var(${TOPIC_VARS[r.p.t]})"></span><span>${esc(r.p.s)}</span><span class="v">${r.sim.toFixed(3)}</span></li>`).join('');
+  const v = $('#mapVerdict');
+  const gap = ranked[0].sim - ranked[3].sim;
+  v.className = 'verdict ' + (mapQ.note ? (gap < 0.03 || mapQ.s.includes('pdfs') ? 'warn' : 'good') : 'good');
+  v.textContent = mapQ.note || `You picked a stored sentence. Its nearest neighbours are the others from the same topic (${TOPICS[mapQ.t]}).`;
+  document.querySelectorAll('[data-q]').forEach((b) => b.classList.toggle('sel', QS[Number(b.dataset.q)] === mapQ));
+}
+$('#mapQs').addEventListener('click', (e) => { const b = e.target.closest('[data-q]'); if (b) { mapQ = QS[Number(b.dataset.q)]; drawMap(); } });
+$('#mapCv').addEventListener('click', (e) => {
+  if (!mapGeom) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  let best = null, bd = 16;
+  S.forEach((p) => { const x = mapGeom.ox + p.x * mapGeom.R, y = mapGeom.oy - p.y * mapGeom.R; const d = Math.hypot(mx - x, my - y); if (d < bd) { bd = d; best = p; } });
+  if (best) { mapQ = best; drawMap(); }
+});
+drawMap();
+
+/* ================= Part 3: cosine lab ================= */
+const cos = { A: { x: 0.8, y: 0.3 }, B: { x: 0.5, y: 0.75 } };
+let cosGeom = null, dragging = null;
+function drawCos() {
+  const { ctx, w, h } = setupCanvas($('#cosCv'));
+  const cx = w / 2, cy = h / 2, R = Math.min(w, h) / 2 - 24;
+  cosGeom = { cx, cy, R };
+  const P = (v) => [cx + v.x * R, cy - v.y * R];
+  ctx.strokeStyle = css('--line'); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx - R - 8, cy); ctx.lineTo(cx + R + 8, cy); ctx.moveTo(cx, cy - R - 8); ctx.lineTo(cx, cy + R + 8); ctx.stroke();
+  const aa = Math.atan2(cos.A.y, cos.A.x), ab = Math.atan2(cos.B.y, cos.B.x);
+  ctx.strokeStyle = css('--good'); ctx.lineWidth = 2;
+  let d = ab - aa; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+  ctx.beginPath(); ctx.arc(cx, cy, 34, -aa, -(aa + d), d > 0); ctx.stroke();
+  [['A', '--accent'], ['B', '--hit']].forEach(([k, col]) => {
+    const [x, y] = P(cos[k]); const c = css(col);
+    ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke();
+    const ang = Math.atan2(y - cy, x - cx);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 12 * Math.cos(ang - 0.4), y - 12 * Math.sin(ang - 0.4)); ctx.lineTo(x - 12 * Math.cos(ang + 0.4), y - 12 * Math.sin(ang + 0.4)); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.globalAlpha = 0.2; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.font = '700 14px IBM Plex Sans, sans-serif'; ctx.fillText(k, x + 10, y - 8);
+  });
+  const { A, B } = cos;
+  const dot = A.x * B.x + A.y * B.y, la = Math.hypot(A.x, A.y), lb = Math.hypot(B.x, B.y);
+  const sim = dot / (la * lb), angle = Math.acos(Math.max(-1, Math.min(1, sim))) * 180 / Math.PI;
+  $('#cAng').textContent = Math.round(angle) + '°';
+  $('#cSim').textContent = sim.toFixed(2);
+  $('#cDist').textContent = (1 - sim).toFixed(2);
+  $('#cEuc').textContent = Math.hypot(A.x - B.x, A.y - B.y).toFixed(2);
+  $('#cMath').textContent = `A = (${A.x.toFixed(2)}, ${A.y.toFixed(2)})   B = (${B.x.toFixed(2)}, ${B.y.toFixed(2)})
+dot(A, B) = ${A.x.toFixed(2)}×${B.x.toFixed(2)} + ${A.y.toFixed(2)}×${B.y.toFixed(2)} = ${dot.toFixed(3)}
+|A| = ${la.toFixed(3)}    |B| = ${lb.toFixed(3)}
+similarity = ${dot.toFixed(3)} / (${la.toFixed(3)} × ${lb.toFixed(3)}) = ${sim.toFixed(3)}
+distance   = 1 − ${sim.toFixed(3)} = ${(1 - sim).toFixed(3)}`;
+  const v = $('#cVerdict');
+  if (sim > 0.97) { v.className = 'verdict good'; v.textContent = 'Same direction = same meaning, however long the arrows are. A search would rank B first.'; }
+  else if (sim > 0.6) { v.className = 'verdict good'; v.textContent = 'Close directions: related meaning. Small cosine distance.'; }
+  else if (sim > -0.2) { v.className = 'verdict warn'; v.textContent = 'Around a right angle: unrelated. (Real text models rarely go this low; your unrelated pair was still 0.59.)'; }
+  else { v.className = 'verdict bad'; v.textContent = 'Pointing apart. In real text embeddings, truly opposite vectors are rare.'; }
+}
+function cosPointer(e) {
+  const r = $('#cosCv').getBoundingClientRect();
+  return { x: (e.clientX - r.left - cosGeom.cx) / cosGeom.R, y: -(e.clientY - r.top - cosGeom.cy) / cosGeom.R };
+}
+$('#cosCv').addEventListener('pointerdown', (e) => {
+  if (!cosGeom) return;
+  const p = cosPointer(e);
+  const dA = Math.hypot(p.x - cos.A.x, p.y - cos.A.y), dB = Math.hypot(p.x - cos.B.x, p.y - cos.B.y);
+  dragging = dA < dB ? 'A' : 'B';
+  e.currentTarget.setPointerCapture(e.pointerId);
+  const len = Math.hypot(p.x, p.y); const k = len > 1 ? 1 / len : 1;
+  if (len > 0.08) { cos[dragging] = { x: p.x * k, y: p.y * k }; drawCos(); }
+});
+$('#cosCv').addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const p = cosPointer(e); const len = Math.hypot(p.x, p.y); const k = len > 1 ? 1 / len : 1;
+  if (len > 0.08) { cos[dragging] = { x: p.x * k, y: p.y * k }; drawCos(); }
+});
+['pointerup', 'pointercancel'].forEach((ev) => $('#cosCv').addEventListener(ev, () => { dragging = null; }));
+$('#cosSame').addEventListener('click', () => { cos.A = { x: 0.45, y: 0.2 }; cos.B = { x: 0.9, y: 0.4 }; drawCos(); });
+$('#cosRight').addEventListener('click', () => { cos.A = { x: 0.8, y: 0 }; cos.B = { x: 0, y: 0.8 }; drawCos(); });
+$('#cosOpp').addEventListener('click', () => { cos.A = { x: 0.8, y: 0.2 }; cos.B = { x: -0.8, y: -0.2 }; drawCos(); });
+$('#cosClose').addEventListener('click', () => { cos.A = { x: 0.8, y: 0.3 }; cos.B = { x: 0.6, y: 0.5 }; drawCos(); });
+drawCos();
+
+/* ================= Part 4: training toy ================= */
+const TR_TOPICS = ['Lighthouse', 'Festival', 'Food', 'Small talk'];
+let trPts = [], trRound = 0, trRaf = 0, trRunning = false;
+function scatter() {
+  const r = mulberry32(Date.now() % 100000);
+  trPts = [];
+  TR_TOPICS.forEach((_, t) => { for (let k = 0; k < 6; k++) trPts.push({ t, x: 0.1 + r() * 0.8, y: 0.1 + r() * 0.8 }); });
+  trRound = 0;
+}
+function trStep() {
+  const n = trPts.length, fx = new Array(n).fill(0), fy = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const a = trPts[i], b = trPts[j]; let dx = b.x - a.x, dy = b.y - a.y; const d = Math.hypot(dx, dy) + 1e-6; dx /= d; dy /= d;
+    let f;
+    if (a.t === b.t) f = d > 0.1 ? 0.02 * (d - 0.1) : -0.02 * (0.1 - d);   // pull matching pairs together (but keep them visible)
+    else f = d < 0.35 ? -0.008 * (0.35 - d) / 0.35 : 0;       // push unrelated ones apart
+    fx[i] += f * dx; fy[i] += f * dy; fx[j] -= f * dx; fy[j] -= f * dy;
+  }
+  trPts.forEach((p, i) => { p.x = Math.min(0.97, Math.max(0.03, p.x + fx[i])); p.y = Math.min(0.97, Math.max(0.03, p.y + fy[i])); });
+  trRound++;
+}
+function drawTr() {
+  const { ctx, w, h } = setupCanvas($('#trCv'));
+  trPts.forEach((p) => { ctx.fillStyle = topicCol(p.t); ctx.beginPath(); ctx.arc(10 + p.x * (w - 20), 10 + p.y * (h - 20), 7, 0, Math.PI * 2); ctx.fill(); });
+  $('#trRound').textContent = `round ${trRound}`;
+}
+function trLoop() {
+  for (let k = 0; k < (RM ? 400 : 3); k++) trStep();
+  drawTr();
+  if (trRound < 400 && trRunning) trRaf = requestAnimationFrame(trLoop);
+  else { trRunning = false; $('#trPlay').textContent = '▶ Train'; }
+}
+$('#trPlay').addEventListener('click', () => {
+  if (trRunning) { trRunning = false; cancelAnimationFrame(trRaf); $('#trPlay').textContent = '▶ Train'; return; }
+  if (trRound >= 400) scatter();
+  trRunning = true; $('#trPlay').textContent = '❚❚ Pause'; trLoop();
+});
+$('#trReset').addEventListener('click', () => { trRunning = false; cancelAnimationFrame(trRaf); $('#trPlay').textContent = '▶ Train'; scatter(); drawTr(); });
+$('#trLegend').innerHTML = TR_TOPICS.map((t, i) => `<span><i style="background:var(${TOPIC_VARS[i]})"></i>${t}</span>`).join('');
+scatter(); drawTr();
+
+window.addEventListener('resize', () => { drawMap(); drawCos(); drawTr(); });
+
+/* ================= Part 8: drill ================= */
+const QA = [
+  { title: 'The basics', items: [
+    { lvl: 'e', q: 'What is an embedding?',
+      say: 'A list of numbers (a vector) that represents the meaning of a piece of text. Texts with similar meaning get vectors pointing in similar directions, so a computer can compare meaning by comparing numbers.',
+      explain: `<p>An embedding model reads the text and outputs a fixed number of numbers, 3072 for <code>gemini-embedding-001</code>. You can't read any single number; what matters is how the whole vector sits relative to others. "Who built the lighthouse?" and "Who constructed the tower?" end up close even though they share almost no words.</p>`,
+      example: `"Who built the lighthouse?"  → [0.0213, -0.0087, 0.0154, … 3072 numbers]
+"Who constructed the tower?" → [0.0198, -0.0091, 0.0139, …]   ← similar pattern
+"Fresh fish at the market"   → [-0.0120, 0.0230, -0.0041, …]   ← different`,
+      trap: '<p>"It\'s a compressed version of the text." You can\'t get the text back from it. It\'s more like a fingerprint of the meaning.</p>' },
+    { lvl: 'e', q: 'Why do we need embeddings at all? Why not just search for keywords?',
+      say: 'Keyword search only finds the same words. Embeddings find the same meaning, so "where can I eat seafood?" finds a passage about "smoked mackerel at the fish market" with no words in common.',
+      explain: `<p>People ask questions in different words from the ones in the document. Keyword search misses those; embedding search catches them. Keyword search still wins for exact things like product codes and names, which is why many systems use both (hybrid search).</p>` },
+    { lvl: 'e', q: 'What does "3072 dimensions" mean?',
+      say: 'Each text becomes a list of 3072 numbers. Each number is one "direction" in the model\'s meaning space. More dimensions can capture more detail, but take more storage.',
+      explain: `<p>On a map you need 2 numbers (latitude, longitude). Meaning is far richer, so the model uses thousands of directions. The dimensions aren't human concepts like "colour" or "size"; the model learned them on its own. The length is fixed by the model: every text, short or long, gets exactly 3072 numbers.</p>`,
+      docmind: '<p><code>gemini-embedding-001</code> returns 3072 by default; the <code>chunks.embedding</code> column is <code>vector(3072)</code>. The roadmap mentions an older 768-number model that was retired.</p>' },
+    { lvl: 'e', q: 'Does a longer text give a longer embedding?',
+      say: 'No. One word or a whole paragraph, the output is always the same length. Longer text gets squeezed into the same number of numbers, so it becomes a blurrier average.',
+      explain: `<p>That's one reason documents are split into chunks: a chunk about one topic gives a sharp vector, while a whole chapter gives an average of many topics that matches nothing strongly. Embedding models also have a maximum input length, and text beyond it gets cut off or rejected.</p>` },
+    { lvl: 'e', q: 'What is the difference between an embedding model and an LLM like Gemini Flash?',
+      say: 'An LLM generates text token by token. An embedding model reads text and outputs one vector, with no text generated. They\'re separate models used for different jobs.',
+      explain: `<ul><li><b>Embedding model:</b> text in → vector out. Used for search, routing, clustering. Fast and cheap per call.</li><li><b>LLM:</b> text in → text out. Used for answering, summarising, classifying with reasons.</li></ul><p>A RAG system uses both: the embedding model finds the right chunks, the LLM writes the answer from them.</p>`,
+      docmind: '<p>DocMind: <code>gemini-embedding-001</code> for chunks, questions and router phrases; <code>gemini-flash-lite-latest</code> for answers, the classifier and quizzes.</p>' },
+    { lvl: 'm', q: 'How does an embedding model learn what "similar" means?',
+      say: 'It\'s trained on huge numbers of pairs that belong together, like a question and its answer. Training pulls each pair\'s vectors closer and pushes unrelated texts apart. Over millions of examples, related meanings end up as neighbours.',
+      explain: `<p>This is called <b>contrastive learning</b>. Nobody tells the model that "lighthouse" and "tower" are related; it sees them appear in matching pairs often enough that their vectors drift together. Part 4's simulation shows the idea: random dots form topic groups just from "pull matches, push non-matches".</p>`,
+      push: ['"What about word2vec and king − man + woman = queen?"', '<p>That was an earlier, word-level version of the same idea: words used in similar contexts get similar vectors, and some relationships even become directions you can add and subtract. Modern models embed whole sentences and passages, and take context into account.</p>'] },
+  ]},
+  { title: 'Measuring similarity', items: [
+    { lvl: 'e', q: 'What is cosine similarity?',
+      say: 'It measures the angle between two vectors. 1 means they point the same way (same meaning), 0 means unrelated, −1 means opposite. It ignores how long the vectors are.',
+      explain: `<p>Formula: dot product of the two vectors, divided by the product of their lengths.</p><ol><li><b>Dot product:</b> multiply matching numbers pairwise and add them up.</li><li><b>Length:</b> square each number, add them, take the square root.</li><li>Divide.</li></ol>`,
+      example: `A = (1, 2)   B = (2, 3)
+dot   = 1×2 + 2×3 = 8
+|A|   = √(1+4) = 2.236     |B| = √(4+9) = 3.606
+cos   = 8 / (2.236 × 3.606) = 0.992   → nearly the same direction`,
+      docmind: '<p>You wrote it by hand in <code>step1-embeddings.ts</code> and again in <code>router.service.ts</code>: a loop adding up <code>dot</code>, <code>magA</code>, <code>magB</code>.</p>' },
+    { lvl: 'e', q: 'Cosine similarity vs cosine distance: which one does pgvector use?',
+      say: 'pgvector\'s <=> operator returns cosine distance, which is 1 minus cosine similarity. So in the database smaller means closer, and you sort ascending.',
+      explain: `<p>Similarity: bigger = more alike (up to 1). Distance: smaller = more alike (down to 0). They carry the same information, flipped. Mixing them up is a classic bug: sort the wrong way and you return the <i>least</i> relevant chunks.</p>`,
+      example: `similarity 0.92  →  distance 0.08   (very close)
+similarity 0.55  →  distance 0.45   (much further)
+SQL: ORDER BY embedding <=> $question ASC LIMIT 3`,
+      docmind: '<p><code>searchSimilar</code> orders by <code>cosineDistance(...)</code> ascending; the router uses similarity (bigger wins). The router\'s comment calls out exactly this flip.</p>' },
+    { lvl: 'm', q: 'Why cosine instead of plain (Euclidean) distance?',
+      say: 'Cosine compares direction only, and direction is where the meaning is. Euclidean distance also counts length, so the same meaning at different lengths would look far apart.',
+      explain: `<p>Press "Same direction, B longer" in Part 3: cosine stays 1.00 while the straight-line distance grows. For text, you want a long chunk and a short question about the same thing to match.</p><p>Many embedding models (Gemini's included) return vectors already scaled to length 1. Then cosine, dot product and Euclidean distance all rank results the same way, and the dot product alone is the cheapest to compute.</p>` },
+    { lvl: 'm', q: 'Is a similarity of 0.6 good or bad?',
+      say: 'It depends on the model and the data. Scores are mainly useful for ranking against each other. You only set a cut-off after measuring scores on real examples.',
+      explain: `<p>Different models spread scores differently. With Gemini's model, your clearly unrelated pair still scored 0.59, while a related pair scored 0.76. So 0.6 might be "unrelated" for one model and "very similar" for another.</p><p>To pick a threshold: collect example pairs you know are relevant and irrelevant, look at their scores, and choose a cut-off that separates them. Then re-check whenever you change model.</p>`,
+      docmind: '<p>Real measurements: 0.7628 (cat/kitten) vs 0.5879 (cat/stock market). Real document questions scored about 0.5 against every router phrase. DocMind has no distance cut-off in search yet.</p>',
+      trap: '<p>"Anything above 0.7 is relevant." Not without measuring it on your model.</p>' },
+    { lvl: 'h', q: 'What does it mean that vectors are "normalised", and why does it matter?',
+      say: 'A normalised vector has length 1. When all vectors have length 1, the dot product equals cosine similarity, which makes comparisons simpler and faster.',
+      explain: `<p>To normalise, divide every number by the vector's length. Afterwards only direction is left. Databases and libraries can then use the plain dot product (one multiply-and-add pass) instead of the full cosine formula. Google says <code>gemini-embedding-001</code>'s 3072-number output is already normalised; your code still uses the full formula, which is safe either way.</p>` },
+  ]},
+  { title: 'Using embeddings in a backend', items: [
+    { lvl: 'e', q: 'How does semantic search work, step by step?',
+      say: 'Embed every document chunk once and store the vectors. At question time, embed the question with the same model, find the stored vectors closest to it, and return those chunks.',
+      explain: `<ol><li><b>Offline:</b> split documents into chunks, embed each chunk, store text + vector.</li><li><b>Online:</b> embed the question.</li><li>Compare it with the stored vectors (cosine distance).</li><li>Return the top few closest chunks.</li></ol>`,
+      example: `upload:   PDF → 11 chunks → 11 vectors → chunks table
+question: "Who built the lighthouse?" → vector → ORDER BY <=> → top 3 chunks`,
+      docmind: '<p>Exactly DocMind\'s flow: the background worker embeds chunks after upload, and <code>searchSimilar</code> finds the closest ones for each question.</p>' },
+    { lvl: 'e', q: 'Why must chunks and questions be embedded with the same model?',
+      say: 'Each model builds its own "map" of meaning. A vector from one model and a vector from another are coordinates on different maps, so comparing them is meaningless.',
+      explain: `<p>Even two models with the same number of dimensions put meanings in completely different places. Comparing across models gives random-looking scores, and nothing errors out: you just get bad results. Same goes for settings that change the output, like a task type or a reduced dimension count.</p>`,
+      docmind: '<p>Chunks, questions and the router\'s phrases all use <code>gemini-embedding-001</code> with the same settings. The comment in <code>embeddings.service.ts</code> warns that vectors made differently aren\'t comparable.</p>' },
+    { lvl: 'm', q: 'What happens if you switch to a new embedding model?',
+      say: 'Every stored vector has to be re-created with the new model, because old and new vectors can\'t be compared. Do it as a background job, and track which model made each vector.',
+      explain: `<ol><li>Add a new vector column (or table) for the new model.</li><li>Re-embed all chunks in a background job, within rate limits.</li><li>Embed new uploads with both models while this runs.</li><li>Switch searches to the new column.</li><li>Drop the old one.</li></ol>` },
+    { lvl: 'e', q: 'Besides search, what else can embeddings be used for?',
+      say: 'Classification and routing, recommendations, duplicate detection, clustering, and caching. Anything where "how similar are these two things?" is the question.',
+      explain: `<ul><li><b>Routing:</b> compare a message with example phrases for each category.</li><li><b>Recommendations:</b> nearest products or articles.</li><li><b>Duplicates:</b> two tickets with near-identical vectors.</li><li><b>Clustering:</b> group feedback into themes.</li><li><b>Caching:</b> spot a repeated question.</li></ul>`,
+      docmind: '<p>DocMind uses them for search <i>and</i> routing: the router compares a message\'s vector with 28 example phrases (smalltalk, document question, quiz request) before deciding whether to search at all.</p>' },
+    { lvl: 'm', q: 'How did you use embeddings for intent routing, and what went wrong?',
+      say: 'I embedded about 28 example phrases for three intents once, then compared each new message\'s vector with them; the closest intent wins if it\'s clearly ahead. The problem: vectors match shared words, not intent, so close or risky calls go to an LLM classifier.',
+      explain: `<p>It's cheap: the message is embedded anyway for search, so routing by vector costs no extra API call. But "compare the two pdfs" landed nearest "quiz me about the pdf" because of the shared word, and real document questions scored about 0.5 against every phrase, so the top two were nearly tied. The fix was a rule: trust the vector only with a clear margin, never for a quiz, and ask the LLM otherwise.</p>`,
+      docmind: '<p><code>router.service.ts</code>: <code>ROUTER_MIN_MARGIN = 0.03</code>, <code>vectorMayDecide()</code>. The eval (<code>npm run step7</code>, 52 labelled messages) found no harmful mistakes, with the LLM used on 17.</p>' },
+    { lvl: 'e', q: 'How much storage do embeddings take?',
+      say: 'Each number is about 4 bytes, so one 3072-number vector is about 12 KB. A million chunks is about 12 GB just for the vectors.',
+      explain: `<p>Storage grows with dimensions × number of chunks. It's a real cost at scale, and bigger vectors also make searching slower. Shorter vectors or half-precision storage (2 bytes per number) cut it, with a small quality loss.</p>`,
+      example: `3072 numbers × 4 bytes = 12,288 bytes ≈ 12 KB per chunk
+11 chunks (your test PDF)  ≈ 135 KB
+1,000,000 chunks           ≈ 12 GB` },
+    { lvl: 'm', q: 'How do you deal with embedding rate limits and cost?',
+      say: 'Embed once and store the result, batch texts into fewer calls, run bulk embedding in a background job with retries, and cache repeated texts. Batching saves round trips, but each text may still count against the limit.',
+      explain: `<p>Embeddings are much cheaper than text generation, but uploads create many at once. Put that work on a queue so the user isn't waiting and the job can retry politely on a 429. Never re-embed text you already have a vector for.</p>`,
+      docmind: '<p>Free tier: 100 embedding requests per minute. A batch of 70 texts counted as 70, so two eval runs back to back got a 429. Uploads are embedded by the BullMQ worker, one job at a time, with 3 attempts.</p>' },
+  ]},
+  { title: 'Limitations', items: [
+    { lvl: 'm', q: 'Where do embeddings fail?',
+      say: 'With shared words but different intent, negation, exact codes and numbers, vague follow-ups, and very long text squeezed into one vector.',
+      explain: `<ul><li><b>Shared words:</b> "compare the two pdfs" ≈ "quiz me about the pdf".</li><li><b>Negation:</b> "not delayed" ≈ "delayed".</li><li><b>Exact strings:</b> "E1042" ≈ "E1043".</li><li><b>Vague messages:</b> "and who founded it?" has no subject.</li><li><b>Long text:</b> many topics averaged into one blurry vector.</li></ul><p>Fixes: keyword search alongside, rewriting the question, short chunks, and letting an LLM double-check.</p>` },
+    { lvl: 'e', q: 'Why does a follow-up like "and who founded it?" search badly?',
+      say: 'Because the embedding only sees those words, not the conversation. With no subject, the vector points vaguely at anything about "founding", so several chunks score almost the same.',
+      explain: `<p>The model embeds exactly the text you give it. The history isn't in that text, so it can't help the search. The fix is to rewrite the message into a full question using the conversation ("who founded the Lantern Festival") before embedding it.</p>`,
+      docmind: '<p>Classic pipeline: the right chunk won by 0.450 vs 0.452. Agent with a rewritten query: 0.366 with a clear lead.</p>' },
+    { lvl: 'm', q: 'When would keyword search beat embedding search?',
+      say: 'For exact matches: product codes, IDs, error numbers, rare names and technical terms. Embeddings blur them; keyword search matches them exactly.',
+      explain: `<p>Hybrid search runs both and merges the two ranked lists, getting meaning-based matches and exact matches together. Postgres has built-in full-text search, so it can sit next to pgvector in the same database.</p>` },
+    { lvl: 'h', q: 'Can you make vectors smaller? What\'s the trade-off?',
+      say: 'Yes: ask the model for fewer dimensions, or store each number in less space. Smaller vectors use less storage and search faster, with a small loss in quality.',
+      explain: `<p>Some models, Gemini's included, are trained so that the first part of the vector still works on its own, so you can request 768 or 1536 numbers instead of 3072. You can also store numbers as 2-byte half-precision instead of 4 bytes. Test the quality on your own questions before switching.</p><p>Practical reason in Postgres: pgvector's fast indexes support up to 2,000 dimensions for the normal <code>vector</code> type, so a 3072-number column needs <code>halfvec</code> or shorter vectors before it can be indexed.</p>` },
+  ]},
+  { title: 'Your project', items: [
+    { lvl: 'e', q: 'How did you check that embeddings actually work?',
+      say: 'Before building anything, I embedded a similar pair and an unrelated pair and wrote cosine similarity by hand. The similar pair scored 0.76 and the unrelated pair 0.59, so the idea worked, but "unrelated" was nowhere near 0.',
+      explain: `<p>That small experiment taught two things: the ranking works, and scores are relative, so you can't treat 0.6 as "unrelated" by default. It's a good story for interviews because it shows you tested an assumption before building on it.</p>`,
+      example: `"The cat sat on the mat." vs "A kitten was resting on the rug."     0.7628
+"The cat sat on the mat." vs "The stock market crashed on Tuesday."  0.5879` },
+    { lvl: 'e', q: 'Why did you use Gemini\'s embedding model?',
+      say: 'Free tier, no card needed, good quality, and the same provider as the LLM I was already using. One API key and one way of calling it.',
+      explain: `<p>For a learning project on free hosting, a hosted embedding API avoids running a model yourself (Render's free server has 512 MB of RAM and no GPU). Trade-offs: rate limits (100 per minute), and the text goes to Google.</p>`,
+      push: ['"Would you choose differently in production?"', '<p>I\'d compare a few embedding models on my own questions (does the right chunk come back in the top 3?), and weigh cost, speed, vector size and data-privacy needs. An open model run in-house is an option when data can\'t leave your servers.</p>'] },
+    { lvl: 'm', q: 'Your router embeds 28 phrases. Do you call the API for them on every message?',
+      say: 'No. They\'re embedded once per server process, in one batch, the first time a message arrives, and kept in memory. Each message only adds its own embedding, which is needed for search anyway.',
+      explain: `<p>It's a simple cache of things that never change. It's loaded lazily (on the first message, not at startup) because Render restarts the process every time the free service wakes up, and startup should stay fast.</p>`,
+      docmind: '<p><code>getExampleVectors()</code> in <code>router.service.ts</code>: one <code>batchEmbedContents</code> call, which costs 28 of the minute\'s 100 embedding requests.</p>' },
+  ]},
+];
+const LVL = { e: 'basic', m: 'solid', h: 'bonus' };
+function answerHTML(it) {
+  let h = `<div class="say"><span class="lab">Say this first</span><p>${it.say}</p></div>`;
+  if (it.explain) h += `<div class="part"><span class="lab">Explained simply</span>${it.explain}</div>`;
+  if (it.example) h += `<div class="part"><span class="lab">Example</span><pre class="ex">${esc(it.example)}</pre></div>`;
+  if (it.docmind) h += `<div class="part dm"><span class="lab">In DocMind</span>${it.docmind}</div>`;
+  if (it.push) h += `<div class="part push"><span class="lab">If they push further</span><p><b>${it.push[0]}</b></p>${it.push[1]}</div>`;
+  if (it.trap) h += `<div class="part trap"><span class="lab">Don't say</span>${it.trap}</div>`;
+  return h;
+}
+$('#qaList').innerHTML = QA.map((g) => `<div class="qa-group"><h3>${g.title}<span>${g.items.length} questions</span></h3>${g.items.map((it) => `<details class="qa"><summary>${it.q}<span class="lvl ${it.lvl}">${LVL[it.lvl]}</span></summary><div class="ans">${answerHTML(it)}</div></details>`).join('')}</div>`).join('');
+$('#openAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = true; }));
+$('#closeAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = false; }));
+
+/* ================= Part 9: quiz ================= */
+const QUIZ = [
+  { q: 'What does an embedding model output?', o: ['A sentence that summarises the text', 'A fixed-length list of numbers representing the text\'s meaning', 'The tokens of the text', 'A probability for the next word'], a: 1, why: 'One vector per text, 3072 numbers for gemini-embedding-001.' },
+  { q: 'You embed one word and then a whole paragraph. The vectors\' lengths are…', o: ['Paragraph much longer', 'Word much longer', 'Exactly the same', 'Depends on the language'], a: 2, why: 'Fixed by the model. Longer text is squeezed into the same size.' },
+  { q: 'pgvector returns cosine distances 0.12, 0.40 and 0.55. Which chunk is most similar?', o: ['0.12', '0.40', '0.55', 'Can\'t tell'], a: 0, why: 'Distance = 1 − similarity, so smaller is closer.' },
+  { q: 'Two arrows point the same way, but one is twice as long. Their cosine similarity is…', o: ['0.5', '1', '2', '0'], a: 1, why: 'Cosine only cares about direction.' },
+  { q: 'Chunks were embedded with model A. Questions are now embedded with model B. What happens?', o: ['Slightly better results', 'An error from the database', 'Meaningless similarity scores, often with no error at all', 'Nothing changes'], a: 2, why: 'Different models, different meaning maps. It fails silently.' },
+  { q: 'Your unrelated test pair scored 0.59. What does that teach you?', o: ['The model is broken', 'Scores are relative; set thresholds only after measuring', 'Anything above 0.5 is relevant', 'Cosine similarity is wrong for text'], a: 1, why: 'The related pair still scored higher (0.76), so ranking works.' },
+  { q: 'Which search is most likely to find "error E1042" exactly?', o: ['Embedding search', 'Keyword search', 'Both equally', 'Neither'], a: 1, why: 'Embeddings blur exact codes; keywords match them.' },
+  { q: 'Why does "and who founded it?" search badly?', o: ['It\'s too short to embed', 'The vector only sees those words, with no subject', 'Questions can\'t be embedded', 'The rate limit'], a: 1, why: 'History isn\'t in the embedded text. Rewrite the question first.' },
+];
+const form = $('#quizForm');
+form.innerHTML = QUIZ.map((item, i) => `<fieldset class="qq" id="qq${i}"><legend>${i + 1}. ${esc(item.q)}</legend>${item.o.map((o, j) => `<label class="opt" for="q${i}o${j}"><input type="radio" name="q${i}" id="q${i}o${j}" value="${j}"><span>${esc(o)}</span></label>`).join('')}<p class="why">${esc(item.why)}</p></fieldset>`).join('');
+form.addEventListener('submit', (e) => e.preventDefault());
+let checked = false;
+$('#checkBtn').addEventListener('click', () => {
+  if (checked) {
+    checked = false; form.reset();
+    form.querySelectorAll('.opt').forEach((o) => o.classList.remove('right', 'wrong'));
+    form.querySelectorAll('.qq').forEach((q) => q.classList.remove('checked'));
+    form.querySelectorAll('input').forEach((inp) => { inp.disabled = false; });
+    $('#scoreOut').textContent = ''; $('#checkBtn').textContent = 'Check answers';
+    return;
+  }
+  let score = 0;
+  QUIZ.forEach((item, i) => {
+    const picked = form.querySelector(`input[name="q${i}"]:checked`);
+    $('#qq' + i).classList.add('checked');
+    $(`label[for="q${i}o${item.a}"]`).classList.add('right');
+    if (picked && Number(picked.value) === item.a) score++;
+    else if (picked) picked.closest('.opt').classList.add('wrong');
+  });
+  form.querySelectorAll('input').forEach((inp) => { inp.disabled = true; });
+  checked = true;
+  $('#scoreOut').textContent = `${score} / ${QUIZ.length}` + (score === QUIZ.length ? ' · solid' : score >= 6 ? ' · close, reread the misses' : ' · replay Parts 2–3 and try again');
+  $('#checkBtn').textContent = 'Try again';
+});
+
+/* ================= done toggle ================= */
+const KEY = 'docmind-revision:lesson-02';
+const doneBtn = $('#doneBtn');
+function paintDone(d) { doneBtn.classList.toggle('done', d); doneBtn.textContent = d ? '✓ Lesson done' : 'Mark lesson as done'; }
+let isDone = false;
+try { isDone = localStorage.getItem(KEY) === '1'; } catch (e) { /* storage blocked */ }
+paintDone(isDone);
+doneBtn.addEventListener('click', () => { isDone = !isDone; paintDone(isDone); try { localStorage.setItem(KEY, isDone ? '1' : '0'); } catch (e) { /* ignore */ } });
+})();
+</script>
+</body>
+</html>

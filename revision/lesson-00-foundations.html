@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI and ML Foundations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: the same lab notebook as lessons 1 and 6. One reading column,
+   wide panels for the hands-on parts. Blue = the model, amber = data and
+   what it learns, green/red = good/bad results. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #142030;
+  --muted: #586779;
+  --line: #d8dfe8;
+  --accent: #2450d8;
+  --accent-soft: #e4ebfd;
+  --hit: #b86e00;
+  --hit-soft: #fff0d4;
+  --good: #1d8549;
+  --good-soft: #e1f4e8;
+  --bad: #c0352a;
+  --bad-soft: #fbe5e2;
+  --code-bg: #edf1f6;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+    --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+    --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+  --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+  --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px 80px; }
+.read { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; }
+h3 { font-size: 1.1rem; font-weight: 600; }
+p { margin: 0; }
+code, pre, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.top { padding: 40px 0 28px; display: grid; gap: 16px; border-bottom: 1px solid var(--line); }
+.eyebrow { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.lede { font-size: 1.12rem; color: var(--muted); max-width: 62ch; }
+.lessons { display: flex; flex-wrap: wrap; gap: 6px; }
+.lesson-chip { font-family: var(--font-mono); font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); text-decoration: none; }
+a.lesson-chip { color: var(--accent); border-color: var(--accent); }
+a.lesson-chip:hover { background: var(--accent-soft); }
+.lesson-chip.current { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; color: var(--muted); font-size: 0.92rem; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500; transition: background 150ms, border-color 150ms; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.btn.done { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.btn.small { padding: 4px 10px; font-size: 0.85rem; }
+.btn[disabled] { opacity: 0.45; cursor: default; }
+.toc { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 0.92rem; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.toc b { font-family: var(--font-mono); color: var(--accent); font-weight: 600; margin-right: 4px; }
+section { padding: 48px 0 8px; display: grid; gap: 18px; }
+.sec-num { font-family: var(--font-mono); color: var(--accent); font-size: 0.85rem; font-weight: 600; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.stack { display: grid; gap: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 0.88rem; }
+.note { font-size: 0.85rem; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; }
+.analogy { border-left: 4px solid var(--hit); background: var(--hit-soft); border-radius: 0 var(--radius) var(--radius) 0; padding: 14px 18px; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 9px; padding: 3px; background: var(--bg); }
+.seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 0.9rem; font-weight: 500; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.tag { font-family: var(--font-mono); font-size: 0.74rem; border-radius: 6px; padding: 2px 7px; background: var(--accent-soft); color: var(--accent); }
+.tag.grey { background: var(--code-bg); color: var(--muted); }
+.tag.bonus { background: var(--bad-soft); color: var(--bad); }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+.box-title { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px; }
+.verdict { border-radius: 8px; padding: 10px 12px; font-size: 0.92rem; }
+.verdict.good { background: var(--good-soft); color: var(--good); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+.verdict.warn { background: var(--hit-soft); color: var(--hit); }
+.fade { opacity: 0; transform: translateY(6px); transition: opacity 350ms ease, transform 350ms ease; }
+.fade.on { opacity: 1; transform: none; }
+.field { display: grid; gap: 6px; }
+.field label { font-weight: 600; font-size: 0.9rem; display: flex; justify-content: space-between; gap: 10px; }
+.field label output { font-family: var(--font-mono); color: var(--accent); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.readout { background: var(--bg); border-radius: 8px; padding: 10px; }
+.readout b { display: block; font-family: var(--font-display); font-size: 1.4rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.readout span { font-size: 0.75rem; color: var(--muted); }
+.pg { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 820px) { .pg { grid-template-columns: 1fr; } }
+canvas.plot { width: 100%; display: block; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* rings */
+.rings-wrap { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 760px) { .rings-wrap { grid-template-columns: 1fr; } }
+.ring { border: 2px solid var(--line); border-radius: 18px; padding: 30px 14px 14px; position: relative; cursor: pointer; background: var(--surface); transition: border-color 200ms, background 200ms; }
+.ring .rl { position: absolute; top: 7px; left: 14px; font-family: var(--font-mono); font-size: 0.78rem; font-weight: 600; color: var(--muted); }
+.ring:hover { border-color: var(--accent); }
+.ring.on { border-color: var(--accent); background: var(--accent-soft); }
+.ring.on > .rl { color: var(--accent); }
+.ring.inner { padding-bottom: 18px; }
+.ring-info { display: grid; gap: 8px; }
+
+/* rules vs learning */
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.flow .node { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 0.88rem; }
+.flow .node.key { border-color: var(--hit); background: var(--hit-soft); }
+.flow .node.model { border-color: var(--accent); background: var(--accent-soft); }
+.flow .arrow { color: var(--muted); font-family: var(--font-mono); }
+
+/* training phases */
+.phases { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+@media (max-width: 560px) { .phases { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.phase { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--surface); transition: border-color 200ms, background 200ms; }
+.phase b { display: block; font-size: 0.85rem; }
+.phase span { font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); display: block; min-height: 1.3em; word-break: break-word; }
+.phase.on { border-color: var(--hit); background: var(--hit-soft); }
+
+/* sorter */
+.sort-list { display: grid; gap: 10px; }
+.sort-item { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; display: grid; gap: 8px; }
+.sort-item.right { border-color: var(--good); }
+.sort-item.wrong { border-color: var(--bad); }
+.sort-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.sort-btns button { border: 1px solid var(--line); background: var(--bg); border-radius: 7px; padding: 4px 10px; font-size: 0.85rem; cursor: pointer; }
+.sort-btns button.picked-right { border-color: var(--good); background: var(--good-soft); color: var(--good); }
+.sort-btns button.picked-wrong { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
+.sort-why { font-size: 0.88rem; color: var(--muted); }
+
+/* transformer stepper */
+.player { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.player-top { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.counter { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); min-width: 4.5em; text-align: center; }
+.rail { display: flex; overflow-x: auto; padding: 14px 18px 4px; }
+.rail-step { flex: 1 0 90px; display: grid; justify-items: center; gap: 6px; cursor: pointer; background: none; border: 0; padding: 4px 2px 10px; position: relative; color: var(--muted); font-size: 0.78rem; text-align: center; }
+.rail-step::before { content: ""; position: absolute; top: 15px; left: -50%; width: 100%; height: 2px; background: var(--line); }
+.rail-step:first-child::before { display: none; }
+.rail-step.past::before, .rail-step.active::before { background: var(--accent); }
+.dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); display: grid; place-items: center; font-family: var(--font-mono); font-size: 0.72rem; position: relative; z-index: 1; }
+.rail-step.past .dot { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.rail-step.active .dot { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.rail-step.active { color: var(--ink); font-weight: 600; }
+.stage-wrap { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); border-top: 1px solid var(--line); }
+@media (max-width: 820px) { .stage-wrap { grid-template-columns: 1fr; } }
+.stage { padding: 20px; min-height: 330px; background: var(--bg); overflow-x: auto; display: grid; gap: 12px; align-content: start; }
+.notes { padding: 20px; display: grid; gap: 12px; align-content: start; border-left: 1px solid var(--line); }
+@media (max-width: 820px) { .notes { border-left: 0; border-top: 1px solid var(--line); } }
+.notes h3 { font-size: 1.25rem; }
+.toks { display: flex; flex-wrap: wrap; gap: 6px; }
+.tok { font-family: var(--font-mono); font-size: 0.82rem; padding: 4px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); white-space: pre; }
+.vecs { display: grid; gap: 6px; }
+.vec { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; font-family: var(--font-mono); font-size: 0.78rem; }
+.cells { display: flex; gap: 2px; }
+.cells i { flex: 1; height: 16px; border-radius: 2px; }
+.block { border: 2px solid var(--accent); border-radius: 10px; padding: 10px; display: grid; gap: 6px; background: var(--surface); }
+.block .sub { border-radius: 7px; padding: 6px 10px; font-size: 0.85rem; }
+.block .sub.att { background: var(--hit-soft); }
+.block .sub.ff { background: var(--accent-soft); }
+.layer-count { font-family: var(--font-display); font-size: 1.6rem; font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
+.probs { display: grid; gap: 5px; }
+.prob { display: grid; grid-template-columns: 100px minmax(0, 1fr) 46px; gap: 8px; align-items: center; font-size: 0.84rem; }
+.prob .t { font-family: var(--font-mono); white-space: pre; }
+.prob .track { height: 12px; background: var(--code-bg); border-radius: 5px; overflow: hidden; }
+.prob .track i { display: block; height: 100%; background: var(--accent); border-radius: 5px; transition: width 500ms ease; }
+.prob.pick .track i { background: var(--hit); }
+.prob .v { font-family: var(--font-mono); text-align: right; }
+table.cmp { width: 100%; border-collapse: collapse; font-size: 0.9rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+table.cmp th, table.cmp td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.cmp th { background: var(--code-bg); font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+table.cmp td:first-child { font-weight: 600; }
+.table-scroll { overflow-x: auto; }
+
+/* memory calc */
+.gpus { display: grid; gap: 6px; }
+.gpu { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); font-size: 0.88rem; }
+.gpu.fits { border-color: var(--good); background: var(--good-soft); }
+.gpu.no { opacity: 0.6; }
+.gpu b { font-family: var(--font-mono); font-size: 0.8rem; }
+
+/* connect cards */
+.bit { display: grid; gap: 8px; align-content: start; }
+.bit .big { font-family: var(--font-display); font-weight: 800; font-size: 1.5rem; color: var(--hit); line-height: 1.05; }
+
+/* drill */
+.qa-group { display: grid; gap: 8px; }
+.qa-group h3 { display: flex; gap: 10px; align-items: baseline; margin-top: 10px; }
+.qa-group h3 span { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+details.qa { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+details.qa summary { cursor: pointer; padding: 12px 16px; font-weight: 600; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+details.qa summary::-webkit-details-marker { display: none; }
+details.qa summary::before { content: "+"; font-family: var(--font-mono); color: var(--accent); width: 1ch; flex: none; }
+details.qa[open] summary::before { content: "−"; }
+details.qa .ans { padding: 2px 16px 16px; display: grid; gap: 12px; font-size: 0.95rem; }
+details.qa .ans p { margin: 0; }
+details.qa .ans ol, details.qa .ans ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.ans .lab { display: block; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.ans .say { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 10px 12px; }
+.ans .say .lab { color: var(--accent); }
+.ans .say p { font-weight: 500; }
+.ans .part { display: grid; gap: 6px; }
+.ans .dm { background: var(--hit-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .dm .lab { color: var(--hit); }
+.ans .push { border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; }
+.ans .trap { background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .trap .lab { color: var(--bad); }
+.ans pre.ex { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; font-size: 0.78rem; line-height: 1.5; white-space: pre; overflow-x: auto; }
+.lvl { font-family: var(--font-mono); font-size: 0.68rem; border-radius: 5px; padding: 1px 6px; margin-left: auto; flex: none; font-weight: 500; }
+.lvl.e { background: var(--good-soft); color: var(--good); }
+.lvl.m { background: var(--hit-soft); color: var(--hit); }
+.lvl.h { background: var(--bad-soft); color: var(--bad); }
+.drill-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.script { border: 2px solid var(--accent); }
+.script p { font-size: 1.02rem; }
+
+/* quiz */
+.quiz { display: grid; gap: 14px; }
+.qq { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 8px; margin: 0; }
+.qq legend { font-weight: 600; padding: 0 4px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; font-size: 0.94rem; }
+.opt:hover { background: var(--bg); }
+.opt input { margin-top: 5px; accent-color: var(--accent); }
+.opt.right { border-color: var(--good); background: var(--good-soft); }
+.opt.wrong { border-color: var(--bad); background: var(--bad-soft); }
+.why { font-size: 0.88rem; color: var(--muted); display: none; }
+.checked .why { display: block; }
+.score { font-family: var(--font-display); font-weight: 800; font-size: 1.3rem; }
+.next { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">DocMind revision · Track A, AI foundations</div>
+  <h1>Lesson 0 · AI and ML foundations</h1>
+  <p class="lede">What AI, machine learning and deep learning actually mean, how a model learns, what's inside a transformer, and how models get customised and served. Pitched for fresher and intern interviews: intuition first, no heavy math.</p>
+  <div class="lessons" aria-label="All lessons">
+    <span class="lesson-chip current">0 Foundations</span><a class="lesson-chip" href="https://claude.ai/artifact/8aiEhWxvtnuMzvuKEKmHqu">1 LLMs</a><a class="lesson-chip" href="https://claude.ai/artifact/RSwoABVqgoqZ2C2CCuQ5Hr">2 Embeddings</a><a class="lesson-chip" href="https://claude.ai/artifact/34tmJf8BuMMEGgMZ4qRUqN">3 Calling the model</a><span class="lesson-chip">4 Ingestion</span><span class="lesson-chip">5 Vector DBs</span><a class="lesson-chip" href="https://claude.ai/artifact/SRRQhczagqJqFcQqwcVq6t">6 RAG</a><span class="lesson-chip">7 Streaming</span><span class="lesson-chip">8 Structured output</span><span class="lesson-chip">9 Background jobs</span><span class="lesson-chip">10 Auth</span><span class="lesson-chip">11 Deploy</span><span class="lesson-chip">12 Routing</span><span class="lesson-chip">13 Agents</span><span class="lesson-chip">14 Not built yet</span><span class="lesson-chip">15 Mock interview</span>
+  </div>
+  <div class="meta-row">
+    <span>About 60 minutes · 10 parts · 26 interview questions</span>
+    <button class="btn" id="doneBtn" type="button">Mark lesson as done</button>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Parts of this lesson">
+  <a href="#map"><b>1</b>The map</a>
+  <a href="#rules"><b>2</b>Rules vs learning</a>
+  <a href="#train"><b>3</b>Train a model</a>
+  <a href="#types"><b>4</b>Types of learning</a>
+  <a href="#overfit"><b>5</b>Overfitting</a>
+  <a href="#transformer"><b>6</b>Inside a transformer</a>
+  <a href="#practice"><b>7</b>Models in practice</a>
+  <a href="#docmind"><b>8</b>Where DocMind fits</a>
+  <a href="#drill"><b>9</b>Interview drill</a>
+  <a href="#quiz"><b>10</b>Quiz</a>
+</nav>
+
+<!-- ============ 1. MAP ============ -->
+<section id="map">
+  <div class="sec-num">PART 1 · THE MAP</div>
+  <h2>AI, ML, deep learning, generative AI, LLMs: boxes inside boxes</h2>
+  <p class="read muted">Each term is a smaller part of the one around it. Click a box.</p>
+  <div class="rings-wrap">
+    <div class="ring" data-r="ai"><span class="rl">Artificial intelligence</span>
+      <div class="ring" data-r="ml"><span class="rl">Machine learning</span>
+        <div class="ring" data-r="dl"><span class="rl">Deep learning</span>
+          <div class="ring" data-r="gen"><span class="rl">Generative AI</span>
+            <div class="ring inner" data-r="llm"><span class="rl">LLMs</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card ring-info" id="ringInfo" aria-live="polite"></div>
+  </div>
+</section>
+
+<!-- ============ 2. RULES VS LEARNING ============ -->
+<section id="rules">
+  <div class="sec-num">PART 2 · RULES VS LEARNING</div>
+  <h2>Normal code is rules you write. Machine learning is rules learned from examples.</h2>
+  <div class="grid2">
+    <div class="card stack">
+      <h3>Traditional programming</h3>
+      <div class="flow"><span class="node key">Rules you write</span><span class="arrow">+</span><span class="node">Data</span><span class="arrow">→</span><span class="node">Answers</span></div>
+      <p class="small">A spam filter as code: <code>if subject.includes("WIN $$$") → spam</code>. Works until spammers write "W1N". You keep adding rules forever.</p>
+    </div>
+    <div class="card stack">
+      <h3>Machine learning</h3>
+      <div class="flow"><span class="node">Data</span><span class="arrow">+</span><span class="node key">Answers (labels)</span><span class="arrow">→</span><span class="node model">Training</span><span class="arrow">→</span><span class="node model">Model = learned rules</span></div>
+      <p class="small">Show it 100,000 emails already marked spam / not spam. Training finds the patterns itself, including ones you'd never think to write.</p>
+    </div>
+  </div>
+  <p class="note read">A <b>model</b> is the result of training: a function with learned numbers (parameters) inside. You give it a new input, it gives a prediction. Use ML when the rules are too fuzzy to write by hand (language, images, spam); use normal code when they aren't (tax maths, permissions).</p>
+</section>
+
+<!-- ============ 3. TRAIN A MODEL ============ -->
+<section id="train">
+  <div class="sec-num">PART 3 · TRAIN A MODEL YOURSELF</div>
+  <h2>Training is a loop: guess, measure how wrong, adjust a little, repeat</h2>
+  <div class="read stack">
+    <p>The smallest possible model: a straight line, <code>y = w × x + b</code>, with two parameters, <b>w</b> (slope) and <b>b</b> (starting height). The task: learn the line that fits the dots. Both start at 0, so the first guess is terrible. Press <b>Step</b> to watch one round of the loop, then <b>Train 100 steps</b>.</p>
+  </div>
+  <div class="card pg">
+    <div class="stack">
+      <canvas class="plot" id="gdPlot" height="300" aria-label="Dots and the line the model has learned so far"></canvas>
+      <div class="phases" id="gdPhases">
+        <div class="phase" data-p="0"><b>1 · Predict</b><span>run the line on every x</span></div>
+        <div class="phase" data-p="1"><b>2 · Loss</b><span>how wrong, on average</span></div>
+        <div class="phase" data-p="2"><b>3 · Gradient</b><span>which way to nudge</span></div>
+        <div class="phase" data-p="3"><b>4 · Update</b><span>nudge w and b a little</span></div>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="readouts">
+        <div class="readout"><b id="gdStep">0</b><span>steps</span></div>
+        <div class="readout"><b id="gdLoss">0</b><span>loss (lower = better)</span></div>
+        <div class="readout"><b id="gdW">0</b><span>w (slope)</span></div>
+        <div class="readout"><b id="gdB">0</b><span>b (height)</span></div>
+      </div>
+      <canvas class="plot" id="gdLossPlot" height="110" aria-label="Loss going down over training steps"></canvas>
+      <div class="field">
+        <label for="gdLr">Learning rate (step size) <output id="gdLrOut">0.050</output></label>
+        <input type="range" id="gdLr" min="0.005" max="0.6" step="0.005" value="0.05">
+      </div>
+      <div class="controls">
+        <button class="btn" type="button" id="gdOne">Step</button>
+        <button class="btn primary" type="button" id="gdMany">Train 100 steps</button>
+        <button class="btn" type="button" id="gdReset">Reset</button>
+      </div>
+      <div class="verdict warn" id="gdVerdict">Press Step to run the loop once.</div>
+    </div>
+  </div>
+  <div class="analogy read"><b>Analogy: finding the bottom of a valley in fog.</b> You can't see the lowest point (the best w and b), but you can feel which way the ground slopes under your feet (the gradient). Take a step downhill, feel again, repeat. The <b>learning rate</b> is your step size: too small and it takes forever, too big and you jump over the valley. Try 0.55.</div>
+  <div class="card stack read">
+    <h3>The same loop trains an LLM</h3>
+    <ul class="small" style="margin:0;padding-left:18px;display:grid;gap:4px">
+      <li><b>2 parameters → billions.</b> Same idea, just many more numbers to nudge.</li>
+      <li><b>12 dots → trillions of tokens</b> of text, shown in small <b>batches</b>; one pass over all the data is an <b>epoch</b>.</li>
+      <li><b>Loss = how surprised the model was by the real next token.</b> Every wrong guess nudges the weights so the right token gets a bit more likely next time.</li>
+      <li><b>Backpropagation</b> is just the efficient way to work out the gradient for every weight at once in a network with many layers.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============ 4. TYPES ============ -->
+<section id="types">
+  <div class="sec-num">PART 4 · TYPES OF LEARNING</div>
+  <h2>Four ways a model can learn, and all of them are used to build an LLM</h2>
+  <div class="grid4">
+    <div class="card"><h3>Supervised</h3><p class="small muted">Learn from examples with the right answer attached (labels). Spam / not spam, house price from past sales.</p></div>
+    <div class="card"><h3>Unsupervised</h3><p class="small muted">No labels. Find structure on its own: group similar customers, spot unusual transactions.</p></div>
+    <div class="card"><h3>Self-supervised</h3><p class="small muted">The labels come from the data itself: hide the next word, then predict it. No humans needed, so it scales to the whole internet.</p></div>
+    <div class="card"><h3>Reinforcement</h3><p class="small muted">Learn by trying things and getting a reward or penalty. Game AIs, and tuning chatbots toward answers people prefer.</p></div>
+  </div>
+  <div class="card stack read">
+    <h3>How an LLM like Gemini is made</h3>
+    <div class="flow"><span class="node">1 · Pre-training<br><small class="muted">self-supervised, next token</small></span><span class="arrow">→</span><span class="node">2 · Instruction tuning<br><small class="muted">supervised, example chats</small></span><span class="arrow">→</span><span class="node">3 · Preference tuning<br><small class="muted">reinforcement (RLHF)</small></span><span class="arrow">→</span><span class="node model">The model you call</span></div>
+  </div>
+  <h3>Sort these. Which type of learning is each one?</h3>
+  <div class="sort-list" id="sorter"></div>
+  <div class="verdict good" id="sortScore" hidden></div>
+</section>
+
+<!-- ============ 5. OVERFITTING ============ -->
+<section id="overfit">
+  <div class="sec-num">PART 5 · OVERFITTING</div>
+  <h2>A model that memorises its training data fails on new data</h2>
+  <div class="read stack">
+    <p>Blue dots are <b>training data</b> (the model sees them). Amber rings are <b>test data</b> (held back, to check it on unseen examples). Raise the model's complexity and watch: the curve hits the blue dots better and better, but past a point it gets <i>worse</i> on the amber ones. It started learning the noise instead of the pattern.</p>
+  </div>
+  <div class="card pg">
+    <div class="stack">
+      <canvas class="plot" id="ofPlot" height="300" aria-label="Training and test points with the fitted curve"></canvas>
+    </div>
+    <div class="stack">
+      <div class="field">
+        <label for="ofDeg">Model complexity (curve flexibility) <output id="ofDegOut">3</output></label>
+        <input type="range" id="ofDeg" min="1" max="9" step="1" value="3">
+      </div>
+      <div class="readouts">
+        <div class="readout"><b id="ofTrain">0</b><span>error on training data</span></div>
+        <div class="readout"><b id="ofTest">0</b><span>error on test data</span></div>
+      </div>
+      <canvas class="plot" id="ofErr" height="130" aria-label="Training and test error for each complexity"></canvas>
+      <p class="small muted">Blue line: training error. Amber line: test error. The dot marks your setting.</p>
+      <div class="verdict" id="ofVerdict"></div>
+    </div>
+  </div>
+  <div class="grid3">
+    <div class="card"><h3>Underfitting</h3><p class="small muted">Too simple to capture the pattern. Bad on training <i>and</i> test data. A straight line through a wave.</p></div>
+    <div class="card"><h3>Good fit</h3><p class="small muted">Learns the pattern, ignores the noise. Similar error on training and test data. This is what <b>generalisation</b> means.</p></div>
+    <div class="card"><h3>Overfitting</h3><p class="small muted">Memorises the training data, noise included. Great on training, bad on test. Like a student who memorised last year's answers.</p></div>
+  </div>
+  <div class="card stack read">
+    <h3>Train, validation, test</h3>
+    <p class="small">Split your data three ways. <b>Train</b> (~70–80%): the model learns from it. <b>Validation</b> (~10–15%): you check it while choosing settings. <b>Test</b> (~10–15%): touched once at the end, for an honest score. If you tune on the test set, your score is no longer honest.</p>
+    <p class="small muted">Common fixes for overfitting: more data, a simpler model, stopping training early, regularisation (a penalty for over-complicated fits), dropout.</p>
+  </div>
+</section>
+
+<!-- ============ 6. TRANSFORMER ============ -->
+<section id="transformer">
+  <div class="sec-num">PART 6 · INSIDE A TRANSFORMER</div>
+  <h2>What happens to your text inside the model, in five steps</h2>
+  <p class="read muted">Every modern LLM (Gemini, GPT, Claude, Llama) is a transformer. You don't need the math; you need this picture. Lesson 1 zooms in on step 5.</p>
+  <div class="player" id="player">
+    <div class="player-top">
+      <strong>The lighthouse was built …</strong>
+      <div class="controls">
+        <button class="btn" type="button" id="tfPrev">◀ Prev</button>
+        <button class="btn" type="button" id="tfNext">Next ▶</button>
+        <span class="counter" id="tfCounter">1 / 5</span>
+      </div>
+    </div>
+    <div class="rail" id="tfRail" role="tablist" aria-label="Steps"></div>
+    <div class="stage-wrap">
+      <div class="stage" id="tfStage" aria-live="polite"></div>
+      <div class="notes" id="tfNotes"></div>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table class="cmp">
+      <thead><tr><th>Type</th><th>What it's good at</th><th>Examples</th></tr></thead>
+      <tbody>
+        <tr><td>Decoder-only</td><td>Generating text, one token at a time. What chat models are.</td><td>GPT, Gemini, Claude, Llama</td></tr>
+        <tr><td>Encoder-only</td><td>Understanding text: classification, search, embeddings.</td><td>BERT and the embedding models built on that idea</td></tr>
+        <tr><td>Encoder-decoder</td><td>Turning one text into another: translation, summarising.</td><td>T5, the original 2017 transformer</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note read"><b>Why transformers replaced older models (RNNs):</b> an RNN reads one word at a time and slowly forgets what came long before. A transformer reads all the words at once, so it trains in parallel on GPUs and links distant words directly. That's what made huge models practical.</p>
+</section>
+
+<!-- ============ 7. PRACTICE ============ -->
+<section id="practice">
+  <div class="sec-num">PART 7 · MODELS IN PRACTICE</div>
+  <h2>Call a model through an API, or run one yourself?</h2>
+  <div class="table-scroll">
+    <table class="cmp">
+      <thead><tr><th></th><th>Closed model via API</th><th>Open-weight model, self-hosted</th></tr></thead>
+      <tbody>
+        <tr><td>Examples</td><td>Gemini, GPT, Claude</td><td>Llama, Mistral, Qwen, Gemma</td></tr>
+        <tr><td>You manage</td><td>An API key and your code</td><td>GPUs, servers, scaling, updates</td></tr>
+        <tr><td>Cost</td><td>Pay per token, nothing when idle</td><td>Pay for GPUs even when idle; cheaper at very high volume</td></tr>
+        <tr><td>Quality</td><td>Usually the strongest models</td><td>Good and improving; you pick the size</td></tr>
+        <tr><td>Data</td><td>Goes to the provider</td><td>Stays on your servers</td></tr>
+        <tr><td>Control</td><td>Provider can change or retire models</td><td>You pin the exact weights and can fine-tune them</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note read">"Open-weight" means you can download the trained weights. It isn't always "open source": the training data and code usually aren't public, and licences vary.</p>
+
+  <h3>How much memory does a model need? <span class="tag grey">quick estimate</span></h3>
+  <p class="read small">Each parameter is a number stored in some precision. Weights memory ≈ <b>parameters × bytes per parameter</b>. <b>Quantization</b> stores them with fewer bits, so the model fits on smaller hardware, with a small quality loss.</p>
+  <div class="card pg">
+    <div class="stack">
+      <div class="field">
+        <label for="mmP">Model size <output id="mmPOut">7B</output></label>
+        <input type="range" id="mmP" min="0" max="6" step="1" value="2">
+      </div>
+      <div class="field"><span class="small" style="font-weight:600">Precision</span>
+        <div class="seg" role="group" aria-label="Precision" id="mmPrec">
+          <button type="button" data-b="4" aria-pressed="false">32-bit · 4 bytes</button>
+          <button type="button" data-b="2" aria-pressed="true">16-bit · 2 bytes</button>
+          <button type="button" data-b="1" aria-pressed="false">8-bit · 1 byte</button>
+          <button type="button" data-b="0.5" aria-pressed="false">4-bit · 0.5 byte</button>
+        </div>
+      </div>
+      <div class="readouts">
+        <div class="readout"><b id="mmW">14 GB</b><span>for the weights</span></div>
+        <div class="readout"><b id="mmT">~17 GB</b><span>to actually serve it (rough +20%)</span></div>
+      </div>
+      <p class="note">The +20% is a rough allowance for the working memory a model needs while answering. Real numbers depend on context length and traffic.</p>
+    </div>
+    <div class="stack">
+      <div class="box-title">Does it fit?</div>
+      <div class="gpus" id="mmGpus"></div>
+    </div>
+  </div>
+
+  <h3>Customising a model</h3>
+  <div class="grid2">
+    <div class="card stack"><h3>Prompting and RAG</h3><p class="small muted">No training at all. Change what you send. Always try this first; it's what DocMind does.</p></div>
+    <div class="card stack"><h3>Fine-tuning</h3><p class="small muted">Train an existing model a bit more on your own examples, to change its <b>behaviour</b>: format, tone, a narrow task. Bad at adding facts.</p></div>
+    <div class="card stack"><h3>LoRA <span class="tag bonus">bonus</span></h3><p class="small muted">Cheap fine-tuning: freeze the model and train small add-on pieces instead, often under 1% of the parameters. Fits on one GPU.</p></div>
+    <div class="card stack"><h3>Distillation <span class="tag bonus">bonus</span></h3><p class="small muted">Train a small "student" model to copy a big "teacher" model's answers. Faster and cheaper, a bit less capable.</p></div>
+  </div>
+
+  <h3>Words you should recognise</h3>
+  <div class="grid3">
+    <div class="card"><h3>GPU</h3><p class="small muted">A chip that does thousands of simple maths operations at once. Training and running neural networks is mostly that, so GPUs (and Google's TPUs) do the work.</p></div>
+    <div class="card"><h3>Multimodal</h3><p class="small muted">A model that takes more than text: images, audio, video, PDFs. Gemini is one.</p></div>
+    <div class="card"><h3>Mixture of Experts</h3><p class="small muted">A big model split into many "expert" parts, where only a few run for each token. Lots of knowledge, less compute per answer.</p></div>
+    <div class="card"><h3>Scaling laws</h3><p class="small muted">The finding that models get predictably better with more parameters, data and compute. Why models kept getting bigger.</p></div>
+    <div class="card"><h3>Benchmarks</h3><p class="small muted">Standard test sets used to compare models. Useful, but your own small eval on your own task matters more.</p></div>
+    <div class="card"><h3>Hyperparameters</h3><p class="small muted">Settings you choose, not learned: learning rate, batch size, number of layers. Parameters are what training learns.</p></div>
+  </div>
+</section>
+
+<!-- ============ 8. DOCMIND ============ -->
+<section id="docmind">
+  <div class="sec-num">PART 8 · WHERE DOCMIND FITS</div>
+  <h2>You never trained a model. That's normal for an AI backend role.</h2>
+  <p class="read">Everything DocMind does is <b>inference</b> on models someone else trained. The backend job is the part around the model: what goes in, checking what comes out, storing, scaling and securing it. Knowing how training works is what lets you explain why the model behaves the way it does.</p>
+  <div class="grid2">
+    <div class="card bit"><div class="big">2 GB vs 512 MB</div><h3>Why an API, not self-hosting</h3><p class="small">Even a tiny 1B-parameter model needs about 2 GB at 16-bit. Render's free tier gives the whole server 512 MB, and has no GPU. Calling Gemini was the only realistic choice, and it's free.</p></div>
+    <div class="card bit"><div class="big">Closed model</div><h3>The trade-off you accepted</h3><p class="small">Gemini Flash-Lite through the API: strong and free, but your data goes to Google, you live with its rate limits (15 per minute), and the <code>-latest</code> alias can change under you.</p></div>
+    <div class="card bit"><div class="big">Learned meaning</div><h3>Embeddings are a trained model's output</h3><p class="small"><code>gemini-embedding-001</code> learned, during training, to put similar texts close together. Your search and router just use that. Lesson 2.</p></div>
+    <div class="card bit"><div class="big">No fine-tuning</div><h3>RAG instead</h3><p class="small">DocMind adds knowledge by putting chunks in the prompt, not by training. New PDFs are searchable seconds after upload, and per-user privacy is a database filter.</p></div>
+    <div class="card bit"><div class="big">Probabilistic</div><h3>Why you validate outputs</h3><p class="small">A trained model produces likely text, not guaranteed text. That's why the quiz JSON goes through Zod and the classifier has a safe fallback.</p></div>
+    <div class="card bit"><div class="big">52 labelled messages</div><h3>You did build an eval</h3><p class="small">Your router eval is a small labelled test set, the same idea as Part 5's test data: measure on examples the system wasn't tuned on.</p></div>
+  </div>
+</section>
+
+<!-- ============ 9. DRILL ============ -->
+<section id="drill">
+  <div class="sec-num">PART 9 · INTERVIEW DRILL</div>
+  <h2>26 questions you could get. Answer out loud first, then open.</h2>
+  <div class="card script stack">
+    <h3>Say it in 60 seconds: "Explain AI, ML and deep learning."</h3>
+    <p>"AI is the broad goal of making computers do things that seem intelligent. Machine learning is one way to get there: instead of writing rules, you show a model lots of examples and it learns the rules itself, by repeatedly guessing, measuring how wrong it was and adjusting its parameters. Deep learning is machine learning with neural networks of many layers, which is what made language and images workable. Generative AI uses those networks to create new text or images, and LLMs are the text kind, trained to predict the next token. In my project I don't train models; I build the backend around one, with RAG, validation and streaming."</p>
+  </div>
+  <p class="read muted">Each answer opens with <b>Say this first</b>: the 10-second version to lead with. Questions marked <span class="lvl h">bonus</span> go beyond what most intern interviews ask; skip them if you're short on time.</p>
+  <div class="drill-bar">
+    <button class="btn small" type="button" id="openAll">Open all answers</button>
+    <button class="btn small" type="button" id="closeAll">Close all</button>
+    <span class="small muted">Levels: <span class="lvl e">basic</span> <span class="lvl m">solid</span> <span class="lvl h">bonus</span></span>
+  </div>
+  <div class="stack" id="qaList"></div>
+</section>
+
+<!-- ============ 10. QUIZ ============ -->
+<section id="quiz">
+  <div class="sec-num">PART 10 · QUIZ</div>
+  <h2>Eight questions. No peeking.</h2>
+  <form class="quiz" id="quizForm"></form>
+  <div class="next">
+    <button class="btn primary" type="button" id="checkBtn">Check answers</button>
+    <span class="score" id="scoreOut" aria-live="polite"></span>
+  </div>
+</section>
+
+<section>
+  <div class="card next">
+    <div><div class="sec-num">UP NEXT</div><h3>Lesson 1 · How an LLM works</h3><p class="small muted">Tokens, temperature, context windows, and why the model forgets everything between requests.</p></div>
+    <a class="btn primary" href="https://claude.ai/artifact/8aiEhWxvtnuMzvuKEKmHqu" style="text-decoration:none">Open lesson 1 →</a>
+  </div>
+</section>
+
+</div>
+
+<script>
+(() => {
+'use strict';
+const RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function gauss(rnd) { const u = Math.max(rnd(), 1e-9), v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+function setupCanvas(c) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth || 500, h = Number(c.getAttribute('height'));
+  c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); c.style.height = h + 'px';
+  const ctx = c.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+/* ================= Part 1: rings ================= */
+const RINGS = {
+  ai: { t: 'Artificial intelligence', d: 'The broad goal: computers doing things that normally need human intelligence. Includes old-school hand-written rules (chess engines, expert systems) as well as learning systems.', ex: 'Route planners, chess engines, spam filters, chatbots.' },
+  ml: { t: 'Machine learning', d: 'AI that learns patterns from data instead of following hand-written rules. You give examples; training finds the rules.', ex: 'Spam filters, recommendations, fraud detection, price prediction.' },
+  dl: { t: 'Deep learning', d: 'Machine learning with neural networks of many layers. Each layer learns slightly more abstract features. Needs lots of data and GPUs; it\'s what made images, speech and language work well.', ex: 'Face recognition, speech-to-text, translation.' },
+  gen: { t: 'Generative AI', d: 'Deep learning models that create new content (text, images, audio, code) instead of only labelling existing content.', ex: 'Image generators, music models, chat assistants.' },
+  llm: { t: 'Large language models', d: 'Generative models for text, trained on huge amounts of it to predict the next token. "Large" = billions of parameters.', ex: 'Gemini (what DocMind calls), GPT, Claude, Llama.' },
+};
+function showRing(key) {
+  document.querySelectorAll('.ring').forEach((r) => r.classList.toggle('on', r.dataset.r === key));
+  const r = RINGS[key];
+  $('#ringInfo').innerHTML = `<div class="box-title">You picked</div><h3>${r.t}</h3><p>${r.d}</p><p class="small muted"><b>Examples:</b> ${r.ex}</p><p class="note">Each box sits inside the one around it: every LLM is generative AI, every generative model is deep learning, and so on. Not the other way round: most AI isn't an LLM.</p>`;
+}
+document.querySelectorAll('.ring').forEach((r) => r.addEventListener('click', (e) => { e.stopPropagation(); showRing(r.dataset.r); }));
+showRing('llm');
+
+/* ================= Part 3: gradient descent ================= */
+const gdRnd = mulberry32(42);
+const PTS = Array.from({ length: 12 }, (_, i) => { const x = -2.2 + i * (4.4 / 11); return { x, y: 1.5 * x + 2 + gauss(gdRnd) * 0.6 }; });
+const gd = { w: 0, b: 0, steps: 0, hist: [], dead: false };
+const lossOf = (w, b) => PTS.reduce((s, p) => s + (w * p.x + b - p.y) ** 2, 0) / PTS.length;
+// the best loss any straight line can reach on these dots (least squares)
+const OPT = (() => { const n = PTS.length, mx = PTS.reduce((s, p) => s + p.x, 0) / n, my = PTS.reduce((s, p) => s + p.y, 0) / n;
+  const w = PTS.reduce((s, p) => s + (p.x - mx) * (p.y - my), 0) / PTS.reduce((s, p) => s + (p.x - mx) ** 2, 0);
+  return { loss: lossOf(w, my - w * mx), w, b: my - w * mx }; })();
+function grads(w, b) {
+  let dw = 0, db = 0;
+  PTS.forEach((p) => { const e = w * p.x + b - p.y; dw += 2 * e * p.x; db += 2 * e; });
+  return { dw: dw / PTS.length, db: db / PTS.length };
+}
+function drawGD() {
+  const { ctx, w, h } = setupCanvas($('#gdPlot'));
+  const X = (x) => 12 + (x + 2.5) / 5 * (w - 24), Y = (y) => 10 + (8 - y) / 11 * (h - 20), pad = 12;
+  ctx.strokeStyle = css('--line'); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(X(0), 6); ctx.lineTo(X(0), h - 6); ctx.moveTo(6, Y(0)); ctx.lineTo(w - 6, Y(0)); ctx.stroke();
+  ctx.fillStyle = css('--muted'); ctx.font = '11px IBM Plex Mono, monospace';
+  ctx.fillText('x', w - 16, Y(0) - 6); ctx.fillText('y', X(0) + 6, 16);
+  // residuals: how wrong each guess is
+  if (!gd.dead) {
+    ctx.strokeStyle = css('--bad'); ctx.globalAlpha = 0.45;
+    PTS.forEach((p) => { const py = gd.w * p.x + gd.b; ctx.beginPath(); ctx.moveTo(X(p.x), Y(p.y)); ctx.lineTo(X(p.x), Y(Math.max(-4, Math.min(9, py)))); ctx.stroke(); });
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = css('--hit');
+  PTS.forEach((p) => { ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 5, 0, Math.PI * 2); ctx.fill(); });
+  if (!gd.dead) {
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();
+    ctx.strokeStyle = css('--accent'); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(X(-2.5), Y(gd.w * -2.5 + gd.b)); ctx.lineTo(X(2.5), Y(gd.w * 2.5 + gd.b)); ctx.stroke(); ctx.restore();
+  }
+  // loss curve
+  const L = setupCanvas($('#gdLossPlot'));
+  const c2 = L.ctx;
+  c2.strokeStyle = css('--line'); c2.beginPath(); c2.moveTo(6, L.h - 14); c2.lineTo(L.w - 6, L.h - 14); c2.stroke();
+  c2.fillStyle = css('--muted'); c2.font = '10px IBM Plex Mono, monospace'; c2.fillText('loss over steps', 8, 12);
+  if (gd.hist.length > 1) {
+    const top = gd.hist[0], n = Math.max(gd.hist.length, 20);
+    c2.strokeStyle = gd.dead ? css('--bad') : css('--accent'); c2.lineWidth = 2; c2.beginPath();
+    gd.hist.forEach((v, i) => { const x = 6 + i / (n - 1) * (L.w - 12); const y = (L.h - 14) - Math.min(1, v / top) * (L.h - 30); i ? c2.lineTo(x, y) : c2.moveTo(x, y); });
+    c2.stroke();
+  }
+}
+function paintGD() {
+  $('#gdStep').textContent = gd.steps;
+  $('#gdLoss').textContent = gd.dead ? '∞' : lossOf(gd.w, gd.b).toFixed(2);
+  $('#gdW').textContent = gd.dead ? '—' : gd.w.toFixed(2);
+  $('#gdB').textContent = gd.dead ? '—' : gd.b.toFixed(2);
+  drawGD();
+}
+function doStep() {
+  if (gd.dead) return;
+  const lr = Number($('#gdLr').value);
+  if (gd.hist.length === 0) gd.hist.push(lossOf(gd.w, gd.b));
+  const g = grads(gd.w, gd.b);
+  gd.w -= lr * g.dw; gd.b -= lr * g.db; gd.steps++;
+  const l = lossOf(gd.w, gd.b);
+  gd.hist.push(l);
+  if (!isFinite(l) || l > 1e6) gd.dead = true;
+  return g;
+}
+function verdictGD() {
+  const v = $('#gdVerdict');
+  const l = lossOf(gd.w, gd.b);
+  if (gd.dead) { v.className = 'verdict bad'; v.textContent = 'Diverged: each step overshot so far that the loss exploded. Learning rate too high. Lower it and press Reset.'; return; }
+  const h = gd.hist;
+  if (h.length > 3 && h[h.length - 1] > h[h.length - 2]) { v.className = 'verdict bad'; v.textContent = 'The loss is going UP. Steps this big jump across the valley instead of down into it.'; return; }
+  if (l < OPT.loss * 1.03) { v.className = 'verdict good'; v.textContent = `Learned: w ≈ ${gd.w.toFixed(2)}, b ≈ ${gd.b.toFixed(2)}, the best possible line for these dots (${OPT.w.toFixed(2)}, ${OPT.b.toFixed(2)}). Nobody told it the answer; it found it by following the slope. The dots came from w = 1.5, b = 2 plus random noise, which is why the fit isn't exactly that.`; return; }
+  v.className = 'verdict warn'; v.textContent = `Loss ${l.toFixed(2)} and falling. Keep training.`;
+}
+let gdAnim = 0;
+function runPhases(g, before) {
+  const ph = [...document.querySelectorAll('.phase')];
+  const vals = [
+    `guess at x=${PTS[0].x.toFixed(1)}: ${(before.w * PTS[0].x + before.b).toFixed(2)} (real ${PTS[0].y.toFixed(2)})`,
+    `loss = ${lossOf(before.w, before.b).toFixed(2)}`,
+    `w ${g.dw < 0 ? '↑' : '↓'} · b ${g.db < 0 ? '↑' : '↓'}`,
+    `w = ${gd.w.toFixed(2)}, b = ${gd.b.toFixed(2)}`,
+  ];
+  ph.forEach((p) => p.classList.remove('on'));
+  ph.forEach((p, i) => setTimeout(() => { ph.forEach((q) => q.classList.remove('on')); p.classList.add('on'); p.querySelector('span').textContent = vals[i]; }, RM ? 0 : i * 450));
+}
+$('#gdOne').addEventListener('click', () => {
+  const before = { w: gd.w, b: gd.b };
+  const g = doStep();
+  paintGD(); verdictGD();
+  if (g) runPhases(g, before);
+});
+$('#gdMany').addEventListener('click', () => {
+  cancelAnimationFrame(gdAnim);
+  document.querySelectorAll('.phase').forEach((p) => p.classList.remove('on'));
+  let left = 100;
+  const tick = () => {
+    const per = RM ? 100 : 2;
+    for (let i = 0; i < per && left > 0; i++, left--) doStep();
+    paintGD();
+    if (left > 0 && !gd.dead) gdAnim = requestAnimationFrame(tick); else verdictGD();
+  };
+  tick();
+});
+function resetGD() {
+  cancelAnimationFrame(gdAnim);
+  Object.assign(gd, { w: 0, b: 0, steps: 0, hist: [], dead: false });
+  const labels = ['run the line on every x', 'how wrong, on average', 'which way to nudge', 'nudge w and b a little'];
+  document.querySelectorAll('.phase').forEach((p, i) => { p.classList.remove('on'); p.querySelector('span').textContent = labels[i]; });
+  const v = $('#gdVerdict'); v.className = 'verdict warn'; v.textContent = 'Press Step to run the loop once.';
+  paintGD();
+}
+$('#gdReset').addEventListener('click', resetGD);
+$('#gdLr').addEventListener('input', () => { $('#gdLrOut').textContent = Number($('#gdLr').value).toFixed(3); });
+paintGD();
+
+/* ================= Part 4: sorter ================= */
+const TYPES = ['Supervised', 'Unsupervised', 'Self-supervised', 'Reinforcement'];
+const SORT = [
+  ['A spam filter trained on emails people marked "spam" or "not spam"', 0, 'Every example comes with the right answer: labelled data.'],
+  ['Grouping shop customers by buying habits, with no categories given', 1, 'No labels. The model finds the groups itself (clustering).'],
+  ['Pre-training an LLM to predict the next word of web pages', 2, 'The "label" is just the next word, already in the text. No humans needed.'],
+  ['Tuning a chatbot toward the answers people rated higher', 3, 'Ratings act as a reward. This is RLHF, reinforcement learning from human feedback.'],
+  ['Predicting a flat\'s rent from size, area and past rents', 0, 'Past rents are the labels. Predicting a number is called regression.'],
+  ['Flagging unusual bank transactions with no fraud labels', 1, 'No labels; it learns what "normal" looks like and flags what isn\'t (anomaly detection).'],
+  ['Teaching a model to follow instructions using 10,000 example chats written by people', 0, 'Input plus the ideal reply: labelled examples. Called supervised fine-tuning (SFT).'],
+  ['A game AI that improves by playing and scoring points', 3, 'Trial and error with a reward signal.'],
+];
+let sortRight = 0, sortDone = 0;
+$('#sorter').innerHTML = SORT.map(([t], i) => `<div class="sort-item" id="si${i}"><div>${esc(t)}</div><div class="sort-btns">${TYPES.map((ty, j) => `<button type="button" data-i="${i}" data-j="${j}">${ty}</button>`).join('')}</div><div class="sort-why" id="sw${i}" hidden></div></div>`).join('');
+$('#sorter').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const i = Number(b.dataset.i), j = Number(b.dataset.j);
+  const item = $('#si' + i); if (item.dataset.done) return;
+  item.dataset.done = '1'; sortDone++;
+  const [, ans, why] = SORT[i];
+  const ok = j === ans; if (ok) sortRight++;
+  item.classList.add(ok ? 'right' : 'wrong');
+  b.classList.add(ok ? 'picked-right' : 'picked-wrong');
+  if (!ok) item.querySelector(`button[data-j="${ans}"]`).classList.add('picked-right');
+  const w = $('#sw' + i); w.hidden = false; w.textContent = (ok ? 'Right. ' : `It's ${TYPES[ans].toLowerCase()}. `) + why;
+  if (sortDone === SORT.length) { const s = $('#sortScore'); s.hidden = false; s.textContent = `${sortRight} / ${SORT.length} sorted correctly.`; }
+});
+
+/* ================= Part 5: overfitting ================= */
+const ofRnd = mulberry32(10);
+const f = (x) => 0.9 * Math.sin(Math.PI * x);
+const TRAIN = Array.from({ length: 10 }, (_, i) => { const x = -0.95 + i * 0.21 + (ofRnd() - 0.5) * 0.06; return { x, y: f(x) + gauss(ofRnd) * 0.18 }; });
+const TEST = Array.from({ length: 10 }, (_, i) => { const x = -0.85 + i * 0.19 + (ofRnd() - 0.5) * 0.06; return { x, y: f(x) + gauss(ofRnd) * 0.18 }; });
+function solve(A, bv) {
+  const n = bv.length, M = A.map((r, i) => [...r, bv[i]]);
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+    [M[c], M[p]] = [M[p], M[c]];
+    for (let r = c + 1; r < n; r++) { const k = M[r][c] / M[c][c]; for (let k2 = c; k2 <= n; k2++) M[r][k2] -= k * M[c][k2]; }
+  }
+  const x = new Array(n).fill(0);
+  for (let r = n - 1; r >= 0; r--) { let s = M[r][n]; for (let k2 = r + 1; k2 < n; k2++) s -= M[r][k2] * x[k2]; x[r] = s / M[r][r]; }
+  return x;
+}
+function fit(deg) {
+  const m = deg + 1;
+  const rows = TRAIN.map((p) => Array.from({ length: m }, (_, k) => p.x ** k));
+  if (m === TRAIN.length) return solve(rows, TRAIN.map((p) => p.y));
+  const A = Array.from({ length: m }, (_, i) => Array.from({ length: m }, (_, j) => rows.reduce((s, r) => s + r[i] * r[j], 0) + (i === j ? 1e-10 : 0)));
+  const bv = Array.from({ length: m }, (_, i) => rows.reduce((s, r, n) => s + r[i] * TRAIN[n].y, 0));
+  return solve(A, bv);
+}
+const poly = (c, x) => c.reduce((s, ck, k) => s + ck * x ** k, 0);
+const rmse = (c, pts) => Math.sqrt(pts.reduce((s, p) => s + (poly(c, p.x) - p.y) ** 2, 0) / pts.length);
+const FITS = Array.from({ length: 9 }, (_, i) => { const c = fit(i + 1); return { c, tr: rmse(c, TRAIN), te: rmse(c, TEST) }; });
+function drawOF() {
+  const deg = Number($('#ofDeg').value);
+  $('#ofDegOut').textContent = deg;
+  const F = FITS[deg - 1];
+  $('#ofTrain').textContent = F.tr.toFixed(2);
+  $('#ofTest').textContent = F.te.toFixed(2);
+  const { ctx, w, h } = setupCanvas($('#ofPlot'));
+  const X = (x) => 10 + (x + 1) / 2 * (w - 20), Y = (y) => h / 2 - y / 1.8 * (h / 2 - 12);
+  ctx.strokeStyle = css('--line'); ctx.beginPath(); ctx.moveTo(10, h / 2); ctx.lineTo(w - 10, h / 2); ctx.stroke();
+  ctx.save(); ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();
+  ctx.strokeStyle = css('--accent'); ctx.lineWidth = 3; ctx.beginPath();
+  for (let i = 0; i <= 240; i++) { const x = -1 + i / 120; const y = Math.max(-3, Math.min(3, poly(F.c, x))); i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y)); }
+  ctx.stroke(); ctx.restore();
+  ctx.fillStyle = css('--accent'); TRAIN.forEach((p) => { ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 5, 0, Math.PI * 2); ctx.fill(); });
+  ctx.strokeStyle = css('--hit'); ctx.lineWidth = 2.5; TEST.forEach((p) => { ctx.beginPath(); ctx.arc(X(p.x), Y(p.y), 5, 0, Math.PI * 2); ctx.stroke(); });
+  // error chart
+  const E = setupCanvas($('#ofErr')); const c2 = E.ctx;
+  const cap = 0.8, ex = (d) => 24 + (d - 1) / 8 * (E.w - 36), ey = (v) => E.h - 18 - Math.min(cap, v) / cap * (E.h - 30);
+  c2.strokeStyle = css('--line'); c2.beginPath(); c2.moveTo(24, 8); c2.lineTo(24, E.h - 18); c2.lineTo(E.w - 8, E.h - 18); c2.stroke();
+  c2.fillStyle = css('--muted'); c2.font = '10px IBM Plex Mono, monospace';
+  for (let d = 1; d <= 9; d++) c2.fillText(String(d), ex(d) - 3, E.h - 5);
+  c2.fillText('error', 2, 12);
+  [['tr', css('--accent')], ['te', css('--hit')]].forEach(([k, col]) => {
+    c2.strokeStyle = col; c2.lineWidth = 2; c2.beginPath();
+    FITS.forEach((F2, i) => { const x = ex(i + 1), y = ey(F2[k]); i ? c2.lineTo(x, y) : c2.moveTo(x, y); }); c2.stroke();
+    c2.fillStyle = col; c2.beginPath(); c2.arc(ex(deg), ey(F[k]), 5, 0, Math.PI * 2); c2.fill();
+  });
+  const v = $('#ofVerdict');
+  const best = FITS.reduce((bi, F2, i) => (F2.te < FITS[bi].te ? i : bi), 0) + 1;
+  if (deg <= 2) { v.className = 'verdict warn'; v.textContent = 'Underfitting: too simple for a wave. Wrong on training AND test data.'; }
+  else if (F.te > F.tr * 2.2 && deg >= 6) { v.className = 'verdict bad'; v.textContent = `Overfitting: training error ${F.tr.toFixed(2)}, test error ${F.te.toFixed(2)}. It bends to hit every blue dot, noise included, and misses the new data.`; }
+  else { v.className = 'verdict good'; v.textContent = `Good fit: training and test errors are close, so it learned the pattern. The lowest test error here is at complexity ${best}.`; }
+}
+$('#ofDeg').addEventListener('input', drawOF);
+drawOF();
+
+/* ================= Part 6: transformer stepper ================= */
+const WORDS = ['The', ' lighthouse', ' was', ' built'];
+const VECCOL = (v) => `color-mix(in srgb, ${v >= 0 ? 'var(--hit)' : 'var(--accent)'} ${Math.round(Math.min(1, Math.abs(v)) * 85 + 10)}%, var(--surface))`;
+const vrnd = mulberry32(11);
+const VECS = WORDS.map(() => Array.from({ length: 16 }, () => gauss(vrnd) * 0.55));
+const TF = [
+  { label: 'Tokens', title: 'Split the text into tokens', body: '<p>The text becomes tokens, each with an id number. The model only works with numbers.</p><p>Lesson 1 covers tokens in detail.</p>',
+    render: (s) => { s.innerHTML = `<div class="box-title">Input text</div><div class="box">The lighthouse was built</div><div class="box-title">Tokens (with example ids)</div><div class="toks">${WORDS.map((t, i) => `<span class="tok fade" id="tf${i}">${esc(t.replace(/ /g, '·'))} → ${[791, 92736, 574, 5918][i]}</span>`).join('')}</div>`; WORDS.forEach((_, i) => setTimeout(() => $('#tf' + i)?.classList.add('on'), RM ? 0 : 150 + i * 250)); } },
+  { label: 'Embeddings', title: 'Turn each token into a vector', body: '<p>Each token id looks up its row in a big learned table: a list of numbers (thousands in real models) that captures what the token means. Similar words get similar rows.</p><p>This table is learned during training like every other weight.</p>',
+    render: (s) => { s.innerHTML = `<div class="box-title">One vector per token (16 of the thousands of numbers shown, example values)</div><div class="vecs">${WORDS.map((t, i) => `<div class="vec fade" id="tv${i}"><span>${esc(t.replace(/ /g, '·'))}</span><span class="cells">${VECS[i].map((v) => `<i style="background:${VECCOL(v)}"></i>`).join('')}</span></div>`).join('')}</div>`; WORDS.forEach((_, i) => setTimeout(() => $('#tv' + i)?.classList.add('on'), RM ? 0 : 150 + i * 250)); } },
+  { label: 'Position', title: 'Add word order', body: '<p>Attention on its own doesn\'t know word order: "dog bites man" and "man bites dog" would look the same. So each vector is mixed with information about its <b>position</b>.</p>',
+    render: (s) => { s.innerHTML = `<div class="box-title">Vector + position = what goes into the layers</div><div class="vecs">${WORDS.map((t, i) => `<div class="vec"><span>${esc(t.replace(/ /g, '·'))} @ ${i + 1}</span><span class="cells">${VECS[i].map((v, k) => `<i class="pc" data-v="${v}" data-k="${k}" data-i="${i}" style="background:${VECCOL(v)}"></i>`).join('')}</span></div>`).join('')}</div><p class="small muted">Watch the colours shift slightly: same word, plus "I am word number N".</p>`;
+      setTimeout(() => s.querySelectorAll('.pc').forEach((c) => { const v = Number(c.dataset.v) + 0.35 * Math.sin((Number(c.dataset.i) + 1) * (Number(c.dataset.k) + 1) * 0.7); c.style.transition = 'background 600ms'; c.style.background = VECCOL(v); }), RM ? 0 : 500); } },
+  { label: 'Layers', title: 'Pass through many transformer layers', body: '<p>Each layer has two parts:</p><ul><li><b>Attention:</b> every token looks at the other tokens and mixes in what\'s relevant ("built" looks at "lighthouse").</li><li><b>Feed-forward:</b> each token is processed on its own; a lot of the model\'s stored knowledge lives here.</li></ul><p>Stack dozens of these. Early layers pick up grammar; later ones, meaning.</p>',
+    render: (s) => { s.innerHTML = `<div class="block"><div class="box-title">Transformer layer</div><div class="sub att">Attention: tokens look at each other</div><div class="sub ff">Feed-forward: each token refined on its own</div></div><div style="display:flex;align-items:baseline;gap:10px"><span class="small muted">repeated</span><span class="layer-count" id="lc">× 1</span><span class="small muted">times (real models: dozens)</span></div>`;
+      let n = 1; const id = setInterval(() => { n++; const el = $('#lc'); if (!el || n > 32) { clearInterval(id); return; } el.textContent = '× ' + n; }, RM ? 1 : 45); } },
+  { label: 'Output', title: 'Score every possible next token', body: '<p>The last token\'s final vector is turned into a score for every token in the vocabulary, then into probabilities. One is picked, added to the text, and everything runs again for the next token.</p><p>That loop is the whole of Lesson 1.</p>',
+    render: (s) => { const P = [[' in', 0.71], [' by', 0.14], [' on', 0.06], [' to', 0.04], [' with', 0.02]]; s.innerHTML = `<div class="box-title">Probability of the next token (example)</div><div class="probs">${P.map(([t], i) => `<div class="prob${i === 0 ? ' pick' : ''}"><span class="t">${esc(t.replace(/ /g, '·'))}</span><span class="track"><i style="width:0"></i></span><span class="v">${Math.round(P[i][1] * 100)}%</span></div>`).join('')}</div><div class="box">The lighthouse was built <b style="color:var(--hit)">in</b> …</div>`;
+      setTimeout(() => s.querySelectorAll('.prob i').forEach((el, i) => { el.style.width = P[i][1] * 100 + '%'; }), RM ? 0 : 200); } },
+];
+let tfi = 0;
+function goTF(i) {
+  tfi = Math.max(0, Math.min(TF.length - 1, i));
+  $('#tfRail').innerHTML = TF.map((s, k) => `<button type="button" role="tab" class="rail-step${k < tfi ? ' past' : ''}${k === tfi ? ' active' : ''}" data-i="${k}" aria-selected="${k === tfi}"><span class="dot">${k + 1}</span>${s.label}</button>`).join('');
+  $('#tfCounter').textContent = `${tfi + 1} / ${TF.length}`;
+  $('#tfPrev').disabled = tfi === 0; $('#tfNext').disabled = tfi === TF.length - 1;
+  $('#tfNotes').innerHTML = `<div class="sec-num">STEP ${tfi + 1}</div><h3>${TF[tfi].title}</h3>${TF[tfi].body}`;
+  TF[tfi].render($('#tfStage'));
+}
+$('#tfPrev').addEventListener('click', () => goTF(tfi - 1));
+$('#tfNext').addEventListener('click', () => goTF(tfi + 1));
+$('#tfRail').addEventListener('click', (e) => { const b = e.target.closest('.rail-step'); if (b) goTF(Number(b.dataset.i)); });
+goTF(0);
+
+/* ================= Part 7: memory calculator ================= */
+const SIZES = [[1, '1B'], [3, '3B'], [7, '7B'], [13, '13B'], [34, '34B'], [70, '70B'], [405, '405B']];
+const GPUS = [['Render free tier (whole server, no GPU)', 0.5], ['Laptop GPU', 8], ['Gaming GPU', 24], ['One data-centre GPU', 80], ['8 data-centre GPUs', 640]];
+let bytes = 2;
+function renderMM() {
+  const [p, name] = SIZES[Number($('#mmP').value)];
+  $('#mmPOut').textContent = name;
+  const wgb = p * bytes, tgb = wgb * 1.2;
+  const fmtGB = (g) => (g < 10 ? g.toFixed(1) : Math.round(g)) + ' GB';
+  $('#mmW').textContent = fmtGB(wgb); $('#mmT').textContent = '~' + fmtGB(tgb);
+  $('#mmGpus').innerHTML = GPUS.map(([n, gb]) => `<div class="gpu ${tgb <= gb ? 'fits' : 'no'}"><span>${n}</span><b>${gb} GB ${tgb <= gb ? '✓ fits' : '✗'}</b></div>`).join('');
+}
+$('#mmP').addEventListener('input', renderMM);
+$('#mmPrec').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; bytes = Number(b.dataset.b); document.querySelectorAll('#mmPrec button').forEach((x) => x.setAttribute('aria-pressed', x === b)); renderMM(); });
+renderMM();
+
+window.addEventListener('resize', () => { paintGD(); drawOF(); });
+
+/* ================= Part 9: drill ================= */
+const QA = [
+  { title: 'The big picture', items: [
+    { lvl: 'e', q: 'What\'s the difference between AI, machine learning and deep learning?',
+      say: 'They\'re nested. AI is the broad goal of machines doing intelligent tasks. Machine learning is a way to get there by learning from data. Deep learning is machine learning with many-layered neural networks.',
+      explain: `<ul><li><b>AI</b> includes anything that seems intelligent, even hand-written rules (an old chess engine).</li><li><b>Machine learning</b> learns rules from examples instead of you writing them.</li><li><b>Deep learning</b> uses neural networks with many layers; it's what made images, speech and language work well.</li><li><b>Generative AI</b> and <b>LLMs</b> sit inside deep learning: models that create text or images.</li></ul>`,
+      example: `AI ⊃ machine learning ⊃ deep learning ⊃ generative AI ⊃ LLMs
+every LLM is deep learning; most AI is NOT an LLM`,
+      trap: '<p>Using them as synonyms ("AI means ChatGPT"). Interviewers ask this to see if you know the layers.</p>' },
+    { lvl: 'e', q: 'How is machine learning different from normal programming?',
+      say: 'In normal programming you write the rules. In machine learning you give examples with answers, and training works out the rules for you.',
+      explain: `<p>Traditional: rules + data → answers. Machine learning: data + answers → rules (the model). Use ML when the rules are too fuzzy to write by hand: is this email spam, what does this sentence mean. Use normal code when they're exact: tax maths, permissions.</p>`,
+      example: `rules:  if (subject.includes("WIN $$$")) spam = true      ← breaks on "W1N"
+ML:     100,000 labelled emails → train → model predicts spam for new ones`,
+      docmind: '<p>DocMind mixes both: permissions, the quiz offer and the document cap are normal code; understanding questions and writing answers is the model.</p>' },
+    { lvl: 'e', q: 'What is a model?',
+      say: 'A model is the result of training: a function with learned numbers inside it, called parameters. You give it an input and it gives a prediction.',
+      explain: `<p>Before training, the parameters are random and the predictions are junk. Training adjusts them until predictions match the examples. After that the parameters are frozen and the model is used for <b>inference</b>: making predictions on new inputs.</p>`,
+      example: `tiny model:  y = w × x + b        (2 parameters: w, b)
+an LLM:      the same idea with billions of parameters` },
+    { lvl: 'e', q: 'What\'s the difference between parameters and hyperparameters?',
+      say: 'Parameters are learned by training (the weights). Hyperparameters are settings you choose before training, like the learning rate or the number of layers.',
+      explain: `<p>Parameters: the numbers inside the model that training adjusts, w and b in Part 3, billions in an LLM. Hyperparameters: the knobs that control <i>how</i> training happens or how big the model is: learning rate, batch size, number of epochs, number of layers. You tune hyperparameters by trying values and checking the validation score.</p>`,
+      push: ['"Is temperature a hyperparameter?"', '<p>Loosely, people call it a generation setting or sampling parameter. It isn\'t learned and doesn\'t change the model; it only changes how the next token is picked at inference time.</p>'] },
+    { lvl: 'e', q: 'Explain supervised, unsupervised and reinforcement learning.',
+      say: 'Supervised learns from labelled examples, unsupervised finds patterns without labels, and reinforcement learns by trial and error from rewards. There\'s also self-supervised, where the labels come from the data itself.',
+      explain: `<ul><li><b>Supervised:</b> input + correct answer. Spam detection, price prediction.</li><li><b>Unsupervised:</b> no answers. Grouping customers, spotting anomalies.</li><li><b>Self-supervised:</b> hide part of the data and predict it, like the next word. No human labels, so it scales to huge data.</li><li><b>Reinforcement:</b> act, get a reward or penalty, improve. Games, robotics, tuning chatbots.</li></ul>`,
+      push: ['"Which ones are used to build an LLM?"', '<p>All three main ones: self-supervised pre-training (next token), supervised fine-tuning on example chats, and reinforcement learning from human feedback (RLHF) to prefer better answers.</p>'] },
+    { lvl: 'm', q: 'How is an LLM like Gemini trained, step by step?',
+      say: 'Three stages: pre-training on huge amounts of text to predict the next token, instruction tuning on example conversations, then preference tuning so it favours answers people rate higher.',
+      explain: `<ol><li><b>Pre-training</b> (self-supervised): read trillions of tokens, predict each next one, adjust. Learns language and facts. Weeks to months on thousands of GPUs.</li><li><b>Instruction tuning</b> (supervised): train on example chats so it follows instructions instead of just continuing text.</li><li><b>Preference tuning</b> (reinforcement, RLHF or similar): people compare answers; the model is nudged toward the preferred ones. Makes it helpful and safer.</li></ol><p>After that the weights are frozen and served through an API.</p>`,
+      docmind: '<p>DocMind only ever uses the finished product, through the Gemini API. Nothing in DocMind trains anything.</p>' },
+  ]},
+  { title: 'How models learn', items: [
+    { lvl: 'e', q: 'What is a neural network, in simple words?',
+      say: 'Layers of simple units, each multiplying its inputs by learned weights, adding them up and passing the result on. Stack enough layers and the network can learn very complex patterns.',
+      explain: `<p>One unit ("neuron") is tiny maths: weighted sum of inputs, then a simple function that decides how strongly to pass it on. A layer is many units side by side; a network is layers in a row. Early layers learn simple features (in images: edges), later layers combine them into complex ones (faces). "Deep" just means many layers.</p>`,
+      trap: '<p>"It works like a human brain." It was loosely inspired by neurons, but it\'s really just lots of multiplication and addition.</p>' },
+    { lvl: 'e', q: 'What is a loss function?',
+      say: 'A number that says how wrong the model\'s predictions are. Training is all about making it smaller.',
+      explain: `<p>Compare each prediction with the right answer and turn the difference into one score. For predicting numbers, a common one is mean squared error: average of (prediction − answer)². For an LLM, the loss measures how unlikely the model thought the real next token was. A falling loss means the model is learning.</p>`,
+      example: `predictions [3.0, 5.0]   answers [2.0, 5.5]
+errors       [1.0, -0.5]  squared [1.0, 0.25]   loss = 0.625` },
+    { lvl: 'e', q: 'What is gradient descent?',
+      say: 'The method training uses to reduce the loss: work out which direction to nudge each parameter to lower the loss, take a small step that way, and repeat.',
+      explain: `<p>Picture standing on a hillside in fog, trying to reach the bottom of the valley (the lowest loss). You can't see it, but you can feel the slope under your feet (the <b>gradient</b>). Step downhill a little, feel again, repeat. That's exactly the loop in Part 3: predict → loss → gradient → update.</p>`,
+      push: ['"What is backpropagation then?"', '<p>The efficient way to calculate the gradient for every weight in a many-layer network, by working backwards from the loss through the layers. Gradient descent is the "take a step"; backpropagation is "work out which way is downhill for every weight".</p>'] },
+    { lvl: 'e', q: 'What is the learning rate, and what happens if it\'s too high or too low?',
+      say: 'It\'s the size of each training step. Too low and training is very slow; too high and it overshoots, bounces around, or blows up.',
+      explain: `<p>Each update moves the parameters by (learning rate × gradient). A small rate takes tiny careful steps; a large one takes big leaps and can jump right over the minimum, making the loss go up instead of down.</p>`,
+      example: `in Part 3:  0.05  → smooth, fitted within 100 steps
+            0.005 → still far from fitted after 100 steps
+            0.55  → loss explodes ("diverged")` },
+    { lvl: 'e', q: 'What are epochs and batches?',
+      say: 'A batch is a small group of examples used for one update step. An epoch is one full pass through all the training data.',
+      explain: `<p>You can't push millions of examples through at once, so training takes them in batches (say 32 at a time), updating the weights after each batch. When every example has been seen once, that's one epoch. Small models often train for many epochs; huge LLMs see most of their data about once.</p>`,
+      example: `10,000 examples, batch size 100
+→ 100 updates per epoch
+→ 5 epochs = 500 updates` },
+    { lvl: 'e', q: 'What is overfitting, and how do you prevent it?',
+      say: 'Overfitting is when a model memorises its training data, noise included, so it does great on training data and badly on new data. Prevent it with more data, a simpler model, early stopping or regularisation.',
+      explain: `<p>Spot it by comparing errors: low on training, much higher on validation or test data. Fixes:</p><ul><li>More (or more varied) training data.</li><li>A simpler model.</li><li><b>Early stopping:</b> stop when validation error starts rising.</li><li><b>Regularisation:</b> penalise overly complicated fits.</li><li><b>Dropout:</b> randomly switch off parts of a network during training so it can't rely on memorising.</li></ul>`,
+      example: `Part 5 at complexity 9:  training error ≈ 0, test error much higher → overfit
+Part 5 at complexity 1:  both high → underfit`,
+      push: ['"What\'s underfitting?"', '<p>The opposite: the model is too simple to learn the pattern, so it\'s bad on both training and test data. Fix with a more capable model or better features.</p>'] },
+    { lvl: 'e', q: 'Why split data into training, validation and test sets?',
+      say: 'To measure the model honestly on data it hasn\'t seen. Train on one part, tune your settings on the validation part, and check the final score once on the test part.',
+      explain: `<p>Scoring a model on the same data it learned from is like marking a student on the exact questions they memorised. Typical split: ~70–80% train, ~10–15% validation, ~10–15% test. If you keep tweaking until the <i>test</i> score looks good, the test set has leaked into your decisions and the score is no longer honest.</p>`,
+      docmind: '<p>The router eval (52 labelled messages, <code>npm run step7</code>) and the 9-question RAG set are small test sets of the same kind: fixed examples you check every change against.</p>' },
+    { lvl: 'm', q: 'What does "generalisation" mean?',
+      say: 'A model generalises when it works well on new data it never saw in training, not just on its training data. It\'s the whole point of training.',
+      explain: `<p>Memorising is easy; generalising is the goal. You measure it with held-out data (validation and test). A big gap between training and test performance means poor generalisation, usually overfitting.</p>`,
+      docmind: '<p>Your router showed a generalisation problem in a different shape: it matched messages to example phrases by shared words ("compare the two pdfs" ≈ "quiz me about the pdf"), so it was sent to the LLM classifier when unsure.</p>' },
+  ]},
+  { title: 'Transformers', items: [
+    { lvl: 'e', q: 'What is a transformer, at a high level?',
+      say: 'The neural network design behind all modern LLMs. It turns tokens into vectors, lets every token look at the others through attention across many layers, and then predicts the next token.',
+      explain: `<ol><li>Text → tokens.</li><li>Tokens → vectors (embeddings), plus position information.</li><li>Many layers, each with attention (tokens look at each other) and a feed-forward part (each token processed on its own).</li><li>The final vector → a probability for every possible next token.</li></ol><p>It was introduced in 2017 in the paper "Attention Is All You Need".</p>` },
+    { lvl: 'e', q: 'Why did transformers replace RNNs?',
+      say: 'RNNs read text one word at a time, so they\'re slow to train and forget things from far back. Transformers read all the words at once, which trains fast in parallel on GPUs and connects distant words directly.',
+      explain: `<p>An RNN passes a "memory" from word to word; by word 500, word 1 is mostly gone, and word 500 can't be processed until 499 is done. A transformer's attention lets any word look at any other in one step, and all positions are processed at the same time, which suits GPUs. That made training on internet-scale text practical.</p>` },
+    { lvl: 'm', q: 'Why do transformers need positional information?',
+      say: 'Because attention by itself doesn\'t know word order. Without position, "dog bites man" and "man bites dog" would look the same to it.',
+      explain: `<p>Attention compares every token with every other, but treats them like a bag of words. So each token's vector is combined with a signal for where it sits in the sentence (a positional encoding). Modern models use cleverer versions, but the purpose is the same.</p>` },
+    { lvl: 'm', q: 'Encoder-only, decoder-only, encoder-decoder: what\'s the difference?',
+      say: 'Decoder-only models generate text, like GPT, Gemini and Claude. Encoder-only models understand text, like BERT, used for classification and embeddings. Encoder-decoder models turn one text into another, like translation.',
+      explain: `<ul><li><b>Decoder-only:</b> each token can only look at earlier tokens, which suits predicting the next one. All chat LLMs.</li><li><b>Encoder-only:</b> every token sees the whole sentence both ways; great for understanding, not for writing. BERT and many embedding models.</li><li><b>Encoder-decoder:</b> an encoder reads the input, a decoder writes the output. T5, the original 2017 design.</li></ul>`,
+      docmind: '<p>Gemini Flash-Lite (answers) is a decoder-style generator; <code>gemini-embedding-001</code> is a separate model that outputs one vector per text.</p>' },
+  ]},
+  { title: 'Models in practice', items: [
+    { lvl: 'e', q: 'Open-weight vs closed models: what\'s the difference, and which would you choose?',
+      say: 'Closed models (Gemini, GPT, Claude) are only available through the provider\'s API. Open-weight models (Llama, Mistral, Qwen) can be downloaded and run on your own hardware. It depends on cost, privacy and how much infrastructure you can run.',
+      explain: `<ul><li><b>Closed, via API:</b> easiest, usually the strongest models, pay per token, no servers. But data goes to the provider, you get rate limits, and the provider controls the model.</li><li><b>Open-weight, self-hosted:</b> data stays with you, you control and can fine-tune the exact model, and it can be cheaper at very high volume. But you need GPUs and the skills to run them.</li></ul><p>For a startup or a student project, an API is almost always the right first choice.</p>`,
+      docmind: '<p>DocMind uses Gemini through the API: free tier, no GPU needed, and Render\'s free server has only 512 MB of RAM.</p>' },
+    { lvl: 'e', q: 'Why do AI models need GPUs?',
+      say: 'Training and running neural networks is mostly huge numbers of simple multiplications and additions, and a GPU can do thousands of those at the same time. A CPU does a few at a time.',
+      explain: `<p>A CPU has a handful of powerful cores built for varied tasks one after another. A GPU has thousands of simpler cores built to do the same operation on lots of numbers at once, which is exactly what matrix multiplication in a neural network needs. Google's TPUs are chips designed specifically for this.</p>` },
+    { lvl: 'm', q: 'How much memory does a 7-billion-parameter model need?',
+      say: 'About 14 GB just for the weights at 16-bit precision, because each parameter takes 2 bytes. Quantized to 4-bit, about 3.5 GB. Serving it needs a bit more on top.',
+      explain: `<p>Rule of thumb: memory for weights = parameters × bytes per parameter. 32-bit = 4 bytes, 16-bit = 2, 8-bit = 1, 4-bit = 0.5. Running the model also needs working memory for each request, which grows with context length and how many users you serve at once.</p>`,
+      example: `7B × 2 bytes   = 14 GB   (16-bit)
+7B × 0.5 bytes = 3.5 GB  (4-bit)
+70B × 2 bytes  = 140 GB  → needs 2 × 80 GB GPUs` },
+    { lvl: 'm', q: 'What is quantization?',
+      say: 'Storing a model\'s weights with fewer bits, for example 4-bit instead of 16-bit. The model becomes much smaller and faster to run, with a small loss in quality.',
+      explain: `<p>Weights are normally stored as 16-bit numbers. Quantization rounds them to a coarser format (8-bit or 4-bit). That cuts memory by 2–4×, so a model can fit on a cheaper GPU or even a laptop. The rounding loses a little precision, so quality drops slightly; how much depends on the method and model.</p>`,
+      example: `like saving a photo as a smaller JPEG:
+much smaller file, looks almost the same` },
+    { lvl: 'h', q: 'What do Mixture of Experts and multimodal mean?',
+      say: 'Mixture of Experts splits a model into many expert parts and only runs a few for each token, so it\'s big but cheaper to run. Multimodal means the model handles more than text: images, audio, video.',
+      explain: `<p><b>Mixture of Experts (MoE):</b> a small "router" inside the model picks, say, 2 of 16 expert sub-networks for each token. You get the knowledge of a huge model while only paying compute for a small part of it per token.</p><p><b>Multimodal:</b> the model takes images, audio or video as input (some also produce them). Gemini is multimodal; DocMind only sends it text.</p>` },
+  ]},
+  { title: 'Customising models', items: [
+    { lvl: 'm', q: 'What is fine-tuning, and when would you use it instead of prompting or RAG?',
+      say: 'Fine-tuning trains an existing model a bit more on your own examples, to change its behaviour: format, tone, or a narrow task. Try prompting and RAG first; fine-tune when they can\'t get the behaviour you need.',
+      explain: `<p>Good uses: always answering in one strict format, a specific style, a narrow classification task with lots of labelled data, or making a small cheap model behave like a big one. Bad use: adding facts. Facts change, fine-tuning can't cite sources, and the model can still invent things. That's RAG's job.</p>`,
+      docmind: '<p>DocMind never fine-tunes: each user\'s PDFs are facts that change all the time, so RAG fits. The quiz format is handled by JSON mode plus Zod instead.</p>' },
+    { lvl: 'h', q: 'What is LoRA?',
+      say: 'A cheap way to fine-tune. The original model is frozen and only small extra pieces added to it are trained, often under 1% of the parameters, so it fits on one GPU and the result is a small file.',
+      explain: `<p>Full fine-tuning updates every weight, which needs lots of GPU memory and produces a full-size copy of the model. LoRA (Low-Rank Adaptation) keeps the original weights fixed and learns small "adapter" matrices that slightly adjust them. You can keep many adapters (one per customer or task) and swap them on the same base model. QLoRA does this on a quantized model to save even more memory.</p>` },
+    { lvl: 'h', q: 'What is distillation?',
+      say: 'Training a small "student" model to copy the answers of a big "teacher" model. The student is faster and cheaper, with somewhat lower quality.',
+      explain: `<p>Run the big model on lots of inputs, save its outputs, then train the small model to reproduce them. Many fast "lite" or "mini" models are made partly this way. Useful when you need speed and low cost more than the last bit of quality.</p>` },
+  ]},
+];
+const LVL = { e: 'basic', m: 'solid', h: 'bonus' };
+function answerHTML(it) {
+  let h = `<div class="say"><span class="lab">Say this first</span><p>${it.say}</p></div>`;
+  if (it.explain) h += `<div class="part"><span class="lab">Explained simply</span>${it.explain}</div>`;
+  if (it.example) h += `<div class="part"><span class="lab">Example</span><pre class="ex">${esc(it.example)}</pre></div>`;
+  if (it.docmind) h += `<div class="part dm"><span class="lab">In DocMind</span>${it.docmind}</div>`;
+  if (it.push) h += `<div class="part push"><span class="lab">If they push further</span><p><b>${it.push[0]}</b></p>${it.push[1]}</div>`;
+  if (it.trap) h += `<div class="part trap"><span class="lab">Don't say</span>${it.trap}</div>`;
+  return h;
+}
+$('#qaList').innerHTML = QA.map((g) => `<div class="qa-group"><h3>${g.title}<span>${g.items.length} questions</span></h3>${g.items.map((it) => `<details class="qa"><summary>${it.q}<span class="lvl ${it.lvl}">${LVL[it.lvl]}</span></summary><div class="ans">${answerHTML(it)}</div></details>`).join('')}</div>`).join('');
+$('#openAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = true; }));
+$('#closeAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = false; }));
+
+/* ================= Part 10: quiz ================= */
+const QUIZ = [
+  { q: 'How do AI, machine learning and deep learning relate?', o: ['They\'re three names for the same thing', 'Deep learning ⊂ machine learning ⊂ AI', 'AI ⊂ machine learning ⊂ deep learning', 'They\'re unrelated fields'], a: 1, why: 'Nested: deep learning is a kind of ML, which is one approach to AI.' },
+  { q: 'Pre-training an LLM to predict the next word of web text is…', o: ['Supervised learning with human labels', 'Unsupervised clustering', 'Self-supervised learning', 'Reinforcement learning'], a: 2, why: 'The label (the next word) comes from the text itself.' },
+  { q: 'During training the loss starts going UP each step. Most likely cause?', o: ['Learning rate too high', 'Too much data', 'The model is too small', 'Temperature too low'], a: 0, why: 'Steps are so big they overshoot the minimum. You can see it in Part 3 at 0.55.' },
+  { q: 'Training error 0.01, test error 0.9. What\'s happening?', o: ['Underfitting', 'Overfitting', 'A perfect model', 'Not enough epochs'], a: 1, why: 'It memorised the training data and doesn\'t generalise.' },
+  { q: 'What is a loss function?', o: ['The number of layers', 'A score of how wrong the predictions are', 'The data the model forgets', 'The learning rate'], a: 1, why: 'Training tries to make the loss as small as possible.' },
+  { q: 'Why do transformers need positional information?', o: ['To save memory', 'Attention alone doesn\'t know word order', 'To make tokens shorter', 'GPUs require it'], a: 1, why: '"dog bites man" vs "man bites dog" would otherwise look the same.' },
+  { q: 'A 7B-parameter model at 4-bit precision needs about how much memory for its weights?', o: ['0.5 GB', '3.5 GB', '14 GB', '28 GB'], a: 1, why: '7 billion × 0.5 bytes = 3.5 GB.' },
+  { q: 'GPT, Gemini and Claude are which kind of transformer?', o: ['Encoder-only', 'Decoder-only', 'Encoder-decoder', 'Not transformers'], a: 1, why: 'Chat models generate text left to right: decoder-only.' },
+];
+const form = $('#quizForm');
+form.innerHTML = QUIZ.map((item, i) => `<fieldset class="qq" id="qq${i}"><legend>${i + 1}. ${esc(item.q)}</legend>${item.o.map((o, j) => `<label class="opt" for="q${i}o${j}"><input type="radio" name="q${i}" id="q${i}o${j}" value="${j}"><span>${esc(o)}</span></label>`).join('')}<p class="why">${esc(item.why)}</p></fieldset>`).join('');
+form.addEventListener('submit', (e) => e.preventDefault());
+let checked = false;
+$('#checkBtn').addEventListener('click', () => {
+  if (checked) {
+    checked = false; form.reset();
+    form.querySelectorAll('.opt').forEach((o) => o.classList.remove('right', 'wrong'));
+    form.querySelectorAll('.qq').forEach((q) => q.classList.remove('checked'));
+    form.querySelectorAll('input').forEach((inp) => { inp.disabled = false; });
+    $('#scoreOut').textContent = ''; $('#checkBtn').textContent = 'Check answers';
+    return;
+  }
+  let score = 0;
+  QUIZ.forEach((item, i) => {
+    const picked = form.querySelector(`input[name="q${i}"]:checked`);
+    $('#qq' + i).classList.add('checked');
+    $(`label[for="q${i}o${item.a}"]`).classList.add('right');
+    if (picked && Number(picked.value) === item.a) score++;
+    else if (picked) picked.closest('.opt').classList.add('wrong');
+  });
+  form.querySelectorAll('input').forEach((inp) => { inp.disabled = true; });
+  checked = true;
+  $('#scoreOut').textContent = `${score} / ${QUIZ.length}` + (score === QUIZ.length ? ' · solid' : score >= 6 ? ' · close, reread the misses' : ' · replay Parts 3–6 and try again');
+  $('#checkBtn').textContent = 'Try again';
+});
+
+/* ================= done toggle ================= */
+const KEY = 'docmind-revision:lesson-00';
+const doneBtn = $('#doneBtn');
+function paintDone(d) { doneBtn.classList.toggle('done', d); doneBtn.textContent = d ? '✓ Lesson done' : 'Mark lesson as done'; }
+let isDone = false;
+try { isDone = localStorage.getItem(KEY) === '1'; } catch (e) { /* storage blocked */ }
+paintDone(isDone);
+doneBtn.addEventListener('click', () => { isDone = !isDone; paintDone(isDone); try { localStorage.setItem(KEY, isDone ? '1' : '0'); } catch (e) { /* ignore */ } });
+})();
+</script>
+</body>
+</html>

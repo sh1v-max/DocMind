@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How an LLM Works</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: the same lab notebook as lesson 6. One reading column, wide
+   "stage" panels for the playgrounds. Blue = the model and its controls,
+   amber = what gets picked / what fills the context. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #142030;
+  --muted: #586779;
+  --line: #d8dfe8;
+  --accent: #2450d8;
+  --accent-soft: #e4ebfd;
+  --hit: #b86e00;
+  --hit-soft: #fff0d4;
+  --good: #1d8549;
+  --good-soft: #e1f4e8;
+  --bad: #c0352a;
+  --bad-soft: #fbe5e2;
+  --code-bg: #edf1f6;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+    --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+    --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+  --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+  --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px 80px; }
+.read { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; }
+h3 { font-size: 1.1rem; font-weight: 600; }
+p { margin: 0; }
+code, pre, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.top { padding: 40px 0 28px; display: grid; gap: 16px; border-bottom: 1px solid var(--line); }
+.eyebrow { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.lede { font-size: 1.12rem; color: var(--muted); max-width: 62ch; }
+.lessons { display: flex; flex-wrap: wrap; gap: 6px; }
+.lesson-chip { font-family: var(--font-mono); font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); text-decoration: none; }
+a.lesson-chip { color: var(--accent); border-color: var(--accent); }
+a.lesson-chip:hover { background: var(--accent-soft); }
+.lesson-chip.current { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; color: var(--muted); font-size: 0.92rem; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500; transition: background 150ms, border-color 150ms; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.btn.done { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.btn.small { padding: 4px 10px; font-size: 0.85rem; }
+.btn[disabled] { opacity: 0.45; cursor: default; }
+
+.toc { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 0.92rem; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.toc b { font-family: var(--font-mono); color: var(--accent); font-weight: 600; margin-right: 4px; }
+
+section { padding: 48px 0 8px; display: grid; gap: 18px; }
+.sec-num { font-family: var(--font-mono); color: var(--accent); font-size: 0.85rem; font-weight: 600; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.stack { display: grid; gap: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 0.88rem; }
+.note { font-size: 0.85rem; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; }
+.analogy { border-left: 4px solid var(--hit); background: var(--hit-soft); border-radius: 0 var(--radius) var(--radius) 0; padding: 14px 18px; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 9px; padding: 3px; background: var(--bg); }
+.seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 7px; cursor: pointer; font-size: 0.9rem; font-weight: 500; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.tag { font-family: var(--font-mono); font-size: 0.74rem; border-radius: 6px; padding: 2px 7px; background: var(--accent-soft); color: var(--accent); }
+.tag.amber { background: var(--hit-soft); color: var(--hit); }
+.tag.good { background: var(--good-soft); color: var(--good); }
+.tag.grey { background: var(--code-bg); color: var(--muted); }
+.cost { display: flex; flex-wrap: wrap; gap: 6px; }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+.box-title { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px; }
+pre.block { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; line-height: 1.5; }
+.verdict { border-radius: 8px; padding: 10px 12px; font-size: 0.92rem; }
+.verdict.good { background: var(--good-soft); color: var(--good); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+.verdict.warn { background: var(--hit-soft); color: var(--hit); }
+.fade { opacity: 0; transform: translateY(6px); transition: opacity 350ms ease, transform 350ms ease; }
+.fade.on { opacity: 1; transform: none; }
+
+/* ===== generation player ===== */
+.player { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.player-top { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.controls { display: flex; gap: 8px; align-items: center; }
+.counter { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); min-width: 4.5em; text-align: center; font-variant-numeric: tabular-nums; }
+.rail { display: flex; overflow-x: auto; padding: 14px 18px 4px; }
+.rail-step { flex: 1 0 78px; display: grid; justify-items: center; gap: 6px; cursor: pointer; background: none; border: 0; padding: 4px 2px 10px; position: relative; color: var(--muted); font-size: 0.74rem; text-align: center; font-family: var(--font-mono); }
+.rail-step::before { content: ""; position: absolute; top: 15px; left: -50%; width: 100%; height: 2px; background: var(--line); }
+.rail-step:first-child::before { display: none; }
+.rail-step.past::before, .rail-step.active::before { background: var(--accent); }
+.dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); display: grid; place-items: center; font-size: 0.72rem; position: relative; z-index: 1; transition: background 200ms, border-color 200ms; }
+.rail-step.past .dot { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.rail-step.active .dot { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.rail-step.active { color: var(--ink); font-weight: 600; }
+.stage-wrap { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); border-top: 1px solid var(--line); }
+@media (max-width: 820px) { .stage-wrap { grid-template-columns: 1fr; } }
+.stage { padding: 20px; min-height: 400px; background: var(--bg); overflow-x: auto; }
+.notes { padding: 20px; display: grid; gap: 12px; align-content: start; border-left: 1px solid var(--line); }
+@media (max-width: 820px) { .notes { border-left: 0; border-top: 1px solid var(--line); } }
+.notes h3 { font-size: 1.25rem; }
+.notes p { font-size: 0.95rem; }
+
+/* token chips */
+.toks { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; line-height: 1.2; }
+.tok { font-family: var(--font-mono); font-size: 0.8rem; padding: 3px 4px; border-radius: 4px; white-space: pre; border: 1px solid transparent; }
+.tok.c0 { background: #dfe8ff; color: #1b3a9e; }
+.tok.c1 { background: #ffe9c7; color: #7a4a00; }
+.tok.c2 { background: #dcf3e4; color: #145c33; }
+.tok.c3 { background: #f6dff0; color: #7a1f61; }
+.tok.c4 { background: #e2e6ec; color: #2c3a4b; }
+:root[data-theme="dark"] .tok.c0 { background: #20305e; color: #c9d6ff; }
+:root[data-theme="dark"] .tok.c1 { background: #4a3510; color: #ffdca0; }
+:root[data-theme="dark"] .tok.c2 { background: #143824; color: #b4ebc9; }
+:root[data-theme="dark"] .tok.c3 { background: #44183a; color: #f4c6e6; }
+:root[data-theme="dark"] .tok.c4 { background: #2a3442; color: #d5dde8; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .tok.c0 { background: #20305e; color: #c9d6ff; }
+  :root:not([data-theme="light"]) .tok.c1 { background: #4a3510; color: #ffdca0; }
+  :root:not([data-theme="light"]) .tok.c2 { background: #143824; color: #b4ebc9; }
+  :root:not([data-theme="light"]) .tok.c3 { background: #44183a; color: #f4c6e6; }
+  :root:not([data-theme="light"]) .tok.c4 { background: #2a3442; color: #d5dde8; }
+}
+.tok.new { border-color: var(--hit); background: var(--hit-soft); color: var(--hit); font-weight: 600; }
+.tok.ctx { opacity: 0.55; }
+
+/* probability bars */
+.probs { display: grid; gap: 6px; }
+.prob { display: grid; grid-template-columns: 110px minmax(0, 1fr) 58px; gap: 10px; align-items: center; font-size: 0.85rem; }
+.prob .t { font-family: var(--font-mono); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.prob .track { height: 14px; background: var(--code-bg); border-radius: 5px; overflow: hidden; }
+.prob .track i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 5px; transition: width 500ms ease; }
+.prob .v { font-family: var(--font-mono); text-align: right; font-variant-numeric: tabular-nums; }
+.prob.pick .track i { background: var(--hit); }
+.prob.pick .t { color: var(--hit); font-weight: 600; }
+.prob.cut { opacity: 0.35; }
+.prob .n { font-family: var(--font-mono); font-size: 0.75rem; color: var(--hit); }
+@media (max-width: 480px) { .prob { grid-template-columns: 80px minmax(0, 1fr) 50px; } }
+.down { font-family: var(--font-mono); color: var(--muted); font-size: 0.8rem; }
+.model-box { border: 2px dashed var(--accent); border-radius: 10px; padding: 6px 12px; font-family: var(--font-mono); font-size: 0.8rem; color: var(--accent); display: inline-block; }
+
+/* playgrounds */
+.pg { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 820px) { .pg { grid-template-columns: 1fr; } }
+.field { display: grid; gap: 6px; }
+.field label { font-weight: 600; font-size: 0.9rem; display: flex; justify-content: space-between; gap: 10px; }
+.field label output { font-family: var(--font-mono); color: var(--accent); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+select, textarea { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); width: 100%; }
+textarea { font-family: var(--font-mono); font-size: 0.88rem; min-height: 92px; resize: vertical; }
+.readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+.readout { background: var(--bg); border-radius: 8px; padding: 10px; }
+.readout b { display: block; font-family: var(--font-display); font-size: 1.45rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.readout span { font-size: 0.75rem; color: var(--muted); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.draws { display: flex; flex-wrap: wrap; gap: 4px; min-height: 28px; }
+
+/* context budget */
+.budget { height: 40px; display: flex; border-radius: 8px; overflow: hidden; background: var(--code-bg); border: 1px solid var(--line); position: relative; }
+.budget span { height: 100%; transition: width 300ms ease; min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.82rem; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.seg-sys { background: var(--accent); }
+.seg-hist { background: #8a97a8; }
+.seg-ctx { background: var(--hit); }
+.seg-q { background: var(--good); }
+.seg-out { background: repeating-linear-gradient(45deg, var(--accent-soft), var(--accent-soft) 6px, var(--surface) 6px, var(--surface) 12px); border-left: 1px dashed var(--accent); }
+.budget.over { border-color: var(--bad); box-shadow: 0 0 0 2px var(--bad-soft); }
+
+/* stateless demo */
+.turn { border-radius: 10px; padding: 7px 11px; font-size: 0.86rem; max-width: 88%; }
+.turn .who { font-family: var(--font-mono); font-size: 0.7rem; display: block; margin-bottom: 2px; }
+.turn.user { background: var(--accent-soft); justify-self: end; }
+.turn.user .who { color: var(--accent); }
+.turn.model { background: var(--surface); border: 1px solid var(--line); }
+.turn.model .who { color: var(--muted); }
+.turn.bad { border-color: var(--bad); }
+
+/* training strip */
+.strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
+@media (max-width: 720px) { .strip { grid-template-columns: 1fr; } }
+.stage-card { background: var(--surface); border: 1px solid var(--line); padding: 16px 18px; display: grid; gap: 8px; align-content: start; position: relative; }
+.stage-card:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.stage-card:last-child { border-radius: 0 var(--radius) var(--radius) 0; border-color: var(--accent); background: var(--accent-soft); }
+@media (max-width: 720px) { .stage-card, .stage-card:first-child, .stage-card:last-child { border-radius: var(--radius); } }
+.stage-card .when { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); }
+.stage-card ul { margin: 0; padding-left: 18px; font-size: 0.9rem; }
+
+/* attention */
+.att { display: flex; flex-wrap: wrap; gap: 6px; }
+.att button { font-family: var(--font-mono); font-size: 0.9rem; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; cursor: pointer; background: var(--surface); transition: background 300ms, color 300ms; position: relative; }
+.att button.src { outline: 2px solid var(--accent); outline-offset: 1px; }
+.att button small { position: absolute; top: -9px; right: -6px; font-size: 0.62rem; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; color: var(--muted); }
+
+/* bit me */
+.bit { display: grid; gap: 8px; align-content: start; }
+.bit .big { font-family: var(--font-display); font-weight: 800; font-size: 1.6rem; color: var(--hit); line-height: 1; font-variant-numeric: tabular-nums; }
+
+/* drill */
+.qa-group { display: grid; gap: 8px; }
+.qa-group h3 { display: flex; gap: 10px; align-items: baseline; margin-top: 10px; }
+.qa-group h3 span { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+details.qa { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+details.qa summary { cursor: pointer; padding: 12px 16px; font-weight: 600; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+details.qa summary::-webkit-details-marker { display: none; }
+details.qa summary::before { content: "+"; font-family: var(--font-mono); color: var(--accent); width: 1ch; flex: none; }
+details.qa[open] summary::before { content: "−"; }
+details.qa .ans { padding: 2px 16px 16px; display: grid; gap: 12px; font-size: 0.95rem; }
+details.qa .ans p { margin: 0; }
+details.qa .ans ol, details.qa .ans ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.ans .lab { display: block; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.ans .say { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 10px 12px; }
+.ans .say .lab { color: var(--accent); }
+.ans .say p { font-weight: 500; }
+.ans .part { display: grid; gap: 6px; }
+.ans .dm { background: var(--hit-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .dm .lab { color: var(--hit); }
+.ans .push { border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; }
+.ans .trap { background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .trap .lab { color: var(--bad); }
+.ans pre.ex { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; font-size: 0.78rem; line-height: 1.5; white-space: pre; overflow-x: auto; }
+.lvl { font-family: var(--font-mono); font-size: 0.68rem; border-radius: 5px; padding: 1px 6px; margin-left: auto; flex: none; font-weight: 500; }
+.lvl.e { background: var(--good-soft); color: var(--good); }
+.lvl.m { background: var(--hit-soft); color: var(--hit); }
+.lvl.h { background: var(--bad-soft); color: var(--bad); }
+.drill-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.script { border: 2px solid var(--accent); }
+.script p { font-size: 1.02rem; }
+
+/* quiz */
+.quiz { display: grid; gap: 14px; }
+.qq { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 8px; margin: 0; }
+.qq legend { font-weight: 600; padding: 0 4px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; font-size: 0.94rem; }
+.opt:hover { background: var(--bg); }
+.opt input { margin-top: 5px; accent-color: var(--accent); }
+.opt.right { border-color: var(--good); background: var(--good-soft); }
+.opt.wrong { border-color: var(--bad); background: var(--bad-soft); }
+.why { font-size: 0.88rem; color: var(--muted); display: none; }
+.checked .why { display: block; }
+.score { font-family: var(--font-display); font-weight: 800; font-size: 1.3rem; }
+.next { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">DocMind revision · Track A, AI foundations</div>
+  <h1>Lesson 1 · How an LLM works</h1>
+  <p class="lede">Tokens, next-token prediction, temperature, context windows, and why the model forgets everything between requests. The ground floor every AI backend question stands on.</p>
+  <div class="lessons" aria-label="All lessons">
+    <a class="lesson-chip" href="https://claude.ai/artifact/U3SBL3JuXPaY9PSbD3qBHs">0 Foundations</a><span class="lesson-chip current">1 LLMs</span><a class="lesson-chip" href="https://claude.ai/artifact/RSwoABVqgoqZ2C2CCuQ5Hr">2 Embeddings</a><a class="lesson-chip" href="https://claude.ai/artifact/34tmJf8BuMMEGgMZ4qRUqN">3 Calling the model</a><span class="lesson-chip">4 Ingestion</span><span class="lesson-chip">5 Vector DBs</span><a class="lesson-chip" href="https://claude.ai/artifact/SRRQhczagqJqFcQqwcVq6t">6 RAG</a><span class="lesson-chip">7 Streaming</span><span class="lesson-chip">8 Structured output</span><span class="lesson-chip">9 Background jobs</span><span class="lesson-chip">10 Auth</span><span class="lesson-chip">11 Deploy</span><span class="lesson-chip">12 Routing</span><span class="lesson-chip">13 Agents</span><span class="lesson-chip">14 Not built yet</span><span class="lesson-chip">15 Mock interview</span>
+  </div>
+  <div class="meta-row">
+    <span>About 60 minutes · 9 parts · 32 interview questions</span>
+    <button class="btn" id="doneBtn" type="button">Mark lesson as done</button>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Parts of this lesson">
+  <a href="#idea"><b>1</b>The idea</a>
+  <a href="#gen"><b>2</b>Watch it generate</a>
+  <a href="#tokens"><b>3</b>Tokens</a>
+  <a href="#sampling"><b>4</b>Temperature</a>
+  <a href="#context"><b>5</b>Context &amp; memory</a>
+  <a href="#training"><b>6</b>Training &amp; attention</a>
+  <a href="#bit"><b>7</b>What bit you</a>
+  <a href="#drill"><b>8</b>Interview drill</a>
+  <a href="#quiz"><b>9</b>Quiz</a>
+</nav>
+
+<!-- ============ 1. IDEA ============ -->
+<section id="idea">
+  <div class="sec-num">PART 1 · THE IDEA IN 60 SECONDS</div>
+  <h2>An LLM does one thing: guess the next token. Then it does it again.</h2>
+  <div class="read stack">
+    <p>A large language model is a huge function. You give it a sequence of <b>tokens</b> (pieces of words), and it returns a <b>probability for every token in its vocabulary</b> being the next one. The app picks one, appends it, and calls the function again with the longer sequence. A whole answer is that loop running a few hundred times.</p>
+    <p>Everything else follows from this. It has no database of facts to look up, only patterns in its weights, so it can sound sure and be wrong. It keeps nothing between calls, so "memory" means resending the conversation. And it only sees what fits in its <b>context window</b>, so what you put in the prompt matters more than anything.</p>
+  </div>
+  <div class="analogy read"><b>Analogy: autocomplete that read the internet.</b> Your phone's keyboard suggests the next word from the last few words. An LLM does the same with thousands of tokens of context and billions of learned weights, well enough that the continuation reads like reasoning.</div>
+  <div class="grid3">
+    <div class="card"><h3>What it is</h3><p class="small muted">A next-token predictor (a transformer neural network) with weights frozen after training.</p></div>
+    <div class="card"><h3>What it isn't</h3><p class="small muted">A database, a search engine, or something that learns from your chats. Nothing you send changes it.</p></div>
+    <div class="card"><h3>What you control</h3><p class="small muted">The input (prompt, history, context, tools) and the sampling settings (temperature, top-p, max tokens).</p></div>
+  </div>
+</section>
+
+<!-- ============ 2. GENERATION PLAYER ============ -->
+<section id="gen">
+  <div class="sec-num">PART 2 · WATCH IT GENERATE</div>
+  <h2>One answer, one token at a time</h2>
+  <p class="read muted">The model is answering "When was the lighthouse built, and by whom?" and has written "The lighthouse was built in" so far. Step through the loop. Then switch to <b>without context</b>: same question, no retrieved passage, and watch it make something up just as fluently.</p>
+  <div class="player" id="player">
+    <div class="player-top">
+      <div class="seg" role="group" aria-label="Prompt version">
+        <button type="button" id="genWith" aria-pressed="true">With context (RAG)</button>
+        <button type="button" id="genWithout" aria-pressed="false">Without context</button>
+      </div>
+      <div class="controls">
+        <button class="btn" type="button" id="prevBtn">◀ Prev</button>
+        <button class="btn primary" type="button" id="playBtn">▶ Play</button>
+        <button class="btn" type="button" id="nextBtn">Next ▶</button>
+        <span class="counter" id="counter">1 / 10</span>
+      </div>
+    </div>
+    <div class="rail" id="rail" role="tablist" aria-label="Steps"></div>
+    <div class="stage-wrap">
+      <div class="stage" id="stage" aria-live="polite"></div>
+      <div class="notes" id="notes"></div>
+    </div>
+  </div>
+  <p class="note">Probabilities are example values chosen to show the shape. The with-context answer is the real one from your AG.0 run ("built in 1874 by the engineer Orla Vantris"); the hallucinated one is invented to look like a typical hallucination.</p>
+</section>
+
+<!-- ============ 3. TOKENS ============ -->
+<section id="tokens">
+  <div class="sec-num">PART 3 · TOKENS</div>
+  <h2>Models read tokens, and you pay per token</h2>
+  <div class="read stack">
+    <p>Text is split into tokens by a tokenizer (usually <b>BPE</b>, byte-pair encoding): common words are one token, rare words split into pieces, and the leading space is usually part of the token. Rules of thumb for English: <b>1 token ≈ 4 characters ≈ 0.75 words</b>, so 1,000 words ≈ 1,300 tokens. Code, numbers and non-English text usually take more tokens for the same meaning.</p>
+  </div>
+  <div class="card pg">
+    <div class="stack">
+      <div class="field">
+        <label for="tokIn">Type anything</label>
+        <textarea id="tokIn" spellcheck="false">The lighthouse at Cape Velmora was built in 1874 by the engineer Orla Vantris.</textarea>
+      </div>
+      <div class="presets" aria-label="Examples">
+        <button class="btn small" type="button" data-preset="0">English</button>
+        <button class="btn small" type="button" data-preset="1">Code</button>
+        <button class="btn small" type="button" data-preset="2">Numbers</button>
+        <button class="btn small" type="button" data-preset="3">Hindi</button>
+        <button class="btn small" type="button" data-preset="4">Rare words</button>
+      </div>
+      <div class="box"><div class="box-title">How it might be split</div><div class="toks" id="tokOut"></div></div>
+    </div>
+    <div class="stack">
+      <div class="readouts">
+        <div class="readout"><b id="tkN">0</b><span>tokens (approx.)</span></div>
+        <div class="readout"><b id="tkW">0</b><span>words</span></div>
+        <div class="readout"><b id="tkR">0</b><span>characters per token</span></div>
+      </div>
+      <div class="verdict warn" id="tkVerdict"></div>
+      <p class="note">This is a toy tokenizer that imitates how BPE behaves, so you can see the pattern. Real counts differ by model. For real numbers use the API: Gemini returns <code>usageMetadata</code> on every reply and has a <code>countTokens</code> endpoint.</p>
+      <div class="box small">
+        <div class="box-title">Why it matters for a backend</div>
+        <ul style="margin:0;padding-left:18px">
+          <li>Price and rate limits (TPM = tokens per minute) are in tokens.</li>
+          <li>The context window is in tokens, not characters or messages.</li>
+          <li>Rare names split into pieces, which is one reason models misspell them.</li>
+          <li>Your two tool declarations cost ~136 input tokens on every agent call (measured in AG.0).</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. SAMPLING ============ -->
+<section id="sampling">
+  <div class="sec-num">PART 4 · TEMPERATURE AND SAMPLING</div>
+  <h2>How the next token gets picked</h2>
+  <div class="read stack">
+    <p>The model outputs a raw score per token (<b>logits</b>). <b>Softmax</b> turns them into probabilities. Before that, the scores are divided by the <b>temperature</b>: below 1 sharpens the distribution (the top token wins more), above 1 flattens it (unlikely tokens get a real chance). <b>Top-p</b> then keeps only the smallest set of tokens whose probabilities add up to p, and samples from those. <b>Top-k</b> does the same with a fixed count.</p>
+  </div>
+  <div class="card pg">
+    <div class="stack">
+      <div class="seg" role="group" aria-label="Which distribution">
+        <button type="button" id="smWith" aria-pressed="true">With context: sure</button>
+        <button type="button" id="smWithout" aria-pressed="false">Without context: unsure</button>
+      </div>
+      <div class="box-title">Next token after "…was built in"</div>
+      <div class="probs" id="smBars"></div>
+      <div class="box"><div class="box-title">20 samples at these settings</div><div class="draws toks" id="smDraws"><span class="muted small">Press "Sample 20 times".</span></div></div>
+    </div>
+    <div class="stack">
+      <div class="field">
+        <label for="smT">Temperature <output id="smTOut">1.00</output></label>
+        <input type="range" id="smT" min="0" max="2" step="0.05" value="1">
+      </div>
+      <div class="field">
+        <label for="smP">Top-p <output id="smPOut">1.00</output></label>
+        <input type="range" id="smP" min="0.05" max="1" step="0.05" value="1">
+      </div>
+      <div class="presets">
+        <button class="btn small" type="button" id="smClassifier">Classifier: T = 0</button>
+        <button class="btn small" type="button" id="smDefault">Default: T = 1</button>
+        <button class="btn small" type="button" id="smWild">Creative: T = 1.6</button>
+      </div>
+      <button class="btn primary" type="button" id="smSample">Sample 20 times</button>
+      <div class="verdict" id="smVerdict"></div>
+      <p class="note">The math is real (softmax of logits ÷ T, then top-p); the starting probabilities are examples. Your router's classifier runs at temperature 0 with JSON mode and Zod, because the same message should always get the same label.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. CONTEXT ============ -->
+<section id="context">
+  <div class="sec-num">PART 5 · CONTEXT WINDOW AND MEMORY</div>
+  <h2>Everything the model knows about this request has to fit in one window</h2>
+  <div class="read stack">
+    <p>The <b>context window</b> is the maximum number of tokens one call can hold: system instruction, history, retrieved chunks, the question, <b>and the answer it writes</b>. Go over it and the API refuses, or your app has to drop something first. Even well inside the limit, every token costs money and time, on every single call.</p>
+  </div>
+  <div class="card stack">
+    <div class="grid3">
+      <div class="field"><label for="cwWin">Window size</label>
+        <select id="cwWin"><option value="8192">8K tokens</option><option value="32768" selected>32K tokens</option><option value="131072">128K tokens</option><option value="1048576">1M tokens</option></select></div>
+      <div class="field"><label for="cwHist">History messages <output id="cwHistOut">8</output></label><input type="range" id="cwHist" min="0" max="60" value="8"></div>
+      <div class="field"><label for="cwK">Retrieved chunks <output id="cwKOut">3</output></label><input type="range" id="cwK" min="0" max="40" value="3"></div>
+      <div class="field"><label for="cwOut">Room for the answer <output id="cwOutOut">1,024</output></label><input type="range" id="cwOut" min="256" max="8192" step="256" value="1024"></div>
+    </div>
+    <div class="budget" id="cwBar" role="img" aria-label="How the context window is filled">
+      <span class="seg-sys" id="cwSys"></span><span class="seg-hist" id="cwHistSeg"></span><span class="seg-ctx" id="cwCtx"></span><span class="seg-q" id="cwQ"></span><span class="seg-out" id="cwOutSeg"></span>
+    </div>
+    <div class="legend">
+      <span><i class="seg-sys"></i>System instruction ~450</span>
+      <span><i class="seg-hist"></i>History ~150 per message</span>
+      <span><i class="seg-ctx"></i>Chunks ~650 each</span>
+      <span><i class="seg-q"></i>Question ~30</span>
+      <span><i class="seg-out"></i>Answer (output)</span>
+    </div>
+    <div class="readouts">
+      <div class="readout"><b id="cwIn">0</b><span>input tokens per question</span></div>
+      <div class="readout"><b id="cwPct">0%</b><span>of the window used</span></div>
+      <div class="readout"><b id="cw20">0</b><span>input tokens over a 20-turn chat</span></div>
+    </div>
+    <div class="verdict" id="cwVerdict"></div>
+    <div class="presets"><button class="btn small" type="button" id="cwDocmind">Reset to DocMind's settings (8 messages, 3 chunks)</button></div>
+    <p class="note">Token sizes are rough estimates. The 20-turn total counts the history growing until it hits your message limit, because every turn resends it.</p>
+  </div>
+
+  <h3>The model is stateless</h3>
+  <p class="read">Two calls to the same model share nothing. A chatbot "remembers" only because the app sends the earlier messages again. Toggle what DocMind sends on the follow-up.</p>
+  <div class="card stack">
+    <div class="seg" role="group" aria-label="Second request">
+      <button type="button" id="slWithout" aria-pressed="true">Request 2 without history</button>
+      <button type="button" id="slWith" aria-pressed="false">Request 2 with history</button>
+    </div>
+    <div class="grid2">
+      <div class="box stack"><div class="box-title">What request 2 contains</div><div class="stack" id="slSent"></div></div>
+      <div class="box stack"><div class="box-title">What the model can do with it</div><div class="stack" id="slReply"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6. TRAINING + ATTENTION ============ -->
+<section id="training">
+  <div class="sec-num">PART 6 · TRAINING, INFERENCE AND ATTENTION</div>
+  <h2>Where the model's knowledge comes from, and what you can't change</h2>
+  <div class="strip">
+    <div class="stage-card">
+      <span class="when">1 · PRE-TRAINING · months, thousands of GPUs</span>
+      <h3>Learn to predict text</h3>
+      <ul><li>Next-token prediction over a huge amount of text and code.</li><li>Facts, grammar and patterns end up in the weights.</li><li>Knowledge stops at the <b>cutoff date</b>.</li></ul>
+    </div>
+    <div class="stage-card">
+      <span class="when">2 · POST-TRAINING · weeks</span>
+      <h3>Learn to be an assistant</h3>
+      <ul><li>Instruction tuning on example conversations.</li><li>Preference training (e.g. RLHF): humans or models rank answers.</li><li>Learns roles, refusals, tool calling, JSON mode.</li></ul>
+    </div>
+    <div class="stage-card">
+      <span class="when">3 · INFERENCE · your API call, every request</span>
+      <h3>Use it, weights frozen</h3>
+      <ul><li>Only forward passes; nothing is learned.</li><li>You change the <b>input</b> (prompt, context, tools) and the <b>sampling</b>.</li><li>This is where all of DocMind lives.</li></ul>
+    </div>
+  </div>
+  <p class="note read">Fine-tuning is a small extra round of training on your own examples. It changes behaviour and format well, and adds facts badly. Lesson 6 covers RAG vs fine-tuning.</p>
+
+  <h3>Attention, in one picture</h3>
+  <div class="read stack">
+    <p>A <b>transformer</b> builds each token's meaning by looking at the other tokens in the context, with learned weights for how much each one matters. That's <b>attention</b>. Click a word to see where it might "look". Real models have dozens of layers, each with many attention heads looking for different things.</p>
+  </div>
+  <div class="card stack">
+    <div class="att" id="att"></div>
+    <p class="small muted" id="attNote">Click "it".</p>
+    <p class="note">Example weights. Two consequences you'll be asked about: standard attention compares every token with every other, so cost grows with the square of the length; and during generation the model caches what it computed for earlier tokens (the <b>KV cache</b>), so each new token only adds one row.</p>
+  </div>
+</section>
+
+<!-- ============ 7. WHAT BIT YOU ============ -->
+<section id="bit">
+  <div class="sec-num">PART 7 · WHAT BIT YOU</div>
+  <h2>LLM behaviour you ran into while building DocMind</h2>
+  <div class="grid2">
+    <div class="card bit"><div class="big">22 / 36 / 32 / 10%</div><h3>Models aren't random</h3><p class="small">Across 50 quiz questions, the correct answer sat in position A/B/C/D that often. A model has habits; "valid" isn't "fair". You shuffle the options in code.</p></div>
+    <div class="card bit"><div class="big">T = 0</div><h3>A classifier must be boring</h3><p class="small">The router's LLM classifier runs at temperature 0 with JSON mode and a Zod check. Same message, same label, and a malformed reply is caught, not trusted.</p></div>
+    <div class="card bit"><div class="big">1–3 s vs 25–53 s</div><h3>Same call, different day</h3><p class="small">The classifier took 1–3 s one day and 25–53 s another, with 503 "high demand" errors. Latency is not a property of your code. Don't redesign from one slow run.</p></div>
+    <div class="card bit"><div class="big">-latest</div><h3>The model can change under you</h3><p class="small"><code>gemini-flash-lite-latest</code> turned out to be <code>gemini-3.5-flash-lite</code> (from <code>modelVersion</code> in the reply). An alias can move to a new model with different behaviour, with no deploy on your side.</p></div>
+    <div class="card bit"><div class="big">"Paris!"</div><h3>Training knowledge leaks</h3><p class="small">Asked "capital of France?", the chat answered from what the model learned in training. Stopping that took explicit rules, because the model knows plenty that isn't in your PDF.</p></div>
+    <div class="card bit"><div class="big">132 chars</div><h3>Thinking models leave traces</h3><p class="small">Every model turn came with a <code>thoughtSignature</code>. Drop it when sending a turn back and Gemini answers 400. Reasoning models carry hidden state you must return untouched.</p></div>
+    <div class="card bit"><div class="big">15 RPM · 500 RPD</div><h3>Limits are part of the design</h3><p class="small">Flash-Lite's free tier on your account. Every extra call per question (the classifier, an agent step) spends this budget, which is why the router tries vectors first.</p></div>
+    <div class="card bit"><div class="big">no timeout</div><h3>An open gap (ISSUES #8)</h3><p class="small">No Gemini <code>fetch</code> has a timeout or retry yet, so a hung call hangs the request. A good "what would you improve?" answer.</p></div>
+  </div>
+</section>
+
+<!-- ============ 8. DRILL ============ -->
+<section id="drill">
+  <div class="sec-num">PART 8 · INTERVIEW DRILL</div>
+  <h2>32 questions you could get. Answer out loud first, then open.</h2>
+  <div class="card script stack">
+    <h3>Say it in 60 seconds: "How does an LLM actually work?"</h3>
+    <p>"It's a transformer trained to predict the next token. Text is split into tokens; the model reads all of them, using attention so each token's meaning depends on the others, and outputs a probability for every possible next token. The app samples one, controlled by temperature and top-p, appends it and repeats until a stop token or the length limit. The knowledge is frozen in the weights at training time, the model keeps no state between calls, and it can only see what fits in its context window. So in a backend, the real work is deciding what goes into that window, which is what RAG and conversation memory do in my project."</p>
+  </div>
+  <p class="read muted">Each answer opens with <b>Say this first</b>: the 10-second version to lead with. Then the fuller explanation, an example, how it applies in DocMind, the likely follow-up, and the wrong answer to avoid. Say the short answer, then go deeper only if they ask.</p>
+  <div class="drill-bar">
+    <button class="btn small" type="button" id="openAll">Open all answers</button>
+    <button class="btn small" type="button" id="closeAll">Close all</button>
+    <span class="small muted">Levels: <span class="lvl e">basic</span> <span class="lvl m">solid</span> <span class="lvl h">bonus</span> (beyond most intern interviews; skip if short on time)</span>
+  </div>
+  <div class="stack" id="qaList"></div>
+</section>
+
+<!-- ============ 9. QUIZ ============ -->
+<section id="quiz">
+  <div class="sec-num">PART 9 · QUIZ</div>
+  <h2>Eight questions. No peeking.</h2>
+  <form class="quiz" id="quizForm"></form>
+  <div class="next">
+    <button class="btn primary" type="button" id="checkBtn">Check answers</button>
+    <span class="score" id="scoreOut" aria-live="polite"></span>
+  </div>
+</section>
+
+<section>
+  <div class="card next">
+    <div><div class="sec-num">UP NEXT</div><h3>Lesson 2 · Embeddings and similarity</h3><p class="small muted">How text becomes 3072 numbers, why cosine distance means "similar meaning", and what can go wrong.</p></div>
+    <a class="btn primary" href="https://claude.ai/artifact/RSwoABVqgoqZ2C2CCuQ5Hr" style="text-decoration:none">Open lesson 2 →</a>
+  </div>
+</section>
+
+</div>
+
+<script>
+(() => {
+'use strict';
+const RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = (n) => Math.round(n).toLocaleString('en-US');
+const showTok = (t) => t.replace(/ /g, '·');
+
+let timers = [];
+function later(fn, ms) { const id = setTimeout(fn, RM ? 0 : ms); timers.push(id); return id; }
+function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+
+/* ================= Part 2: generation player ================= */
+const PREFIX = ['The', ' lighthouse', ' was', ' built', ' in'];
+const GEN = {
+  with: {
+    context: 'Context: "…The lighthouse at Cape Velmora was built in 1874 by the engineer Orla Vantris…"',
+    steps: [
+      [[' 1874', .91], [' the', .03], [' 18', .02], [' about', .01], [' stone', .01]],
+      [[' by', .88], ['.', .06], [',', .04], [' under', .01], [' and', .01]],
+      [[' the', .62], [' Orla', .31], [' engineer', .04], [' a', .02], [' local', .01]],
+      [[' engineer', .93], [' architect', .03], [' builder', .02], [' famous', .01], [' Scottish', .01]],
+      [[' Orla', .97], [' O', .01], [' named', .01], [' Or', .005], [' Mr', .005]],
+      [[' V', .95], [' Vantris', .02], [' Van', .02], [' Vent', .005], [' von', .005]],
+      [['antris', .98], ['ant', .01], ['entris', .005], ['antr', .003], ['andris', .002]],
+      [['.', .90], [',', .05], [' in', .02], [' and', .02], ['<end>', .01]],
+    ],
+  },
+  without: {
+    context: '(no context: only the question)',
+    steps: [
+      [[' 1887', .14], [' 1874', .09], [' 1902', .08], [' 1856', .07], [' the', .06]],
+      [[' by', .71], ['.', .12], [',', .09], [' and', .04], [' under', .02]],
+      [[' the', .55], [' Robert', .12], [' a', .09], [' Scottish', .06], [' local', .05]],
+      [[' Scottish', .34], [' engineer', .30], [' famous', .12], [' British', .08], [' local', .06]],
+      [[' engineer', .81], [' architect', .07], [' lighthouse', .05], [' builder', .04], [' civil', .02]],
+      [[' Robert', .41], [' Thomas', .18], [' Alan', .09], [' David', .07], [' James', .05]],
+      [[' Stevenson', .76], [' Smith', .05], [' Stephenson', .04], [' Hamilton', .03], [' Ross', .02]],
+      [['.', .84], [',', .08], [' in', .04], [' and', .03], ['<end>', .01]],
+    ],
+  },
+};
+let genMode = 'with', gi = 0, playing = false, playTimer = 0;
+const GSTEPS = 10; // 0 = tokenize, 1..8 = tokens, 9 = stop
+const railLabels = ['Tokenize', 'tok 1', 'tok 2', 'tok 3', 'tok 4', 'tok 5', 'tok 6', 'tok 7', 'tok 8', 'Stop'];
+
+function picked(mode, n) { return GEN[mode].steps.slice(0, n).map((s) => s[0][0]); }
+function chipRow(tokens, newIdx) {
+  return tokens.map((t, i) => `<span class="tok c${i % 5}${i === newIdx ? ' new' : ''}">${esc(showTok(t))}</span>`).join('');
+}
+function genNotes(mode, i) {
+  const w = mode === 'with';
+  if (i === 0) return { t: 'Turn text into tokens', b: '<p>The prompt (instruction, context, question, and the answer so far) is split into tokens and each becomes an integer id. The model only ever sees those ids.</p><p>Leading spaces are part of tokens: <code>·lighthouse</code> is one token, different from <code>lighthouse</code>.</p>', c: [['tokenizer', ''], ['0 model calls', 'good']] };
+  if (i === 9) return { t: 'Stop', b: `<p>Generation ends when the model produces an end-of-turn token, hits a stop sequence, or reaches <code>maxOutputTokens</code>. The API reports which one as <code>finishReason</code> (<code>STOP</code>, <code>MAX_TOKENS</code>, …).</p><p>${w ? 'Grounded: every step was confident because the answer was right there in the context.' : 'Fluent, specific and made up. Nothing in the output tells you the first step was a 14% guess. That is a hallucination, and it\'s why RAG exists.'}</p><p>Check <code>finishReason</code> in a backend: <code>MAX_TOKENS</code> means the answer (or your JSON) was cut off.</p>`, c: [['8 decode steps', ''], ['finishReason: STOP', 'good']] };
+  const step = GEN[mode].steps[i - 1];
+  const top = step[0];
+  let extra = '';
+  if (i === 1) extra = w ? '<p>The context made this almost certain: 91% on <code>·1874</code>.</p>' : '<p>The model doesn\'t know, and it shows: the top choice is only 14%, spread over plausible years. But it must output <i>something</i>, and greedy decoding takes the top one.</p>';
+  if (i === 6 && w) extra = '<p>"Vantris" is rare, so it\'s split into pieces: <code>·V</code> then <code>antris</code>. Every piece is its own prediction.</p>';
+  if (i === 6 && !w) extra = '<p>Now it\'s committed to a story about a Scottish engineer, so a famous real name scores high. Each guess makes the next one more "consistent", not more true.</p>';
+  if (i === 3 && w) extra = '<p>Close call between <code>·the</code> and <code>·Orla</code>. With temperature above 0, some runs would say "by Orla Vantris" instead. Same meaning, different text.</p>';
+  return { t: `Predict token ${i}`, b: `<p>One <b>forward pass</b> reads all ${PREFIX.length + i - 1} answer tokens (plus the whole prompt, mostly cached) and scores every token in the vocabulary. Shown: the top 5.</p><p>Picked <code>${esc(showTok(top[0]))}</code> at ${(top[1] * 100).toFixed(0)}% (greedy: always the top).</p>${extra}`, c: [[`forward pass ${i} of 8`, 'amber'], ['1 token out', '']] };
+}
+function renderGen() {
+  clearTimers();
+  const st = $('#stage');
+  const mode = genMode, i = gi;
+  const g = GEN[mode];
+  $('#rail').innerHTML = railLabels.map((l, k) => `<button type="button" role="tab" class="rail-step${k < i ? ' past' : ''}${k === i ? ' active' : ''}" data-i="${k}" aria-selected="${k === i}"><span class="dot">${k}</span>${l}</button>`).join('');
+  $('#counter').textContent = `${i + 1} / ${GSTEPS}`;
+  $('#prevBtn').disabled = i === 0; $('#nextBtn').disabled = i === GSTEPS - 1;
+  const n = genNotes(mode, i);
+  $('#notes').innerHTML = `<div class="sec-num">STEP ${i} · ${mode === 'with' ? 'WITH CONTEXT' : 'WITHOUT CONTEXT'}</div><h3>${n.t}</h3>${n.b}<div class="cost">${n.c.map(([t, c]) => `<span class="tag ${c}">${t}</span>`).join('')}</div>`;
+
+  const ctxLine = `<div class="box"><div class="box-title">Prompt (abridged)</div><pre class="block">System: Answer only from the context.
+${esc(g.context)}
+Question: When was the lighthouse built, and by whom?
+Answer:</pre></div>`;
+
+  if (i === 0) {
+    const toks = ['System', ':', ' Answer', ' only', ' from', ' the', ' context', '.', '\n', 'Question', ':', ' When', ' was', ' the', ' lighthouse', ' built', ',', ' and', ' by', ' whom', '?', '\n', 'Answer', ':', ' The', ' lighthouse', ' was', ' built', ' in'];
+    st.innerHTML = `<div class="stack">${ctxLine}<div class="down">↓ tokenizer</div><div class="box"><div class="box-title">Tokens (part of the prompt shown)</div><div class="toks" id="g0"></div></div><div class="box fade" id="g1"><div class="box-title">What the model actually receives</div><pre class="block">[9125, 25, 22559, 1606, 505, 279, 2317, 13, 198, 14924, 25, 3277, 574, 279, 92736, …]   (example ids)</pre></div></div>`;
+    const box = $('#g0');
+    toks.forEach((t, k) => later(() => { box.insertAdjacentHTML('beforeend', `<span class="tok c${k % 5}">${esc(showTok(t === '\n' ? '⏎' : t))}</span>`); }, 60 + k * 70));
+    later(() => $('#g1').classList.add('on'), 60 + toks.length * 70 + 200);
+    return;
+  }
+  const done = picked(mode, i - 1);
+  if (i === 9) {
+    const all = [...PREFIX, ...picked(mode, 8)];
+    st.innerHTML = `<div class="stack">${ctxLine}<div class="box"><div class="box-title">Final answer, as tokens</div><div class="toks">${chipRow(all, -1)}</div></div>
+      <div class="box"><div class="box-title">As text</div><p style="font-size:1.05rem">${esc(all.join(''))}</p></div>
+      <div class="verdict ${mode === 'with' ? 'good' : 'bad'} fade" id="g9">${mode === 'with' ? 'Correct, and it came from the context.' : 'Confident and wrong. The real answer is 1874, Orla Vantris. Nothing in the text warns you.'}</div></div>`;
+    later(() => $('#g9').classList.add('on'), 300);
+    return;
+  }
+  const cands = g.steps[i - 1];
+  st.innerHTML = `<div class="stack">
+    ${ctxLine}
+    <div class="box"><div class="box-title">Answer so far (${PREFIX.length + done.length} tokens)</div><div class="toks" id="gSoFar">${chipRow([...PREFIX, ...done], -1)}</div></div>
+    <div class="down">↓ one forward pass</div>
+    <div class="model-box">gemini-flash-lite (example)</div>
+    <div class="box"><div class="box-title">Probability of each next token (top 5)</div><div class="probs" id="gProbs">${cands.map(([t]) => `<div class="prob"><span class="t">${esc(showTok(t))}</span><span class="track"><i></i></span><span class="v">—</span></div>`).join('')}</div></div>
+  </div>`;
+  const rows = [...$('#gProbs').children];
+  later(() => rows.forEach((r, k) => { r.querySelector('i').style.width = (cands[k][1] * 100) + '%'; r.querySelector('.v').textContent = (cands[k][1] * 100).toFixed(cands[k][1] < .01 ? 1 : 0) + '%'; }), 350);
+  later(() => rows[0].classList.add('pick'), 1300);
+  later(() => { $('#gSoFar').innerHTML = chipRow([...PREFIX, ...done, cands[0][0]], PREFIX.length + done.length); }, 1900);
+}
+function goGen(k) { gi = Math.max(0, Math.min(GSTEPS - 1, k)); renderGen(); }
+function setPlaying(on) { playing = on; clearTimeout(playTimer); $('#playBtn').textContent = on ? '❚❚ Pause' : '▶ Play'; if (on) tick(); }
+function tick() { playTimer = setTimeout(() => { if (!playing) return; if (gi >= GSTEPS - 1) { setPlaying(false); return; } goGen(gi + 1); tick(); }, gi === 0 ? 4500 : 3200); }
+function setGenMode(m) { genMode = m; $('#genWith').setAttribute('aria-pressed', m === 'with'); $('#genWithout').setAttribute('aria-pressed', m === 'without'); setPlaying(false); goGen(gi); }
+$('#genWith').addEventListener('click', () => setGenMode('with'));
+$('#genWithout').addEventListener('click', () => setGenMode('without'));
+$('#prevBtn').addEventListener('click', () => { setPlaying(false); goGen(gi - 1); });
+$('#nextBtn').addEventListener('click', () => { setPlaying(false); goGen(gi + 1); });
+$('#playBtn').addEventListener('click', () => { if (!playing && gi >= GSTEPS - 1) goGen(0); setPlaying(!playing); });
+$('#rail').addEventListener('click', (e) => { const b = e.target.closest('.rail-step'); if (b) { setPlaying(false); goGen(Number(b.dataset.i)); } });
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input, select, textarea')) return;
+  const r = $('#player').getBoundingClientRect();
+  if (r.bottom < 0 || r.top > window.innerHeight) return;
+  if (e.key === 'ArrowRight') { setPlaying(false); goGen(gi + 1); }
+  if (e.key === 'ArrowLeft') { setPlaying(false); goGen(gi - 1); }
+});
+goGen(0);
+
+/* ================= Part 3: toy tokenizer ================= */
+const PRESETS = [
+  'The lighthouse at Cape Velmora was built in 1874 by the engineer Orla Vantris.',
+  'export async function getEmbedding(text: string): Promise<number[]> {\n  const res = await fetch(`${EMBED_URL}?key=${API_KEY}`)\n}',
+  'Order #84731 cost $1,249.99 on 2026-11-07 at 14:35; phone 9876543210.',
+  'मुझे इस दस्तावेज़ का सारांश बताओ।',
+  'Antidisestablishmentarianism and pneumonoultramicroscopic Vantris Kwekwekwe.',
+];
+const COMMON = new Set('the a an and or of to in on at by for with from is was were be been are it this that as not but if then than so do does did have has had i you he she we they my your our their what when where who why how which can will would should could may might must just also only very more most some any all each other into over after before up down out about there here new one two three use used make made get got like time year day way man men people thing things lighthouse engineer built cape answer question context document order cost phone const export async function await fetch text string number promise return res key url api order'.split(' '));
+const SUFFIXES = ['ization', 'ation', 'tion', 'ment', 'ness', 'ing', 'ism', 'ian', 'ed', 'ly', 'er', 'es', 's'];
+function splitWord(w) {
+  if (w.length <= 3 || COMMON.has(w.toLowerCase())) return [w];
+  const parts = [];
+  let stem = w;
+  for (const suf of SUFFIXES) {
+    if (stem.length > suf.length + 3 && stem.toLowerCase().endsWith(suf)) { parts.unshift(stem.slice(-suf.length)); stem = stem.slice(0, -suf.length); break; }
+  }
+  if (COMMON.has(stem.toLowerCase()) || stem.length <= 5) return [stem, ...parts];
+  const pieces = [];
+  let k = 0;
+  while (k < stem.length) { const size = k === 0 ? 4 : 3; pieces.push(stem.slice(k, k + size)); k += size; }
+  return [...pieces, ...parts];
+}
+function toyTokenize(text) {
+  const out = [];
+  const re = /( ?[A-Za-z]+| ?\d{1,3}|\s+|[^\sA-Za-z\d])/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const t = m[0];
+    if (/^ ?[A-Za-z]+$/.test(t)) {
+      const lead = t.startsWith(' ') ? ' ' : '';
+      const ps = splitWord(t.trim());
+      ps.forEach((p, i) => out.push((i === 0 ? lead : '') + p));
+    } else if (/^\s+$/.test(t)) {
+      if (t.includes('\n')) out.push('⏎'); else if (t.length > 1) out.push(t);
+    } else if (/[^\x00-\x7F]/.test(t)) {
+      // non-Latin script: most characters cost a token or more each
+      out.push(t);
+    } else out.push(t);
+  }
+  return out;
+}
+function renderTok() {
+  const text = $('#tokIn').value;
+  const toks = toyTokenize(text);
+  $('#tokOut').innerHTML = toks.map((t, i) => `<span class="tok c${i % 5}">${esc(showTok(t))}</span>`).join('') || '<span class="muted small">Nothing to split.</span>';
+  const words = (text.match(/\S+/g) || []).length;
+  $('#tkN').textContent = toks.length;
+  $('#tkW').textContent = words;
+  $('#tkR').textContent = toks.length ? (text.length / toks.length).toFixed(1) : '0';
+  const ratio = words ? toks.length / words : 0;
+  const v = $('#tkVerdict');
+  if (/[^\x00-\x7F]/.test(text) && /[ऀ-ॿ]/.test(text)) v.textContent = `${words} words → ${toks.length} tokens. Scripts that were rare in training data split into many small pieces, so the same message costs several times more in Hindi than in English.`;
+  else if (/[{}();=<>`$]/.test(text)) v.textContent = `${toks.length} tokens for ${words} "words". Code is full of symbols, and each one tends to be its own token.`;
+  else if (/\d{4,}/.test(text)) v.textContent = `Long numbers get chopped into small digit groups, so models are clumsy with exact arithmetic and IDs. ${toks.length} tokens here.`;
+  else v.textContent = `${words} words → ${toks.length} tokens (${ratio.toFixed(2)} tokens per word). Plain English sits near 1.3; rare words push it up.`;
+}
+$('#tokIn').addEventListener('input', renderTok);
+document.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => { $('#tokIn').value = PRESETS[Number(b.dataset.preset)]; renderTok(); }));
+renderTok();
+
+/* ================= Part 4: sampling ================= */
+const DIST = {
+  with: [[' 1874', .91], [' the', .03], [' 18', .02], [' about', .01], [' stone', .01], [' 1875', .006], [' early', .005], [' 1887', .004]],
+  without: [[' 1887', .14], [' 1874', .09], [' 1902', .08], [' 1856', .07], [' the', .06], [' 1868', .055], [' 1890', .05], [' about', .045]],
+};
+let smMode = 'with';
+function probsFor(mode, T, P) {
+  const d = DIST[mode];
+  const logits = d.map(([, p]) => Math.log(p));
+  let probs;
+  if (T < 0.01) { probs = logits.map((_, i) => (i === 0 ? 1 : 0)); }
+  else { const s = logits.map((l) => l / T); const mx = Math.max(...s); const ex = s.map((x) => Math.exp(x - mx)); const sum = ex.reduce((a, b) => a + b, 0); probs = ex.map((x) => x / sum); }
+  const order = probs.map((p, i) => [p, i]).sort((a, b) => b[0] - a[0]);
+  const keep = new Set(); let cum = 0;
+  for (const [p, i] of order) { keep.add(i); cum += p; if (cum >= P - 1e-9) break; }
+  return d.map(([t], i) => ({ t, p: probs[i], keep: keep.has(i) }));
+}
+let lastDraws = null;
+function renderSM() {
+  const T = Number($('#smT').value), P = Number($('#smP').value);
+  $('#smTOut').textContent = T.toFixed(2); $('#smPOut').textContent = P.toFixed(2);
+  $('#smWith').setAttribute('aria-pressed', smMode === 'with'); $('#smWithout').setAttribute('aria-pressed', smMode === 'without');
+  const rows = probsFor(smMode, T, P);
+  const counts = {};
+  (lastDraws || []).forEach((t) => { counts[t] = (counts[t] || 0) + 1; });
+  $('#smBars').innerHTML = rows.map((r) => `<div class="prob${r.keep ? '' : ' cut'}"><span class="t">${esc(showTok(r.t))}</span><span class="track"><i style="width:${(r.p * 100).toFixed(1)}%"></i></span><span class="v">${(r.p * 100).toFixed(1)}%${counts[r.t] ? ` <span class="n">×${counts[r.t]}</span>` : ''}</span></div>`).join('');
+  const kept = rows.filter((r) => r.keep).length;
+  const v = $('#smVerdict');
+  if (T < 0.01) { v.className = 'verdict good'; v.textContent = 'Temperature 0 = greedy: always the top token. Same input, (almost always) the same output. Right for classification, extraction and JSON.'; }
+  else if (T > 1.3) { v.className = 'verdict bad'; v.textContent = `Flattened: ${kept} token${kept > 1 ? 's' : ''} in play and long shots get picked. Fine for brainstorming, risky for facts.`; }
+  else if (P < 1) { v.className = 'verdict warn'; v.textContent = `Top-p ${P.toFixed(2)} keeps ${kept} token${kept > 1 ? 's' : ''}; the greyed ones can never be picked, however lucky.`; }
+  else { v.className = 'verdict warn'; v.textContent = smMode === 'with' ? 'At T = 1 a sure model still picks its top token nearly every time.' : 'At T = 1 an unsure model gives a different year from run to run. Sampling doesn\'t create the uncertainty; it reveals it.'; }
+}
+function sample20() {
+  const T = Number($('#smT').value), P = Number($('#smP').value);
+  const rows = probsFor(smMode, T, P).filter((r) => r.keep);
+  const sum = rows.reduce((a, r) => a + r.p, 0);
+  const draws = [];
+  for (let n = 0; n < 20; n++) {
+    let x = Math.random() * sum, pick = rows[0].t;
+    for (const r of rows) { x -= r.p; if (x <= 0) { pick = r.t; break; } }
+    draws.push(pick);
+  }
+  lastDraws = draws;
+  $('#smDraws').innerHTML = draws.map((t, i) => `<span class="tok c${(DIST[smMode].findIndex(([x]) => x === t)) % 5}">${esc(showTok(t))}</span>`).join('');
+  renderSM();
+}
+function resetDraws() { lastDraws = null; $('#smDraws').innerHTML = '<span class="muted small">Press "Sample 20 times".</span>'; }
+$('#smT').addEventListener('input', () => { resetDraws(); renderSM(); });
+$('#smP').addEventListener('input', () => { resetDraws(); renderSM(); });
+$('#smWith').addEventListener('click', () => { smMode = 'with'; resetDraws(); renderSM(); });
+$('#smWithout').addEventListener('click', () => { smMode = 'without'; resetDraws(); renderSM(); });
+$('#smSample').addEventListener('click', sample20);
+$('#smClassifier').addEventListener('click', () => { $('#smT').value = 0; $('#smP').value = 1; resetDraws(); renderSM(); });
+$('#smDefault').addEventListener('click', () => { $('#smT').value = 1; $('#smP').value = 1; resetDraws(); renderSM(); });
+$('#smWild').addEventListener('click', () => { $('#smT').value = 1.6; $('#smP').value = 1; resetDraws(); renderSM(); });
+renderSM();
+
+/* ================= Part 5: context budget ================= */
+const SYS = 450, Q = 30, PER_MSG = 150, PER_CHUNK = 650;
+function renderCW() {
+  const win = Number($('#cwWin').value), H = Number($('#cwHist').value), K = Number($('#cwK').value), O = Number($('#cwOut').value);
+  $('#cwHistOut').textContent = H; $('#cwKOut').textContent = K; $('#cwOutOut').textContent = fmt(O);
+  const parts = [[SYS, '#cwSys'], [H * PER_MSG, '#cwHistSeg'], [K * PER_CHUNK, '#cwCtx'], [Q, '#cwQ'], [O, '#cwOutSeg']];
+  const total = parts.reduce((a, [v]) => a + v, 0);
+  const scale = Math.max(win, total);
+  parts.forEach(([v, id]) => { $(id).style.width = (v / scale * 100) + '%'; });
+  const input = SYS + H * PER_MSG + K * PER_CHUNK + Q;
+  $('#cwIn').textContent = fmt(input);
+  $('#cwPct').textContent = Math.round(total / win * 100) + '%';
+  let sum20 = 0;
+  for (let turn = 0; turn < 20; turn++) sum20 += SYS + Q + K * PER_CHUNK + Math.min(turn * 2, H) * PER_MSG;
+  $('#cw20').textContent = fmt(sum20);
+  const bar = $('#cwBar'); const v = $('#cwVerdict');
+  bar.classList.toggle('over', total > win);
+  if (total > win) { v.className = 'verdict bad'; v.textContent = `Over by ${fmt(total - win)} tokens. The API rejects this request, so the app has to trim first: fewer history messages, fewer chunks, or a summary of old turns.`; }
+  else if (total > win * 0.7) { v.className = 'verdict warn'; v.textContent = 'It fits, but barely. Long contexts are slower, cost more on every call, and models get worse at using facts buried in the middle.'; }
+  else { v.className = 'verdict good'; v.textContent = `Comfortable. Note the 20-turn total: history is resent every turn, so a chat's cost grows with its length even when each message is short.`; }
+}
+['#cwWin', '#cwHist', '#cwK', '#cwOut'].forEach((id) => $(id).addEventListener('input', renderCW));
+$('#cwDocmind').addEventListener('click', () => { $('#cwHist').value = 8; $('#cwK').value = 3; $('#cwOut').value = 1024; $('#cwWin').value = '32768'; renderCW(); });
+renderCW();
+
+/* stateless demo */
+function renderSL(withHist) {
+  $('#slWith').setAttribute('aria-pressed', withHist); $('#slWithout').setAttribute('aria-pressed', !withHist);
+  $('#slSent').innerHTML = (withHist
+    ? '<div class="turn user"><span class="who">user</span>What is the Lantern Festival?</div><div class="turn model"><span class="who">model</span>A yearly festival in Velmora where lanterns are carried to the harbour…</div>'
+    : '<p class="small muted">Nothing from request 1. The model has never "met" this user.</p>')
+    + '<div class="turn user"><span class="who">user · new</span>and who founded it?</div>';
+  $('#slReply').innerHTML = withHist
+    ? '<div class="turn model"><span class="who">model</span>"it" = the Lantern Festival. Tomas Reyk founded it.</div><p class="small">Works, because the app (getRecentMessages, last 8) sent request 1 again. You pay for those tokens every turn.</p>'
+    : '<div class="turn model bad"><span class="who">model</span>Could you tell me what "it" refers to?</div><p class="small">At best it asks. At worst it guesses a subject and answers confidently about the wrong thing.</p>';
+}
+$('#slWith').addEventListener('click', () => renderSL(true));
+$('#slWithout').addEventListener('click', () => renderSL(false));
+renderSL(false);
+
+/* attention demo */
+const WORDS = ['The', 'engineer', 'built', 'the', 'lighthouse', 'because', 'it', 'guarded', 'the', 'harbour'];
+const ATT = {
+  6: { 4: .55, 9: .12, 1: .08, 7: .07, 2: .06, 6: .05 },
+  7: { 6: .30, 4: .25, 9: .20, 7: .1 },
+  2: { 1: .38, 4: .30, 2: .12 },
+  9: { 7: .35, 4: .2, 9: .2 },
+};
+const attNotes = {
+  6: '"it" puts most of its weight on "lighthouse": that\'s how the model works out what "it" means.',
+  7: '"guarded" looks at who did the guarding ("it", "lighthouse") and what was guarded ("harbour").',
+  2: '"built" looks at who built (engineer) and what was built (lighthouse).',
+  9: '"harbour" looks back at the verb that connects it to the rest.',
+};
+function renderAtt(src) {
+  const w = ATT[src] || { [src]: .5, [Math.max(0, src - 1)]: .25 };
+  $('#att').innerHTML = WORDS.map((t, i) => {
+    const a = w[i] || 0.02;
+    const bg = `color-mix(in srgb, var(--hit) ${Math.round(a * 140)}%, var(--surface))`;
+    return `<button type="button" data-i="${i}" class="${i === src ? 'src' : ''}" style="background:${bg}">${esc(t)}${i !== src && a >= 0.05 ? `<small>${a.toFixed(2)}</small>` : ''}</button>`;
+  }).join('');
+  $('#attNote').textContent = attNotes[src] || `"${WORDS[src]}" mostly attends to itself and its neighbours. Try "it", "built" or "guarded".`;
+}
+$('#att').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) renderAtt(Number(b.dataset.i)); });
+renderAtt(6);
+
+/* ================= Part 8: drill ================= */
+// Each answer: say (the 10-second answer), explain (plain words), and when
+// useful: example, docmind, push [follow-up question, answer], trap.
+const QA = [
+  { title: 'Fundamentals', items: [
+    { lvl: 'e', q: 'What is an LLM, really?',
+      say: 'A neural network, a transformer, trained to predict the next token of text. Generating an answer is that one prediction run in a loop.',
+      explain: `<ol><li>Your text is split into tokens, and each token becomes a number (an id).</li><li>The model reads all of them and gives a probability to <b>every</b> token in its vocabulary (often 100K+ entries) for "what comes next".</li><li>The app picks one, adds it to the end, and runs the model again with the longer text.</li><li>Repeat until a stop token or the length limit.</li></ol><p>Everything it "knows" is stored as patterns in its weights, learned during training. It doesn't look anything up while answering.</p>`,
+      example: `"The capital of France is"
+   → model → { " Paris": 0.92, " a": 0.02, " the": 0.01, … }
+   → pick " Paris" → "The capital of France is Paris" → run again…`,
+      push: ['"So it\'s just autocomplete?"', '<p>Mechanically, yes. But predicting the next token well across the whole internet forces the model to learn grammar, facts and reasoning patterns, which is why the output looks like understanding. The backend takeaway: it has no fact lookup, so it can be fluent and wrong at the same time.</p>'] },
+    { lvl: 'e', q: 'What is a token, and why do APIs count tokens instead of words?',
+      say: 'A token is the unit the model actually reads and writes: a common word, a piece of a rare word, a group of digits, or a symbol. Cost, limits and context size are all measured in tokens because that\'s what the model processes.',
+      explain: `<p>A tokenizer (usually BPE, byte-pair encoding) has a fixed vocabulary of text pieces learned from training data. Frequent strings get their own token; rare ones are built from smaller pieces. Each token maps to an integer id, and those ids are all the model ever sees.</p><p>The work the model does per request grows with the number of tokens, so providers bill per token and rate-limit per token (TPM = tokens per minute).</p>`,
+      example: `"The lighthouse"  → ["The", " lighthouse"]      2 tokens
+"Vantris"         → [" V", "antris"]             2 tokens (rare name)
+"1874"            → ["187", "4"] on some tokenizers`,
+      docmind: '<p>Gemini returns <code>usageMetadata</code> (prompt and output token counts) on every reply. Your agent adds them up into <code>totalTokens</code>; the plain <code>generateAnswer</code> throws them away (ISSUES #21).</p>',
+      trap: '<p>"A token is a word." Say "about three quarters of a word in English" instead.</p>' },
+    { lvl: 'e', q: 'Roughly how many tokens is a 1,000-word English document? And in Hindi?',
+      say: 'About 1,300 tokens in English. The same content in Hindi can take several times more.',
+      explain: `<p>Rule of thumb for English: 1 token ≈ 4 characters ≈ 0.75 words, so tokens ≈ words × 1.33.</p><p>Tokenizers learn their pieces mostly from English-heavy data, so English words are often a single token, while Devanagari text gets split into much smaller pieces. Same meaning, more tokens, which means more cost, more latency, and less room in the context window.</p>`,
+      example: `1,000 words × 1.33        ≈ 1,330 tokens
+one DocMind chunk (500 w) ≈ 650 tokens
+3 chunks in the prompt    ≈ 2,000 tokens`,
+      push: ['"How would you get the exact number?"', '<p>Call the provider\'s <code>countTokens</code> endpoint before sending, or read <code>usageMetadata</code> after the call. The ÷4 rule is only for rough budgeting.</p>'] },
+    { lvl: 'e', q: 'What\'s the difference between training and inference?',
+      say: 'Training changes the model\'s weights by learning from data. Inference uses the frozen weights to answer a request. Every API call you make is inference.',
+      explain: `<p>Analogy: training is years of school, inference is sitting the exam.</p><ul><li><b>Training</b> happens at the provider, once per model version: weeks or months on thousands of GPUs. First pre-training (predict the next token over huge amounts of text), then post-training (learn to follow instructions, chat, refuse, call tools).</li><li><b>Inference</b> happens on every request: the model runs forward to produce tokens. It's cheap per call, and nothing from your request is learned.</li></ul>`,
+      push: ['"Then how do models get better from user chats?"', '<p>The provider may collect data (if their policy allows) and train a <b>new</b> version later. Your request never changes the model that answered it.</p>'] },
+    { lvl: 'e', q: 'What does "the model is stateless" mean? How does a chatbot remember?',
+      say: 'The model keeps nothing between API calls. A chatbot remembers only because the app stores the conversation and sends the relevant part again with every request.',
+      explain: `<p>Each request is a fresh function call: same weights, new input. If request 2 doesn't include request 1, the model has never "seen" request 1.</p><p>So memory is a backend feature: save messages in a database, and on each turn load the recent ones and put them in the prompt. Consequences:</p><ul><li>Cost grows with conversation length, because you resend history every turn.</li><li>The context window limits how much you can resend.</li><li>You decide what is remembered.</li></ul>`,
+      example: `turn 1 sends: [Q1]
+turn 2 sends: [Q1, A1, Q2]
+turn 3 sends: [Q1, A1, Q2, A2, Q3]   ← grows every turn`,
+      docmind: '<p><code>getRecentMessages(sessionId, userId, 8)</code> loads the last 8 messages, oldest first. The classic path pasted them as "user: … assistant: …" text; the agent sends them as real user/model turns. The query filters by user too, otherwise someone else\'s <code>sessionId</code> would leak their chat into your prompt.</p>',
+      push: ['"What about ChatGPT\'s memory feature?"', '<p>Same idea one level up: the app saves facts about you and injects them into the prompt. Still nothing in the weights.</p>'] },
+    { lvl: 'm', q: 'What is a knowledge cutoff, and how do you work around it?',
+      say: 'It\'s the date the training data ends. The model knows nothing after it, and may not realise that. The fix is to put current information into the prompt at request time.',
+      explain: `<p>Knowledge lives in weights frozen at training time, so anything newer is missing: a new library version, today's prices, your company's documents. Worse, the model will happily answer from older patterns as if they were current.</p><p>Ways around it:</p><ul><li><b>RAG:</b> search your own data and put the relevant parts in the prompt.</li><li><b>Tools:</b> let the model call a search API or your database.</li><li><b>Just include it:</b> put key facts in the system instruction.</li></ul><p>Fine-tuning is a poor fix: slow, expensive, and out of date again tomorrow.</p>`,
+      docmind: '<p>A user\'s PDF is the extreme case: the model has never seen it at all. That\'s the whole reason DocMind uses RAG.</p>' },
+    { lvl: 'm', q: 'What is attention, at a high level?',
+      say: 'Attention lets each token build its meaning by looking at the other tokens in the context and weighting how relevant each one is. It\'s how the model works out that "it" means "the lighthouse".',
+      explain: `<p>For each token the model computes three small vectors:</p><ul><li><b>Query:</b> what am I looking for?</li><li><b>Key:</b> what do I contain?</li><li><b>Value:</b> what do I pass on if someone looks at me?</li></ul><p>A token compares its query with every other token's key. A good match means a high weight. Its new meaning is a weighted mix of the others' values. This runs in many <b>heads</b> at once (each learns a different relation: grammar, who "it" refers to, position) and is stacked in dozens of <b>layers</b>.</p>`,
+      example: `"The engineer built the lighthouse because it guarded the harbour"
+weights for "it":  lighthouse 0.55 · harbour 0.12 · engineer 0.08 · …`,
+      push: ['"Why is a long context expensive?"', '<p>Standard attention compares every token with every other one, so n tokens need about n² comparisons: double the prompt, roughly 4× the attention work. While generating, a <b>KV cache</b> keeps the keys and values of earlier tokens, so each new token only has to compare itself against what\'s already there instead of recomputing everything.</p>'],
+      trap: '<p>Don\'t dive into matrix math unless asked. For a backend role, the intuition, the n² cost and the KV cache are enough.</p>' },
+    { lvl: 'm', q: 'Base model vs instruction-tuned (chat) model?',
+      say: 'A base model only continues text. An instruction-tuned model was trained further to follow instructions and act like an assistant. Chat APIs like Gemini serve the instruction-tuned kind.',
+      explain: `<p>Ask a base model "What is the capital of France?" and it might continue with "What is the capital of Germany?", because it has seen lists of quiz questions. Post-training on example conversations teaches it roles (system, user, model), following instructions, refusing, JSON mode and tool calling. Preference training (RLHF or similar) then nudges it toward the answers people rate higher.</p>`,
+      push: ['"Why would anyone use a base model?"', '<p>As a starting point for fine-tuning, for research, or for pure text completion. Rarely in an app backend.</p>'] },
+    { lvl: 'm', q: 'What are parameters, and does my prompt change them?',
+      say: 'Parameters (weights) are the billions of numbers learned in training. Your prompt doesn\'t change them; it only changes the input that flows through them.',
+      explain: `<p>Think of the weights as a fixed machine and your prompt as the raw material. Different material gives different output from the same machine. Only training or fine-tuning changes the machine.</p><p>More parameters usually means more capacity (knowledge, reasoning), but also more memory, slower answers and higher prices.</p>`,
+      trap: '<p>"The model learned from our conversation." It didn\'t, unless the provider trains a future version on it.</p>' },
+    { lvl: 'e', q: 'What is a context window? What happens when you exceed it?',
+      say: 'It\'s the maximum number of tokens one call can handle, prompt and answer together. Go over it and the request fails, so the backend has to budget what goes in.',
+      explain: `<p>Everything the model sees in this call (system instruction, history, retrieved chunks, tool declarations, the question) <b>plus</b> the tokens it will write has to fit. If it doesn't, the API returns an error; some SDKs silently cut text, which is worse.</p><p>Staying under the limit isn't the whole story: cost and latency grow with every token, and quality drops on very long, noisy contexts.</p>`,
+      example: `system 450 + history 8 × 150 + chunks 3 × 650 + question 30
+≈ 3,630 input tokens, plus room for a ~1,000-token answer`,
+      docmind: '<p><code>HISTORY_LIMIT = 8</code> messages and <code>SEARCH_TOP_K = 3</code> chunks are DocMind\'s budget. Known gap: the history limit counts messages, not tokens, so 8 very long messages could still be large.</p>',
+      push: ['"Some models have 1M-token windows. Why not send everything?"', '<p>You pay for every token on every call, the first word arrives later, and models use facts in the middle of very long contexts less reliably. Huge windows are great for a one-off analysis of a big document, not for every chat turn.</p>'] },
+  ]},
+  { title: 'Sampling and output', items: [
+    { lvl: 'e', q: 'What does temperature do? What would you use for a classifier vs creative writing?',
+      say: 'Temperature controls randomness. At 0 the model always takes the most likely token, so output is predictable; higher values make it more varied and riskier. Classifier, extraction or JSON: 0. Creative writing: around 0.8 to 1.',
+      explain: `<p>The model gives every token a score (a logit). Before the scores become probabilities, they're divided by the temperature.</p><ul><li>Divide by a <b>small</b> number: the gaps between scores grow, so the top token dominates.</li><li>Divide by a <b>big</b> number: the gaps shrink, so the odds even out and long shots get picked.</li></ul><p>Temperature adds no knowledge. It only changes how adventurous the pick is.</p>`,
+      example: `scores: " 1874" = 4.0, " 1887" = 2.0
+T = 0.5 →  98% vs  2%
+T = 1.0 →  88% vs 12%
+T = 2.0 →  73% vs 27%`,
+      docmind: '<p>The router\'s classifier runs at temperature 0 with JSON mode and a Zod check, because the same message must always get the same label. Chat answers use the model default.</p>' },
+    { lvl: 'm', q: 'Top-p vs top-k?',
+      say: 'Both shrink the pool of tokens the sampler may pick from. Top-k keeps a fixed number of the most likely tokens; top-p keeps however many it takes to cover a probability share p.',
+      explain: `<p><b>Top-k = 3:</b> always the 3 best candidates, whether the model is sure or not.</p><p><b>Top-p = 0.9:</b> when the model is sure (one token at 95%), the pool is 1 token; when it's unsure (lots of tokens at ~10%), the pool is large. That adaptivity is why top-p is more common.</p><p>Order of operations: temperature reshapes the probabilities, then top-k/top-p cut the tail, then one token is drawn at random from what's left.</p>`,
+      example: `probabilities: [0.60, 0.25, 0.10, 0.05]
+top-k = 2   → keep {0.60, 0.25}
+top-p = 0.9 → 0.60 + 0.25 = 0.85 (< 0.9) → add 0.10 → keep 3`,
+      push: ['"Which would you tune?"', '<p>Usually just temperature, sometimes top-p. Turning several knobs at once makes behaviour hard to reason about.</p>'] },
+    { lvl: 'h', q: 'Is temperature 0 fully deterministic?',
+      say: 'Close, but not guaranteed. The same request at temperature 0 can occasionally return different text, so a backend should validate outputs instead of relying on exact repeats.',
+      explain: `<p>Three reasons:</p><ol><li>GPU floating-point math isn't perfectly repeatable, especially when your request is batched with others, so two nearly tied tokens can swap.</li><li>Providers update models, and an alias like <code>-latest</code> can point at a new model tomorrow.</li><li>Some APIs treat 0 as "very low", not strictly "always the top token".</li></ol><p>So pin the model version, validate the structure (Zod), and design for "same meaning", not "same bytes".</p>`,
+      docmind: '<p>The classifier runs at temperature 0 <b>and</b> is checked with Zod, and anything unexpected falls back to <code>document_question</code>, the safe default. That\'s designing for the rare odd reply.</p>',
+      push: ['"Then how do you write deterministic tests?"', '<p>Mock the model at the boundary. In AG.4 the tests replaced <code>fetch</code> with scripted Gemini SSE bytes: 26 tests, 0 real API calls. Real-model checks are kept separate, as evals.</p>'] },
+    { lvl: 'm', q: 'What are logits and softmax?',
+      say: 'Logits are the raw scores the model gives every token in its vocabulary. Softmax turns them into probabilities that add up to 1. Temperature divides the logits before softmax.',
+      explain: `<p>softmax: raise e to the power of each score, then divide each result by their sum. Exponentiating makes everything positive and exaggerates differences; dividing by the sum makes them add to 1. Logits can be any number, negative included; only the differences between them matter.</p>`,
+      example: `logits      [2.0, 1.0, 0.1]
+e^logit     [7.39, 2.72, 1.11]   sum = 11.22
+softmax     [0.66, 0.24, 0.10]`,
+      push: ['"What are logprobs, and why would a backend want them?"', '<p>The log of each chosen token\'s probability, returned by some APIs. They work as a confidence signal: for example, flag a classification whose label token had low probability for review.</p>'] },
+    { lvl: 'e', q: 'Why do LLMs hallucinate?',
+      say: 'Because the model writes the most plausible continuation, not a checked fact. When it doesn\'t know, the odds are spread thin, but it still has to pick something, and the result sounds just as confident.',
+      explain: `<p>There's no built-in "I don't know" detector, and training rewards fluent text. When the right answer is missing from both the training data and the prompt, the model fills the gap with a pattern that fits ("a Scottish engineer… Robert Stevenson").</p><p>How to reduce it:</p><ul><li><b>Grounding:</b> put the facts in the prompt (RAG).</li><li><b>Instructions:</b> "answer only from the context; say so if it's not there".</li><li><b>Low temperature</b> for factual tasks.</li><li><b>Sources</b> shown to the user so they can check.</li><li><b>Evaluation:</b> a fixed test set run after every change.</li></ul><p>You can reduce and detect it, not eliminate it.</p>`,
+      docmind: '<p>The classic path answered "Paris!" to a France question. The agent\'s rules now refuse anything the documents don\'t cover, and every answer shows its sources.</p>' },
+    { lvl: 'm', q: 'What are max output tokens, stop sequences and finish reason? Why should a backend check them?',
+      say: 'Max output tokens caps the answer length, stop sequences end it early on a string you choose, and finish reason tells you why it stopped. Check finish reason before trusting the output.',
+      explain: `<p>Gemini's <code>finishReason</code> values include <code>STOP</code> (a natural end), <code>MAX_TOKENS</code> (cut off) and <code>SAFETY</code> (blocked). If a JSON request ends with <code>MAX_TOKENS</code>, you have half a JSON object: parsing fails or, worse, you save a cut-off answer as if it were complete.</p><p>What to do: retry with a higher cap or return a clear error, and log it.</p>`,
+      docmind: '<p><code>streamTurn</code> returns the <code>finishReason</code> along with the rebuilt turn. The quiz uses structured output plus Zod, so a truncated reply fails validation and triggers the single retry.</p>' },
+    { lvl: 'h', q: 'Can a model be biased even when every output is valid? Give an example.',
+      say: 'Yes. Each output can pass validation while the outputs as a group are skewed. In my quiz generator the correct answer landed in position A, B, C or D 22%, 36%, 32% and 10% of the time over 50 questions.',
+      explain: `<p>Models have habits from training: favourite positions, lengths, phrasings. A schema check looks at one reply at a time, so it can't see a pattern across many. A student who always picked B would have beaten the 25% they'd get by chance.</p><p>The fix was in code: after validation, shuffle each question's options (Fisher–Yates) and remap <code>correctIndex</code>.</p><p>The lesson: when output drives something users rely on, check the distribution over many runs, not just whether each reply is valid.</p>`,
+      push: ['"Why not just tell the model to randomise?"', '<p>Models are bad at being random. An instruction can reduce the skew but not remove it, while code is exact.</p>'] },
+  ]},
+  { title: 'Cost, latency and limits', items: [
+    { lvl: 'e', q: 'What drives the cost of an LLM call?',
+      say: 'Input tokens plus output tokens, and output usually costs several times more per token. In a chat, the hidden cost is everything you resend on every turn.',
+      explain: `<p>One call costs (input price × input tokens) + (output price × output tokens). Input includes the system instruction, history, retrieved chunks and tool declarations, and all of that repeats on every turn and on every model call inside a turn. Then multiply by the number of calls per user action (agents make several) and by your traffic.</p>`,
+      example: `one agent document question in DocMind
+  = 1 embedding call
+  + model call 1: instruction + history + tools + question
+  + model call 2: the same again + the search results
+  (+ 1 classifier call on close routing calls)`,
+      push: ['"How would you reduce it?"', '<p>Route cheap messages away from the LLM, send fewer or smaller chunks, limit history by tokens or summarise it, use a smaller model where your evals still pass, cache repeated work, and cap the output length.</p>'] },
+    { lvl: 'm', q: 'Why is generating output slower than reading input?',
+      say: 'The input is processed all at once, in parallel. The output is produced one token at a time, and each token has to wait for the one before. So answer length drives latency.',
+      explain: `<p>Two phases:</p><ul><li><b>Prefill:</b> the whole prompt goes through the model in one parallel pass (GPUs are very good at this) and produces the first token.</li><li><b>Decode:</b> every next token needs another pass that depends on the previous token, so it's sequential.</li></ul><p>A long prompt mostly delays the first token a little. A long answer means hundreds of sequential steps.</p>`,
+      example: `prompt 3,000 tokens → a fraction of a second of prefill
+answer 500 tokens at ~100 tokens/s → about 5 s of decode
+(illustrative numbers)`,
+      push: ['"So how do you make answers faster?"', '<p>Ask for shorter answers and cap max output tokens, use a smaller model, stream so it feels faster, and cut sequential calls (each agent step is another prefill + decode).</p>'] },
+    { lvl: 'm', q: 'Time to first token vs throughput? How does streaming help?',
+      say: 'Time to first token is how long until anything appears; throughput is how fast tokens arrive after that. Streaming doesn\'t finish the answer sooner, but users see words almost immediately.',
+      explain: `<p>Without streaming the user waits for the whole answer (first token + all of the decoding) before seeing anything. With streaming they start reading after the first token. For agents, time to first token includes every step before the answer, like tool calls, which is why a status line ("Searching for…") matters.</p>`,
+      docmind: '<p>Live check on 2026-11-04: status line at 2.0 s, sources at 2.4 s, first answer word at 3.0 s. Gemini streams through <code>streamGenerateContent?alt=sse</code>, and DocMind forwards the pieces to the browser as its own SSE events.</p>' },
+    { lvl: 'm', q: 'How do you handle rate limits?',
+      say: 'Know the limits, spend fewer calls per request, queue what can wait, and retry temporary errors with exponential backoff and jitter, with a cap on retries.',
+      explain: `<p>Limits come in several shapes: requests per minute (RPM), per day (RPD) and tokens per minute (TPM). A 429 means you hit a limit; a 503 means the provider is overloaded.</p><ol><li><b>Design:</b> fewer calls per user action (route, cache, batch).</li><li><b>Smooth the load:</b> put non-urgent work on a queue with limited concurrency.</li><li><b>Retry:</b> wait 1 s, 2 s, 4 s… plus a random jitter so many clients don't retry at the same moment; stop after 3 tries and show a clear error.</li><li><b>Monitor:</b> count your usage so you see a limit coming.</li></ol>`,
+      docmind: '<p>Flash-Lite free tier: 15 requests/minute, 500/day. Embeddings: 100/minute, and a batch of 70 texts counts as 70 (a back-to-back eval run hit a 429). The upload worker runs one job at a time, with 3 attempts and 5 s → 10 s backoff. Chat calls have no retry yet (ISSUES #8).</p>' },
+    { lvl: 'm', q: 'How do you count tokens before sending a request?',
+      say: 'For budgeting, estimate (characters ÷ 4). For an exact number, call the provider\'s countTokens. After the call, read usageMetadata and log it.',
+      explain: `<p>An exact count needs the model's own tokenizer, which only the provider has. <code>countTokens</code> is an extra request, so use it when it matters (a big document, checking a hard limit), not on every chat turn. Logging real usage per request is how you find out what each feature actually costs.</p>`,
+      docmind: '<p>The agent totals tokens from <code>usageMetadata</code>; <code>generateAnswer</code> drops them, and nothing is logged per user yet (ISSUES #21).</p>' },
+    { lvl: 'h', q: 'A conversation gets very long. What do you do?',
+      say: 'Don\'t resend everything. Send a window of recent messages, budget it in tokens, and summarise or retrieve older parts when they matter.',
+      explain: `<ol><li><b>Sliding window:</b> the last N messages. Simple, but forgets early facts.</li><li><b>Token budget:</b> add messages from newest to oldest until a token limit. Handles long messages.</li><li><b>Summary memory:</b> every so often, ask the model to summarise older turns into a short paragraph. Keeps the gist, loses detail, costs a call.</li><li><b>Retrieval memory:</b> embed past messages and pull the relevant ones back like document chunks.</li></ol><p>Real systems often combine 1 or 2 with 3.</p>`,
+      docmind: '<p>DocMind uses the last 8 messages (<code>HISTORY_LIMIT</code>), counted in messages. A follow-up that refers to something 9 messages back is lost.</p>' },
+    { lvl: 'm', q: 'Small fast model or large model? How do you choose?',
+      say: 'Pick the cheapest model that passes your own evaluation for that task. Small models for routing, classification and extraction; large ones for hard reasoning.',
+      explain: `<p>Bigger models are usually better but slower and pricier, and for simple tasks the difference often doesn't matter. The process: write 20–50 labelled examples of the task, run the candidate models, and compare accuracy, latency and cost. You can also mix them: a small model routes, a big one handles the hard cases.</p>`,
+      docmind: '<p>Flash-Lite does everything: it\'s free (15 RPM), fast, and it passed the evals: 17/17 valid quiz JSON, 9/9 on the RAG question set, and no harmful mistakes on the 52-message router eval.</p>' },
+  ]},
+  { title: 'Reliability in production', items: [
+    { lvl: 'm', q: 'A model call sometimes takes 50 seconds, or fails with a 503. What do you do?',
+      say: 'Put a timeout on every model call, retry the temporary failures a limited number of times with backoff, have a fallback, and keep the user informed with streaming and a status line.',
+      explain: `<ul><li><b>Timeout</b> (e.g. 30 s): without one, a hung call holds the request and a server connection open indefinitely.</li><li><b>Retry</b> only temporary errors (429, 503, network) with backoff and jitter, max 2–3 tries. Never retry a 400; it will fail again.</li><li><b>Fallback:</b> another model, or a clear "try again" message.</li><li><b>Visibility:</b> stream, show status, log every call's duration and failures.</li></ul>`,
+      example: `const ctrl = new AbortController()
+const timer = setTimeout(() => ctrl.abort(), 30_000)
+try {
+  res = await fetch(url, { ...options, signal: ctrl.signal })
+} finally {
+  clearTimeout(timer)
+}`,
+      docmind: '<p>The same classifier call took 1–3 s one day and 25–53 s another, with 503 "high demand" errors. No Gemini <code>fetch</code> has a timeout or retry yet (ISSUES #8). It\'s the first thing I\'d add.</p>' },
+    { lvl: 'm', q: 'Why is pinning a model version important?',
+      say: 'Behaviour changes between versions, and an alias like -latest can switch you to a new model without any deploy on your side.',
+      explain: `<p>Prompt sensitivity, JSON habits, tool calling and refusals can all shift with a model update. If you depend on an alias, your app's behaviour can change overnight and you won't know why.</p><p>In production, pin an exact version and upgrade on purpose: switch in staging, re-run your evals, then deploy.</p>`,
+      docmind: '<p>DocMind calls <code>gemini-flash-lite-latest</code>. In AG.0 it turned out to be <code>gemini-3.5-flash-lite</code>, found by reading <code>modelVersion</code> in the reply. The same probe showed that model ignoring <code>mode: \'NONE\'</code>, exactly the kind of behaviour that varies by version.</p>' },
+    { lvl: 'e', q: 'System instruction vs user message?',
+      say: 'The system instruction sets the rules and role for the whole conversation; user messages are the conversation itself. Stable rules go in the system instruction.',
+      explain: `<p>Models are trained to treat the system instruction as higher-priority "how to behave" guidance, and user turns as content to respond to. Mixing rules into user text makes them just one more message to weigh, and makes injection easier. Typical system content: role, grounding rules, output format, and what to ignore.</p>`,
+      docmind: '<p>The classic prompt was one big user string holding rules, context, history and question. The agent moved the rules into <code>systemInstruction</code> and the history into real turns.</p>' },
+    { lvl: 'h', q: 'Can you rely on the model to enforce permissions?',
+      say: 'No. A prompt is a request, not access control. Enforce permissions in code, so even a manipulated model can\'t reach data it shouldn\'t.',
+      explain: `<p><b>Prompt injection:</b> text in a document, web page or message can say "ignore your rules", and models sometimes obey. So the model must never be the part that decides which data a user can access.</p><p>The pattern: the model chooses <b>what</b> to do (search with this query); code decides <b>who and where</b> (user id from the verified token, scope from the session), and every database query filters by owner.</p>`,
+      docmind: '<p><code>searchDocuments</code> accepts only <code>{ query }</code>. <code>userId</code> and <code>documentId</code> come from the <code>ToolContext</code>, set from <code>req.user.id</code>. Every repository function requires <code>userId</code>, so forgetting it is a compile error.</p>' },
+    { lvl: 'h', q: 'What are thinking (reasoning) models, and what changes for a backend?',
+      say: 'Models that produce internal reasoning before answering. They\'re better on multi-step problems but slower and use more tokens, and they can attach hidden state your backend has to send back unchanged.',
+      explain: `<p>The model spends extra "thinking" tokens, usually billed, before the visible answer. What that means for a backend:</p><ul><li>Higher, more variable latency.</li><li>Higher cost, sometimes controlled with a thinking-budget setting.</li><li>Opaque reasoning state on responses. With Gemini that's a <code>thoughtSignature</code> on model turns; in a tool loop you must send the model's turn back byte-for-byte so it can carry on.</li></ul>`,
+      docmind: '<p>AG.0: every model turn carried a 132-character <code>thoughtSignature</code>, even with 0 thinking tokens. Removing it from a function-call turn gave a 400 "Function call is missing a thought_signature". The fix was one rule: rebuild streamed turns keeping every signature part exactly as sent.</p>' },
+    { lvl: 'm', q: 'Why did you call the REST API with fetch instead of using the SDK?',
+      say: 'To learn the real protocol. In a team product I\'d usually use the SDK, or a thin wrapper of my own, so I\'m not maintaining retries, types and stream parsing by hand.',
+      explain: `<p><b>What raw REST gave me:</b> the exact request and response shapes, the SSE framing, the function-call turns, and no surprises from a dependency.</p><p><b>What it costs:</b> I own the parsing (that's where the \\r\\n line-ending bug came from), the types, the retries and the timeouts.</p><p><b>Middle ground:</b> keep the provider behind one module (<code>llm.service.ts</code>), so the rest of the app doesn't care and switching provider or adopting an SDK touches one file.</p>` },
+    { lvl: 'e', q: 'Embedding model vs generation model?',
+      say: 'A generation model writes text token by token. An embedding model turns a text into one fixed-length list of numbers that represents its meaning, used for search and comparison.',
+      explain: `<p>An embedding model takes text in and gives one vector out (3072 numbers for <code>gemini-embedding-001</code>), with no text generated. Similar meanings give vectors pointing in similar directions, which means a small cosine distance. They're used for search, clustering and routing. They're separate models, usually cheaper per call, with their own rate limits.</p>`,
+      docmind: '<p>Embeddings for the chunks, the questions and the router\'s example phrases; Flash-Lite for answers, the classifier and quizzes. Lesson 2 goes deep.</p>' },
+    { lvl: 'h', q: 'What actually goes over the wire when you call Gemini?',
+      say: 'An HTTPS POST with JSON: the conversation as contents, plus an optional systemInstruction, tools and generationConfig. The reply has the model\'s turn, a finishReason and the token usage.',
+      example: `POST …/v1beta/models/gemini-flash-lite-latest:generateContent
+{
+  "systemInstruction": { "parts": [{ "text": "You are DocMind…" }] },
+  "contents": [
+    { "role": "user",  "parts": [{ "text": "What is Velmora known for?" }] },
+    { "role": "model", "parts": [{ "text": "Its lighthouse…" }] },
+    { "role": "user",  "parts": [{ "text": "When was it built?" }] }
+  ],
+  "tools": [{ "functionDeclarations": [ … ] }],
+  "generationConfig": { "temperature": 0 }
+}
+
+← { "candidates": [{ "content": { "role": "model", "parts": [ … ] },
+                     "finishReason": "STOP" }],
+    "usageMetadata": { "promptTokenCount": 298, … },
+    "modelVersion": "gemini-3.5-flash-lite" }`,
+      explain: `<p>Streaming sends the same body to <code>:streamGenerateContent?alt=sse</code>, and the reply arrives as SSE events, each with a piece of the candidate. Roles are only <code>user</code> and <code>model</code>. The API key goes in the URL or a header, and it must never reach the browser: DocMind only calls Gemini from the server.</p>`,
+      docmind: '<p>298 prompt tokens is a real AG.0 number: the same contents were 162 tokens without the two tool declarations.</p>' },
+  ]},
+];
+const LVL = { e: 'basic', m: 'solid', h: 'bonus' };
+function answerHTML(it) {
+  let h = `<div class="say"><span class="lab">Say this first</span><p>${it.say}</p></div>`;
+  if (it.explain) h += `<div class="part"><span class="lab">Explained simply</span>${it.explain}</div>`;
+  if (it.example) h += `<div class="part"><span class="lab">Example</span><pre class="ex">${esc(it.example)}</pre></div>`;
+  if (it.docmind) h += `<div class="part dm"><span class="lab">In DocMind</span>${it.docmind}</div>`;
+  if (it.push) h += `<div class="part push"><span class="lab">If they push further</span><p><b>${it.push[0]}</b></p>${it.push[1]}</div>`;
+  if (it.trap) h += `<div class="part trap"><span class="lab">Don't say</span>${it.trap}</div>`;
+  return h;
+}
+$('#qaList').innerHTML = QA.map((g) => `<div class="qa-group"><h3>${g.title}<span>${g.items.length} questions</span></h3>${g.items.map((it) => `<details class="qa"><summary>${it.q}<span class="lvl ${it.lvl}">${LVL[it.lvl]}</span></summary><div class="ans">${answerHTML(it)}</div></details>`).join('')}</div>`).join('');
+$('#openAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = true; }));
+$('#closeAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = false; }));
+
+/* ================= Part 9: quiz ================= */
+const QUIZ = [
+  { q: 'What does temperature 0 do?', o: ['Makes the model more creative', 'Always picks the most likely next token', 'Turns off the context window', 'Makes responses shorter'], a: 1, why: 'T → 0 sharpens the distribution until only the top token remains: greedy decoding.' },
+  { q: 'Roughly how many tokens is 1,000 words of English?', o: ['About 250', 'About 750', 'About 1,300', 'About 4,000'], a: 2, why: '1 token ≈ 0.75 words, so 1,000 words ≈ 1,300 tokens.' },
+  { q: 'Why does a chatbot "remember" earlier messages?', o: ['The model stores each conversation', 'The weights update after each chat', 'The app resends earlier messages with every request', 'Gemini keeps a session on its servers'], a: 2, why: 'The model is stateless. DocMind resends the last 8 messages every turn.' },
+  { q: 'You raise temperature from 0.2 to 1.5. What happens?', o: ['The distribution flattens and unlikely tokens get picked more', 'The model knows more facts', 'Answers become more accurate', 'Fewer tokens are generated'], a: 0, why: 'Dividing logits by a larger T makes the probabilities more even.' },
+  { q: 'Top-p = 0.9 means…', o: ['Only tokens with at least 90% probability can be picked', 'Sample from the smallest set of tokens whose probabilities add to 90%', '90% of the answer is greedy', 'The 90 most likely tokens are kept'], a: 1, why: 'Nucleus sampling: keep tokens from the top until their probabilities sum to p.' },
+  { q: 'Which of these does your prompt NOT change?', o: ['The answer', 'The tokens the model attends to', 'The model\'s weights', 'The probability of each next token'], a: 2, why: 'Weights only change during training or fine-tuning.' },
+  { q: 'Why is output usually slower than input?', o: ['Output tokens are bigger', 'Output is generated one token at a time, each depending on the last', 'The API throttles output', 'Input is cached forever'], a: 1, why: 'Prefill is parallel; decode is sequential.' },
+  { q: 'Without context, the model said "built in 1887 by the Scottish engineer Robert Stevenson". What is this?', o: ['A tokenizer bug', 'A hallucination: a plausible continuation, not a looked-up fact', 'Temperature set too low', 'A context window overflow'], a: 1, why: 'Its first token was only a 14% guess, and the text gives no hint of that. Grounding (RAG) fixes it.' },
+];
+const form = $('#quizForm');
+form.innerHTML = QUIZ.map((item, i) => `<fieldset class="qq" id="qq${i}"><legend>${i + 1}. ${esc(item.q)}</legend>${item.o.map((o, j) => `<label class="opt" for="q${i}o${j}"><input type="radio" name="q${i}" id="q${i}o${j}" value="${j}"><span>${esc(o)}</span></label>`).join('')}<p class="why">${esc(item.why)}</p></fieldset>`).join('');
+form.addEventListener('submit', (e) => e.preventDefault());
+let checked = false;
+$('#checkBtn').addEventListener('click', () => {
+  if (checked) {
+    checked = false; form.reset();
+    form.querySelectorAll('.opt').forEach((o) => o.classList.remove('right', 'wrong'));
+    form.querySelectorAll('.qq').forEach((q) => q.classList.remove('checked'));
+    form.querySelectorAll('input').forEach((inp) => { inp.disabled = false; });
+    $('#scoreOut').textContent = ''; $('#checkBtn').textContent = 'Check answers';
+    return;
+  }
+  let score = 0;
+  QUIZ.forEach((item, i) => {
+    const picked = form.querySelector(`input[name="q${i}"]:checked`);
+    $('#qq' + i).classList.add('checked');
+    $(`label[for="q${i}o${item.a}"]`).classList.add('right');
+    if (picked && Number(picked.value) === item.a) score++;
+    else if (picked) picked.closest('.opt').classList.add('wrong');
+  });
+  form.querySelectorAll('input').forEach((inp) => { inp.disabled = true; });
+  checked = true;
+  $('#scoreOut').textContent = `${score} / ${QUIZ.length}` + (score === QUIZ.length ? ' · solid' : score >= 6 ? ' · close, reread the misses' : ' · replay Parts 2–4 and try again');
+  $('#checkBtn').textContent = 'Try again';
+});
+
+/* ================= done toggle ================= */
+const KEY = 'docmind-revision:lesson-01';
+const doneBtn = $('#doneBtn');
+function paintDone(d) { doneBtn.classList.toggle('done', d); doneBtn.textContent = d ? '✓ Lesson done' : 'Mark lesson as done'; }
+let isDone = false;
+try { isDone = localStorage.getItem(KEY) === '1'; } catch (e) { /* storage blocked */ }
+paintDone(isDone);
+doneBtn.addEventListener('click', () => { isDone = !isDone; paintDone(isDone); try { localStorage.setItem(KEY, isDone ? '1' : '0'); } catch (e) { /* ignore */ } });
+})();
+</script>
+</body>
+</html>

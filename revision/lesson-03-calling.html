@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calling the Model</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: the same lab notebook as the other lessons. Blue = your
+   backend and the request, amber = the model's reply, green/red = whether
+   your code can trust it. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --ink: #142030;
+  --muted: #586779;
+  --line: #d8dfe8;
+  --accent: #2450d8;
+  --accent-soft: #e4ebfd;
+  --hit: #b86e00;
+  --hit-soft: #fff0d4;
+  --good: #1d8549;
+  --good-soft: #e1f4e8;
+  --bad: #c0352a;
+  --bad-soft: #fbe5e2;
+  --code-bg: #edf1f6;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+    --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+    --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d131b; --surface: #151f2a; --ink: #e5ecf4; --muted: #93a2b4; --line: #26323f;
+  --accent: #7f9dff; --accent-soft: #1b2a4c; --hit: #f2b54d; --hit-soft: #392b12;
+  --good: #52c684; --good-soft: #12301f; --bad: #ff7b6f; --bad-soft: #3a1915; --code-bg: #101924;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.6; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px 80px; }
+.read { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; }
+h3 { font-size: 1.1rem; font-weight: 600; }
+p { margin: 0; }
+code, pre, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.top { padding: 40px 0 28px; display: grid; gap: 16px; border-bottom: 1px solid var(--line); }
+.eyebrow { font-family: var(--font-mono); font-size: 0.8rem; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.lede { font-size: 1.12rem; color: var(--muted); max-width: 62ch; }
+.lessons { display: flex; flex-wrap: wrap; gap: 6px; }
+.lesson-chip { font-family: var(--font-mono); font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); text-decoration: none; }
+a.lesson-chip { color: var(--accent); border-color: var(--accent); }
+a.lesson-chip:hover { background: var(--accent-soft); }
+.lesson-chip.current { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.meta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; color: var(--muted); font-size: 0.92rem; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500; transition: background 150ms, border-color 150ms; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.btn.done { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.btn.small { padding: 4px 10px; font-size: 0.85rem; }
+.btn.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.btn[disabled] { opacity: 0.45; cursor: default; }
+.toc { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 0.92rem; }
+.toc a { color: var(--muted); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+.toc b { font-family: var(--font-mono); color: var(--accent); font-weight: 600; margin-right: 4px; }
+section { padding: 48px 0 8px; display: grid; gap: 18px; }
+.sec-num { font-family: var(--font-mono); color: var(--accent); font-size: 0.85rem; font-weight: 600; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.stack { display: grid; gap: 12px; }
+.muted { color: var(--muted); }
+.small { font-size: 0.88rem; }
+.note { font-size: 0.85rem; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; }
+.analogy { border-left: 4px solid var(--hit); background: var(--hit-soft); border-radius: 0 var(--radius) var(--radius) 0; padding: 14px 18px; }
+.tag { font-family: var(--font-mono); font-size: 0.74rem; border-radius: 6px; padding: 2px 7px; background: var(--accent-soft); color: var(--accent); }
+.tag.amber { background: var(--hit-soft); color: var(--hit); }
+.tag.good { background: var(--good-soft); color: var(--good); }
+.tag.bad { background: var(--bad-soft); color: var(--bad); }
+.tag.grey { background: var(--code-bg); color: var(--muted); }
+.tag.bonus { background: var(--bad-soft); color: var(--bad); }
+.box { background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; }
+.box-title { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px; }
+pre.block { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; line-height: 1.5; font-family: var(--font-mono); }
+.verdict { border-radius: 8px; padding: 10px 12px; font-size: 0.92rem; }
+.verdict.good { background: var(--good-soft); color: var(--good); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+.verdict.warn { background: var(--hit-soft); color: var(--hit); }
+.fade { opacity: 0; transform: translateY(6px); transition: opacity 350ms ease, transform 350ms ease; }
+.fade.on { opacity: 1; transform: none; }
+.readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; }
+.readout { background: var(--bg); border-radius: 8px; padding: 10px; }
+.readout b { display: block; font-family: var(--font-display); font-size: 1.35rem; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.readout span { font-size: 0.75rem; color: var(--muted); }
+.pg { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+@media (max-width: 820px) { .pg { grid-template-columns: 1fr; } }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.field { display: grid; gap: 6px; }
+.field label { font-weight: 600; font-size: 0.9rem; display: flex; justify-content: space-between; gap: 10px; }
+.field label output { font-family: var(--font-mono); color: var(--accent); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+/* player */
+.player { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.player-top { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.counter { font-family: var(--font-mono); font-size: 0.85rem; color: var(--muted); min-width: 4.5em; text-align: center; }
+.rail { display: flex; overflow-x: auto; padding: 14px 18px 4px; }
+.rail-step { flex: 1 0 90px; display: grid; justify-items: center; gap: 6px; cursor: pointer; background: none; border: 0; padding: 4px 2px 10px; position: relative; color: var(--muted); font-size: 0.78rem; text-align: center; }
+.rail-step::before { content: ""; position: absolute; top: 15px; left: -50%; width: 100%; height: 2px; background: var(--line); }
+.rail-step:first-child::before { display: none; }
+.rail-step.past::before, .rail-step.active::before { background: var(--accent); }
+.dot { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); background: var(--surface); display: grid; place-items: center; font-family: var(--font-mono); font-size: 0.72rem; position: relative; z-index: 1; }
+.rail-step.past .dot { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.rail-step.active .dot { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.rail-step.active { color: var(--ink); font-weight: 600; }
+.stage-wrap { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); border-top: 1px solid var(--line); }
+@media (max-width: 820px) { .stage-wrap { grid-template-columns: 1fr; } }
+.stage { padding: 20px; min-height: 360px; background: var(--bg); overflow-x: auto; display: grid; gap: 12px; align-content: start; }
+.notes { padding: 20px; display: grid; gap: 12px; align-content: start; border-left: 1px solid var(--line); }
+@media (max-width: 820px) { .notes { border-left: 0; border-top: 1px solid var(--line); } }
+.notes h3 { font-size: 1.25rem; }
+.where { background: var(--code-bg); border-radius: 8px; padding: 10px 12px; font-family: var(--font-mono); font-size: 0.8rem; display: grid; gap: 2px; }
+.where b { color: var(--accent); font-weight: 600; }
+.lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: center; text-align: center; }
+.lane { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface); font-size: 0.85rem; transition: border-color 300ms, background 300ms; }
+.lane b { display: block; font-size: 0.95rem; }
+.lane.on { border-color: var(--accent); background: var(--accent-soft); }
+.lane.bad { border-color: var(--bad); background: var(--bad-soft); }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.checks li { display: flex; gap: 8px; align-items: baseline; font-size: 0.9rem; }
+.checks li::before { content: "○"; font-family: var(--font-mono); color: var(--muted); }
+.checks li.ok::before { content: "✓"; color: var(--good); font-weight: 700; }
+.json-k { color: var(--accent); }
+.json-hl { background: var(--hit-soft); border-radius: 3px; }
+
+/* prompt lab */
+.toggles { display: grid; gap: 6px; }
+.tgl { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; background: var(--surface); }
+.tgl input { margin-top: 4px; accent-color: var(--accent); }
+.tgl b { display: block; font-size: 0.9rem; }
+.tgl span { font-size: 0.8rem; color: var(--muted); }
+.tgl:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.prompt-view { font-family: var(--font-mono); font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; line-height: 1.5; max-height: 300px; overflow-y: auto; }
+.prompt-view .add { background: var(--hit-soft); color: var(--ink); border-radius: 3px; }
+.reply { background: var(--surface); border: 1px solid var(--hit); border-radius: 10px; padding: 10px 12px; font-size: 0.92rem; }
+.reply.mono { font-family: var(--font-mono); font-size: 0.85rem; }
+.checks3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.chk { border-radius: 8px; padding: 8px; text-align: center; font-size: 0.8rem; border: 1px solid var(--line); }
+.chk b { display: block; font-size: 1.1rem; }
+.chk.yes { border-color: var(--good); background: var(--good-soft); color: var(--good); }
+.chk.no { border-color: var(--bad); background: var(--bad-soft); color: var(--bad); }
+.chk.meh { border-color: var(--hit); background: var(--hit-soft); color: var(--hit); }
+
+/* retry sim */
+.timeline { position: relative; height: 70px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tl-item { position: absolute; top: 14px; height: 40px; border-radius: 6px; font-family: var(--font-mono); font-size: 0.72rem; display: grid; place-items: center; color: var(--surface); padding: 0 4px; white-space: nowrap; overflow: hidden; }
+.tl-item.fail { background: var(--bad); }
+.tl-item.ok { background: var(--good); }
+.tl-item.hang { background: repeating-linear-gradient(45deg, var(--bad), var(--bad) 6px, var(--bad-soft) 6px, var(--bad-soft) 12px); color: var(--ink); }
+.tl-item.wait { background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
+.tl-scale { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted); }
+.log { font-family: var(--font-mono); font-size: 0.78rem; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; min-height: 60px; }
+.log .e { color: var(--bad); }
+.log .o { color: var(--good); }
+.status-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.status-table td, .status-table th { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.status-table th { font-size: 0.78rem; color: var(--muted); background: var(--code-bg); }
+.status-table td:first-child { font-family: var(--font-mono); font-weight: 600; white-space: nowrap; }
+
+table.cmp { width: 100%; border-collapse: collapse; font-size: 0.9rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+table.cmp th, table.cmp td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.cmp th { background: var(--code-bg); font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+table.cmp td:first-child { font-weight: 600; }
+table.cmp td.path { font-family: var(--font-mono); font-size: 0.8rem; }
+.table-scroll { overflow-x: auto; }
+.bit { display: grid; gap: 8px; align-content: start; }
+.bit .big { font-family: var(--font-display); font-weight: 800; font-size: 1.5rem; color: var(--hit); line-height: 1.05; }
+
+/* drill */
+.qa-group { display: grid; gap: 8px; }
+.qa-group h3 { display: flex; gap: 10px; align-items: baseline; margin-top: 10px; }
+.qa-group h3 span { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+details.qa { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+details.qa summary { cursor: pointer; padding: 12px 16px; font-weight: 600; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+details.qa summary::-webkit-details-marker { display: none; }
+details.qa summary::before { content: "+"; font-family: var(--font-mono); color: var(--accent); width: 1ch; flex: none; }
+details.qa[open] summary::before { content: "−"; }
+details.qa .ans { padding: 2px 16px 16px; display: grid; gap: 12px; font-size: 0.95rem; }
+details.qa .ans p { margin: 0; }
+details.qa .ans ol, details.qa .ans ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.ans .lab { display: block; font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.ans .say { background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; padding: 10px 12px; }
+.ans .say .lab { color: var(--accent); }
+.ans .say p { font-weight: 500; }
+.ans .part { display: grid; gap: 6px; }
+.ans .dm { background: var(--hit-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .dm .lab { color: var(--hit); }
+.ans .push { border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; }
+.ans .trap { background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; }
+.ans .trap .lab { color: var(--bad); }
+.ans pre.ex { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 10px 12px; font-size: 0.78rem; line-height: 1.5; white-space: pre; overflow-x: auto; }
+.lvl { font-family: var(--font-mono); font-size: 0.68rem; border-radius: 5px; padding: 1px 6px; margin-left: auto; flex: none; font-weight: 500; }
+.lvl.e { background: var(--good-soft); color: var(--good); }
+.lvl.m { background: var(--hit-soft); color: var(--hit); }
+.lvl.h { background: var(--bad-soft); color: var(--bad); }
+.drill-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.script { border: 2px solid var(--accent); }
+.script p { font-size: 1.02rem; }
+
+/* quiz */
+.quiz { display: grid; gap: 14px; }
+.qq { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 8px; margin: 0; }
+.qq legend { font-weight: 600; padding: 0 4px; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; border-radius: 7px; border: 1px solid transparent; cursor: pointer; font-size: 0.94rem; }
+.opt:hover { background: var(--bg); }
+.opt input { margin-top: 5px; accent-color: var(--accent); }
+.opt.right { border-color: var(--good); background: var(--good-soft); }
+.opt.wrong { border-color: var(--bad); background: var(--bad-soft); }
+.why { font-size: 0.88rem; color: var(--muted); display: none; }
+.checked .why { display: block; }
+.score { font-family: var(--font-display); font-weight: 800; font-size: 1.3rem; }
+.next { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: center; }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">DocMind revision · Track A, AI foundations</div>
+  <h1>Lesson 3 · Calling the model</h1>
+  <p class="lede">What one LLM API call really is, how to write prompts that code can rely on, and how a backend survives slow models, rate limits and errors. The everyday work of an AI backend developer.</p>
+  <div class="lessons" aria-label="All lessons">
+    <a class="lesson-chip" href="https://claude.ai/artifact/U3SBL3JuXPaY9PSbD3qBHs">0 Foundations</a><a class="lesson-chip" href="https://claude.ai/artifact/8aiEhWxvtnuMzvuKEKmHqu">1 LLMs</a><a class="lesson-chip" href="https://claude.ai/artifact/RSwoABVqgoqZ2C2CCuQ5Hr">2 Embeddings</a><span class="lesson-chip current">3 Calling the model</span><span class="lesson-chip">4 Ingestion</span><span class="lesson-chip">5 Vector DBs</span><a class="lesson-chip" href="https://claude.ai/artifact/SRRQhczagqJqFcQqwcVq6t">6 RAG</a><span class="lesson-chip">7 Streaming</span><span class="lesson-chip">8 Structured output</span><span class="lesson-chip">9 Background jobs</span><span class="lesson-chip">10 Auth</span><span class="lesson-chip">11 Deploy</span><span class="lesson-chip">12 Routing</span><span class="lesson-chip">13 Agents</span><span class="lesson-chip">14 Not built yet</span><span class="lesson-chip">15 Mock interview</span>
+  </div>
+  <div class="meta-row">
+    <span>About 55 minutes · 9 parts · 24 interview questions</span>
+    <button class="btn" id="doneBtn" type="button">Mark lesson as done</button>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Parts of this lesson">
+  <a href="#idea"><b>1</b>The idea</a>
+  <a href="#anatomy"><b>2</b>Anatomy of a call</a>
+  <a href="#lab"><b>3</b>Prompt lab</a>
+  <a href="#techniques"><b>4</b>Prompting techniques</a>
+  <a href="#errors"><b>5</b>When calls fail</a>
+  <a href="#limits"><b>6</b>Limits, cost, keys</a>
+  <a href="#code"><b>7</b>In your code</a>
+  <a href="#drill"><b>8</b>Interview drill</a>
+  <a href="#quiz"><b>9</b>Quiz</a>
+</nav>
+
+<!-- ============ 1. IDEA ============ -->
+<section id="idea">
+  <div class="sec-num">PART 1 · THE IDEA IN 60 SECONDS</div>
+  <h2>An LLM call is an HTTP request. Everything around it is your job.</h2>
+  <div class="read stack">
+    <p>Calling Gemini is a <code>POST</code> with some JSON, and the answer comes back as JSON. That part is easy. The backend developer's real work is everything around it: <b>building</b> the request (instructions, history, context, settings), <b>keeping the API key secret</b>, <b>checking</b> what comes back before trusting it, and <b>coping</b> when the model is slow, busy or down.</p>
+  </div>
+  <div class="analogy read"><b>Analogy: briefing a brilliant freelancer who has no memory.</b> Every call, you must give the full brief: who they are, the rules, the material, the exact format you want back. They bill per word, read and written. Sometimes the line is busy (429, 503) and you call back later. And you check their work before you hand it to a customer.</div>
+  <div class="grid3">
+    <div class="card"><h3>Build</h3><p class="small muted">System instruction, conversation turns, retrieved context, generation settings. The prompt is code: version it, test it.</p></div>
+    <div class="card"><h3>Protect</h3><p class="small muted">The key lives on the server only. The browser talks to <i>your</i> API, never straight to the model.</p></div>
+    <div class="card"><h3>Check and survive</h3><p class="small muted">Status code, finish reason, format. Timeouts, retries with backoff, and a clear message when it still fails.</p></div>
+  </div>
+</section>
+
+<!-- ============ 2. ANATOMY ============ -->
+<section id="anatomy">
+  <div class="sec-num">PART 2 · ANATOMY OF ONE CALL</div>
+  <h2>From the user's message to a checked answer, in six steps</h2>
+  <p class="read muted">The router's classifier call from DocMind, slightly simplified: is "can you quiz me on chapter 2?" small talk, a document question or a quiz request?</p>
+  <div class="player" id="player">
+    <div class="player-top">
+      <strong>One classifier call</strong>
+      <div class="controls">
+        <button class="btn" type="button" id="anPrev">◀ Prev</button>
+        <button class="btn primary" type="button" id="anPlay">▶ Play</button>
+        <button class="btn" type="button" id="anNext">Next ▶</button>
+        <span class="counter" id="anCounter">1 / 6</span>
+      </div>
+    </div>
+    <div class="rail" id="anRail" role="tablist" aria-label="Steps"></div>
+    <div class="stage-wrap">
+      <div class="stage" id="anStage" aria-live="polite"></div>
+      <div class="notes" id="anNotes"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. PROMPT LAB ============ -->
+<section id="lab">
+  <div class="sec-num">PART 3 · PROMPT LAB</div>
+  <h2>Turn a vague prompt into one your code can rely on</h2>
+  <p class="read muted">The task: label a message as <code>smalltalk</code>, <code>document_question</code> or <code>quiz_request</code>, the job of DocMind's classifier. Switch the four prompt ingredients on and off and watch the reply change. Try the tricky message with and without examples.</p>
+  <div class="card pg">
+    <div class="stack">
+      <div class="box-title">Message to classify</div>
+      <div class="controls" id="labMsgs"></div>
+      <div class="box-title">Prompt ingredients</div>
+      <div class="toggles">
+        <label class="tgl" for="tLabels"><input type="checkbox" id="tLabels"><div><b>Clear task + the exact labels</b><span>Say what to do and list the only allowed answers.</span></div></label>
+        <label class="tgl" for="tExamples"><input type="checkbox" id="tExamples"><div><b>Examples (few-shot)</b><span>Show tricky cases with the right label.</span></div></label>
+        <label class="tgl" for="tFormat"><input type="checkbox" id="tFormat"><div><b>Output format: JSON only</b><span>JSON mode with a schema, so code can parse it.</span></div></label>
+        <label class="tgl" for="tTemp"><input type="checkbox" id="tTemp"><div><b>Temperature 0</b><span>Same input, same answer.</span></div></label>
+      </div>
+      <button class="btn small" type="button" id="labAll">Switch all on (what DocMind does)</button>
+    </div>
+    <div class="stack">
+      <div class="box-title">The prompt you're sending</div>
+      <div class="prompt-view" id="labPrompt"></div>
+      <div class="box-title" id="labReplyTitle">What the model replies</div>
+      <div id="labReply"></div>
+      <div class="checks3">
+        <div class="chk" id="cParse"><b>?</b>code can read it</div>
+        <div class="chk" id="cRight"><b>?</b>right label</div>
+        <div class="chk" id="cSame"><b>?</b>same every run</div>
+      </div>
+      <div class="verdict" id="labVerdict"></div>
+    </div>
+  </div>
+  <p class="note">The replies are written to show typical model behaviour, not recorded from Gemini. The final setup matches DocMind's real classifier: labels with descriptions, JSON mode plus a schema, temperature 0, and a Zod check on the result.</p>
+</section>
+
+<!-- ============ 4. TECHNIQUES ============ -->
+<section id="techniques">
+  <div class="sec-num">PART 4 · PROMPTING TECHNIQUES</div>
+  <h2>The handful of techniques that cover most real work</h2>
+  <div class="grid2">
+    <div class="card stack"><h3>Zero-shot</h3><p class="small">Just the instruction, no examples. "Summarise this in 3 bullet points." Fine for clear, common tasks.</p></div>
+    <div class="card stack"><h3>Few-shot</h3><p class="small">Add a few input → output examples. Best for tricky labels and exact formats. Pick examples that cover the edge cases.</p></div>
+    <div class="card stack"><h3>Role and rules</h3><p class="small">"You are DocMind, an assistant that answers questions about the user's PDFs." Then the rules: answer only from the documents, say so when it's not there.</p></div>
+    <div class="card stack"><h3>Clear structure</h3><p class="small">Separate instructions from material with headings or tags (<code>Context:</code>, <code>&lt;document&gt;</code>). Put the question last.</p></div>
+    <div class="card stack"><h3>Ask for the format</h3><p class="small">Say exactly what to return. For code to read it, use JSON mode with a schema, then validate (lesson 8).</p></div>
+    <div class="card stack"><h3>Think step by step</h3><p class="small">For reasoning tasks, asking the model to work through steps first improves answers ("chain of thought"). Costs more tokens. Reasoning models do this internally.</p></div>
+    <div class="card stack"><h3>Say what to do when unsure</h3><p class="small">"If the context doesn't contain the answer, say so plainly." Without it, models fill gaps with guesses.</p></div>
+    <div class="card stack"><h3>Treat prompts as code</h3><p class="small">Keep them in one place, version them, and re-run a fixed set of test inputs after every change.</p></div>
+  </div>
+  <div class="card stack read">
+    <h3>How DocMind's chat prompt evolved</h3>
+    <ol class="small" style="margin:0;padding-left:20px;display:grid;gap:6px">
+      <li><b>One big string:</b> rules → retrieved chunks → history as "user: … assistant: …" text → question last (<code>buildChatPrompt</code>).</li>
+      <li><b>Fixing the tone:</b> answers kept opening with "Based on the provided context…", so a rule now says to answer directly.</li>
+      <li><b>Small talk split off:</b> "hi" got "the context doesn't mention that". The router now sends small talk to its own short prompt.</li>
+      <li><b>Refusing outside knowledge:</b> "capital of France?" got "Paris!". Now the model is told it only answers from the documents.</li>
+      <li><b>Real structure (agent):</b> rules moved to <code>systemInstruction</code>, history became real user/model turns, and document text is labelled as material, never instructions.</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============ 5. ERRORS ============ -->
+<section id="errors">
+  <div class="sec-num">PART 5 · WHEN CALLS FAIL</div>
+  <h2>Retry what's temporary, stop on what isn't, and never wait forever</h2>
+  <div class="card stack">
+    <div class="box-title">Pick what goes wrong</div>
+    <div class="controls" id="rtScen"></div>
+    <div class="box-title">Your backend's strategy</div>
+    <div class="controls">
+      <label class="tgl" for="rtRetry" style="flex:1;min-width:200px"><input type="checkbox" id="rtRetry" checked><div><b>Retry with backoff</b><span>up to 3 tries, waiting 1 s, 2 s (+ jitter)</span></div></label>
+      <label class="tgl" for="rtTimeout" style="flex:1;min-width:200px"><input type="checkbox" id="rtTimeout" checked><div><b>Timeout</b><span>give up on one try after 30 s</span></div></label>
+    </div>
+    <button class="btn primary" type="button" id="rtRun" style="justify-self:start">Run the call</button>
+    <div class="timeline" id="rtTl"></div>
+    <div class="tl-scale"><span>0 s</span><span id="rtScaleMid"></span><span id="rtScaleEnd"></span></div>
+    <div class="log" id="rtLog"><span class="muted">Press "Run the call".</span></div>
+    <div class="verdict" id="rtVerdict" hidden></div>
+  </div>
+  <div class="table-scroll">
+    <table class="status-table card" style="padding:0">
+      <thead><tr><th>Status</th><th>Means</th><th>Retry?</th></tr></thead>
+      <tbody>
+        <tr><td>400</td><td>Bad request: your JSON or arguments are wrong</td><td>No. Fix the code; it will fail the same way again.</td></tr>
+        <tr><td>401 / 403</td><td>Missing, wrong or unauthorised API key</td><td>No. Alert someone.</td></tr>
+        <tr><td>404</td><td>Wrong model name or URL</td><td>No.</td></tr>
+        <tr><td>429</td><td>Too many requests: you hit a rate limit</td><td>Yes, after waiting (respect a Retry-After header if there is one).</td></tr>
+        <tr><td>500 / 503</td><td>Provider error or overloaded ("high demand")</td><td>Yes, with backoff and a cap.</td></tr>
+        <tr><td>no answer</td><td>Network drop, or the call just hangs</td><td>Yes, but only if you set a timeout. Without one you wait forever.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid2">
+    <div class="card bit"><div class="big">ISSUES #8</div><h3>DocMind has no timeout or retry yet</h3><p class="small">Every Gemini <code>fetch</code> is a single try with no time limit. A 503 "high demand" fails straight away, and a hung call hangs the request. The first fix to make.</p></div>
+    <div class="card bit"><div class="big">ISSUES #1</div><h3>Every failure looks the same</h3><p class="small">A bad API key shows "check your internet connection", because <code>withErrorHandling</code> doesn't tell failure types apart. A 401 should say "server misconfigured", not blame the user's wifi.</p></div>
+  </div>
+</section>
+
+<!-- ============ 6. LIMITS, COST, KEYS ============ -->
+<section id="limits">
+  <div class="sec-num">PART 6 · LIMITS, COST AND KEYS</div>
+  <h2>How far does the free tier go?</h2>
+  <p class="read muted">Gemini Flash-Lite's free tier on your account: <b>15 requests per minute, 500 per day</b>. Every model call counts, and some questions take more than one.</p>
+  <div class="card pg">
+    <div class="stack">
+      <div class="field"><label for="lmUsers">Questions asked per minute, at peak <output id="lmUsersOut">5</output></label><input type="range" id="lmUsers" min="1" max="20" value="5"></div>
+      <div class="field"><label for="lmCls">Share of questions that need the classifier <output id="lmClsOut">30%</output></label><input type="range" id="lmCls" min="0" max="100" step="10" value="30"></div>
+      <div class="box-title">Calls per document question</div>
+      <div class="controls" id="lmMode">
+        <button class="btn small" type="button" data-c="1">Classic RAG: 1 call</button>
+        <button class="btn small sel" type="button" data-c="2">Agent: 2 calls</button>
+      </div>
+    </div>
+    <div class="stack">
+      <div class="readouts">
+        <div class="readout"><b id="lmRpm">0</b><span>model calls per minute (limit 15)</span></div>
+        <div class="readout"><b id="lmDay">0</b><span>questions per day before the 500 limit</span></div>
+      </div>
+      <div class="verdict" id="lmVerdict"></div>
+      <p class="note">Ignores small talk and quiz offers, which cost less. Embeddings have their own separate limit (100 per minute).</p>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="card stack">
+      <h3>Keeping the API key secret</h3>
+      <ul class="small" style="margin:0;padding-left:18px;display:grid;gap:4px">
+        <li>The key lives in <b>server</b> environment variables (<code>.env</code> locally, Render's dashboard in production).</li>
+        <li>Never in frontend code: anything in the browser bundle is public, including <code>VITE_*</code> variables.</li>
+        <li>Never in git. <code>.env</code> is gitignored.</li>
+        <li>If it leaks: <b>rotate it</b> (make a new one, delete the old), don't just delete the file.</li>
+      </ul>
+    </div>
+    <div class="card bit"><div class="big">.history/</div><h3>A real leak in DocMind</h3><p class="small">VS Code's Local History extension saved snapshots of every file, <code>.env</code> included, into a <code>.history/</code> folder that wasn't gitignored. The secrets got exposed that way. Now both are gitignored. Lesson: check what your tools write to disk.</p></div>
+    <div class="card stack">
+      <h3>Cost in one line</h3>
+      <p class="small">(input tokens × input price) + (output tokens × output price), for every call. Log the token counts from <code>usageMetadata</code> so you know what each feature costs. DocMind doesn't log them yet (ISSUES #21).</p>
+    </div>
+    <div class="card stack">
+      <h3>SDK, REST, or a wrapper?</h3>
+      <p class="small">DocMind calls the REST API with plain <code>fetch</code> to learn the protocol. Most teams use the provider's SDK. Either way, keep every model call behind <b>one module</b> (<code>llm.service.ts</code>), so switching model or provider is a one-file change. <span class="tag bonus">bonus</span> The model name is hard-coded today; an environment variable would allow switching when one model is overloaded (ISSUES #10).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. CODE ============ -->
+<section id="code">
+  <div class="sec-num">PART 7 · IN YOUR CODE</div>
+  <h2>Where model calls live in DocMind</h2>
+  <div class="table-scroll">
+    <table class="cmp">
+      <thead><tr><th>What</th><th>File · function</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>One-shot call</td><td class="path">src/services/llm.service.ts · generateAnswer</td><td>Prompt string + optional <code>generationConfig</code> (JSON mode, temperature). Used by the quiz and the classifier.</td></tr>
+        <tr><td>Streamed answer</td><td class="path">src/services/llm.service.ts · streamAnswer</td><td><code>:streamGenerateContent?alt=sse</code>, yields text pieces (lesson 7).</td></tr>
+        <tr><td>Agent turns</td><td class="path">src/services/llm.service.ts · streamTurn</td><td><code>systemInstruction</code> + <code>contents</code> + <code>tools</code>, returns the whole model turn (lesson 13).</td></tr>
+        <tr><td>Classifier prompt</td><td class="path">src/services/router.service.ts · buildClassifierPrompt, classifyIntent</td><td>Labels with descriptions, JSON mode + schema, temperature 0, Zod.</td></tr>
+        <tr><td>Chat prompts</td><td class="path">src/services/chat.service.ts · buildChatPrompt, buildSmalltalkPrompt</td><td>Rules → context → history → question.</td></tr>
+        <tr><td>Agent rules</td><td class="path">src/services/agent.service.ts · buildSystemInstruction</td><td>Grounding, query rewriting, injection rule.</td></tr>
+        <tr><td>Errors</td><td class="path">src/utils/errors.ts · withErrorHandling, summarizeError</td><td>Logs the real cause, sends the user a clean 503 or an SSE error frame.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ 8. DRILL ============ -->
+<section id="drill">
+  <div class="sec-num">PART 8 · INTERVIEW DRILL</div>
+  <h2>24 questions you could get. Answer out loud first, then open.</h2>
+  <div class="card script stack">
+    <h3>Say it in 60 seconds: "How does your backend call the LLM?"</h3>
+    <p>"The browser only talks to my Express API; the Gemini key stays on the server. For each request I build the call in one service: a system instruction with the rules, the recent conversation as user and model turns, any retrieved document text, and generation settings, for example temperature 0 and JSON mode for my intent classifier. I send it with fetch, check the status and finish reason, and validate structured output with Zod before using it. Answers are streamed back to the user. What I'd add next: a timeout and retries with backoff on every call, because Gemini's free tier sometimes returns 503 or takes far longer than usual."</p>
+  </div>
+  <p class="read muted">Each answer opens with <b>Say this first</b>: the 10-second version to lead with. <span class="lvl h">bonus</span> questions go beyond most intern interviews.</p>
+  <div class="drill-bar">
+    <button class="btn small" type="button" id="openAll">Open all answers</button>
+    <button class="btn small" type="button" id="closeAll">Close all</button>
+    <span class="small muted">Levels: <span class="lvl e">basic</span> <span class="lvl m">solid</span> <span class="lvl h">bonus</span></span>
+  </div>
+  <div class="stack" id="qaList"></div>
+</section>
+
+<!-- ============ 9. QUIZ ============ -->
+<section id="quiz">
+  <div class="sec-num">PART 9 · QUIZ</div>
+  <h2>Eight questions. No peeking.</h2>
+  <form class="quiz" id="quizForm"></form>
+  <div class="next">
+    <button class="btn primary" type="button" id="checkBtn">Check answers</button>
+    <span class="score" id="scoreOut" aria-live="polite"></span>
+  </div>
+</section>
+
+<section>
+  <div class="card next">
+    <div><div class="sec-num">UP NEXT</div><h3>Lesson 4 · Ingestion</h3><p class="small muted">Turning an uploaded PDF into searchable chunks: parsing, chunking, embedding and storing.</p></div>
+    <span class="tag grey">coming next</span>
+  </div>
+</section>
+
+</div>
+
+<script>
+(() => {
+'use strict';
+const RM = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let timers = [];
+const later = (fn, ms) => { const id = setTimeout(fn, RM ? 0 : ms); timers.push(id); return id; };
+const clearTimers = () => { timers.forEach(clearTimeout); timers = []; };
+const show = (el, ms) => { if (el) later(() => el.classList.add('on'), ms); };
+
+/* ================= Part 2: anatomy player ================= */
+const MSG = 'can you quiz me on chapter 2?';
+const AN = [
+  { label: 'Arrives', title: 'The message reaches YOUR server', where: [['src/routes/chat.routes.ts', 'POST /chat-stream']],
+    body: '<p>The browser never calls Gemini itself. If it did, the API key would be in the page for anyone to copy, and you couldn\'t add context, check limits or log anything.</p><p>So it\'s always: browser → your API → model.</p>',
+    render: (s) => {
+      s.innerHTML = `<div class="lanes"><div class="lane fade" id="l1"><b>Browser</b>"${esc(MSG)}"</div><div class="lane fade" id="l2"><b>Your API</b>has the key, the history, the rules</div><div class="lane fade" id="l3"><b>Gemini</b>only ever sees your server</div></div>
+      <div class="box fade" id="l4"><div class="box-title">Never this</div><pre class="block">fetch("https://generativelanguage.googleapis.com/...?key=AIza...")   ← from the browser = key leaked</pre></div>`;
+      show($('#l1'), 100); later(() => $('#l1').classList.add('on'), 100); show($('#l2'), 600); show($('#l3'), 1100); show($('#l4'), 1700);
+      later(() => $('#l2').classList.add('lane', 'on'), 600);
+    } },
+  { label: 'Build', title: 'Build the request body', where: [['src/services/router.service.ts', 'buildClassifierPrompt']],
+    body: '<p>Three things go in:</p><ul><li><b>The prompt:</b> the task, the allowed labels with a description each, and the message (and a little recent history for follow-ups).</li><li><b>Generation settings:</b> temperature 0, so the same message always gets the same label.</li><li><b>Output format:</b> JSON mode with a schema, so the reply can only be one of the three labels.</li></ul>',
+    render: (s) => {
+      s.innerHTML = `<div class="box"><div class="box-title">Request body (JSON)</div><pre class="block" id="b1"></pre></div>`;
+      const body = `{
+  "contents": [{ "role": "user", "parts": [{ "text":
+    "Classify the user's NEW message into exactly one intent:
+     - document_question: anything about their documents…
+     - smalltalk: greetings, thanks, chit-chat…
+     - quiz_request: asks to be quizzed or tested…
+     New message: \\"${MSG}\\"" }] }],
+  "generationConfig": {
+    "temperature": 0,
+    "responseMimeType": "application/json",
+    "responseSchema": { "type": "OBJECT",
+      "properties": { "intent": { "type": "STRING",
+        "enum": ["document_question", "smalltalk", "quiz_request"] } } }
+  }
+}`;
+      const el = $('#b1');
+      for (let i = 1; i <= body.length; i += 6) later(() => { el.textContent = body.slice(0, i); }, i * 1.6);
+      later(() => { el.textContent = body; }, body.length * 1.6 + 50);
+    } },
+  { label: 'Send', title: 'Send it over HTTPS', where: [['src/services/llm.service.ts', 'generateAnswer']],
+    body: '<p>A plain <code>POST</code> to the model\'s URL, with the key attached. Then you wait: usually around a second for a short reply, but on a bad day the same call took 25–53 seconds, or came back 503.</p><p>This is where a <b>timeout</b> belongs.</p>',
+    render: (s) => {
+      s.innerHTML = `<div class="box"><div class="box-title">HTTP request</div><pre class="block"><span class="json-k">POST</span> https://generativelanguage.googleapis.com/v1beta/
+     models/gemini-flash-lite-latest:generateContent?key=••••••••
+     (key from process.env, server only; an x-goog-api-key
+      header would keep it out of URLs and logs)
+Content-Type: application/json</pre></div>
+      <div class="lanes"><div class="lane on"><b>Your API</b>waiting…</div><div class="lane fade" id="w1"><b>→ → →</b><span class="mono small" id="wt">0.0 s</span></div><div class="lane fade" id="w2"><b>Gemini</b>generating</div></div>`;
+      show($('#w1'), 200); show($('#w2'), 400);
+      let t = 0; const tick = () => { t += 0.1; const el = $('#wt'); if (!el) return; el.textContent = t.toFixed(1) + ' s'; if (t < 1.2) later(tick, 90); else el.textContent = '1.2 s · reply'; }; later(tick, 400);
+    } },
+  { label: 'Response', title: 'Read the response', where: [['src/services/llm.service.ts', 'generateAnswer']],
+    body: '<p>The useful parts:</p><ul><li><code>candidates[0].content.parts[0].text</code>: the answer (here, a JSON string).</li><li><code>finishReason</code>: why it stopped. <code>STOP</code> is normal; <code>MAX_TOKENS</code> means it was cut off.</li><li><code>usageMetadata</code>: token counts, which is what you pay for.</li><li><code>modelVersion</code>: which model actually answered.</li></ul>',
+    render: (s) => {
+      s.innerHTML = `<div class="box"><div class="box-title">Response (200 OK)</div><pre class="block">{
+  "candidates": [{
+    "content": { "role": "model",
+      "parts": [{ "text": <span class="json-hl fade" id="r1">"{\\"intent\\": \\"quiz_request\\"}"</span> }] },
+    "finishReason": <span class="json-hl fade" id="r2">"STOP"</span>
+  }],
+  "usageMetadata": <span class="json-hl fade" id="r3">{ "promptTokenCount": 212, "candidatesTokenCount": 7 }</span>,
+  "modelVersion": <span class="json-hl fade" id="r4">"gemini-3.5-flash-lite"</span>
+}</pre></div><p class="note">Token counts are example values. The model version is the real one your AG.0 probe found behind the <code>-latest</code> alias.</p>`;
+      show($('#r1'), 300); show($('#r2'), 800); show($('#r3'), 1300); show($('#r4'), 1800);
+    } },
+  { label: 'Check', title: 'Check it before trusting it', where: [['src/services/router.service.ts', 'classifyIntent'], ['src/schemas/intent.schema.ts', 'IntentReply']],
+    body: '<p>A model reply is untrusted input, like a request body from a stranger. Check, in order: did the HTTP call succeed, did it finish normally, is it valid JSON, does it match the schema (Zod).</p><p>If any check fails, DocMind\'s router falls back to the safe default (<code>document_question</code>) and logs why. It never crashes the chat.</p>',
+    render: (s) => {
+      const C = ['HTTP status is 200 (res.ok)', 'finishReason is STOP, not MAX_TOKENS', 'JSON.parse(text) works', 'Zod: { intent } is one of the 3 labels', '→ use "quiz_request"'];
+      s.innerHTML = `<ul class="checks box" id="ck">${C.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
+      <div class="box"><div class="box-title">Code</div><pre class="block">const raw = await generateAnswer(prompt, config)
+try {
+  const parsed = IntentReply.safeParse(JSON.parse(raw))
+  return parsed.success ? parsed.data.intent : null   // null → safe default
+} catch {
+  return null                                          // not even JSON
+}</pre></div>`;
+      [...$('#ck').children].forEach((li, i) => later(() => li.classList.add('ok'), 300 + i * 450));
+    } },
+  { label: 'Use', title: 'Use it, and keep a record', where: [['src/services/chat.service.ts', 'prepareChat']],
+    body: '<p>"quiz_request" means DocMind answers with a quiz offer written by code, with no further model call. A document question would go on to the agent.</p><p>Good habit: log what happened (which route, how long it took, how many tokens), so slow days and rising costs show up in the logs, not in user complaints.</p>',
+    render: (s) => {
+      s.innerHTML = `<div class="box"><div class="box-title">Server log</div><pre class="block">[chat] 4/8 Routing the message (vector first, LLM on close calls)...
+  intent: quiz_request · decided by llm · margin 0.125
+  ⏱ 1.7 s · 1 classifier call
+[chat] 5/8 Skipping the search: a quiz request gets an offer, written by code</pre></div>
+      <div class="lanes"><div class="lane fade" id="u1"><b>Offer</b>"Want a quiz on chapter 2?"</div><div class="lane fade" id="u2"><b>Button</b>Create quiz</div><div class="lane fade" id="u3"><b>Saved</b>chat_messages</div></div>
+      <p class="note">The margin and 1.7 s are from your live check on 2026-11-04 ("quiz me on this").</p>`;
+      show($('#u1'), 300); show($('#u2'), 700); show($('#u3'), 1100);
+    } },
+];
+let ai = 0, anPlaying = false, anTimer = 0;
+function goAn(i) {
+  clearTimers();
+  ai = Math.max(0, Math.min(AN.length - 1, i));
+  $('#anRail').innerHTML = AN.map((s, k) => `<button type="button" role="tab" class="rail-step${k < ai ? ' past' : ''}${k === ai ? ' active' : ''}" data-i="${k}" aria-selected="${k === ai}"><span class="dot">${k + 1}</span>${s.label}</button>`).join('');
+  $('#anCounter').textContent = `${ai + 1} / ${AN.length}`;
+  $('#anPrev').disabled = ai === 0; $('#anNext').disabled = ai === AN.length - 1;
+  const st = AN[ai];
+  $('#anNotes').innerHTML = `<div class="sec-num">STEP ${ai + 1}</div><h3>${st.title}</h3>${st.body}<div class="where">${st.where.map(([f, fn]) => `<span>${f} · <b>${fn}</b></span>`).join('')}</div>`;
+  st.render($('#anStage'));
+}
+function anSetPlay(on) { anPlaying = on; clearTimeout(anTimer); $('#anPlay').textContent = on ? '❚❚ Pause' : '▶ Play'; if (on) anTick(); }
+function anTick() { anTimer = setTimeout(() => { if (!anPlaying) return; if (ai >= AN.length - 1) { anSetPlay(false); return; } goAn(ai + 1); anTick(); }, 6000); }
+$('#anPrev').addEventListener('click', () => { anSetPlay(false); goAn(ai - 1); });
+$('#anNext').addEventListener('click', () => { anSetPlay(false); goAn(ai + 1); });
+$('#anPlay').addEventListener('click', () => { if (!anPlaying && ai >= AN.length - 1) goAn(0); anSetPlay(!anPlaying); });
+$('#anRail').addEventListener('click', (e) => { const b = e.target.closest('.rail-step'); if (b) { anSetPlay(false); goAn(Number(b.dataset.i)); } });
+goAn(0);
+
+/* ================= Part 3: prompt lab ================= */
+const MSGS = [
+  { m: 'hi there!', right: 'smalltalk' },
+  { m: 'compare the two pdfs', right: 'document_question', tricky: true },
+  { m: 'can you quiz me on chapter 2?', right: 'quiz_request' },
+];
+let li = 1;
+$('#labMsgs').innerHTML = MSGS.map((x, i) => `<button class="btn small" type="button" data-m="${i}">${esc(x.m)}${x.tricky ? ' (tricky)' : ''}</button>`).join('');
+function labState() { return { L: $('#tLabels').checked, E: $('#tExamples').checked, F: $('#tFormat').checked, T: $('#tTemp').checked }; }
+function buildPrompt(s, msg) {
+  const parts = [];
+  if (s.L) parts.push(`<span class="add">Classify the user's message into exactly one intent:
+- smalltalk: greetings, thanks, chit-chat
+- document_question: anything about the content of their documents
+- quiz_request: asks to be quizzed or tested on the material</span>`);
+  else parts.push('What kind of message is this?');
+  if (s.E) parts.push(`<span class="add">Examples:
+"thanks, bye!"                   → smalltalk
+"compare chapter 1 and 2"        → document_question
+"what is a quiz?"                → document_question
+"give me 5 practice questions"   → quiz_request</span>`);
+  if (s.F) parts.push(`<span class="add">Reply only with JSON: { "intent": "..." }   (JSON mode + schema)</span>`);
+  parts.push(`Message: "${esc(msg)}"`);
+  return parts.join('\n\n') + (s.T ? '\n\n<span class="add">[generationConfig: temperature 0]</span>' : '\n\n[generationConfig: default temperature]');
+}
+function labReply(s, i) {
+  // returns { runs: [text...], parse: yes/no/meh, label|null }
+  const x = MSGS[i];
+  const guessed = x.tricky && !s.E ? 'quiz_request' : x.right;
+  const alt = 'document_question';
+  if (!s.L && !s.F) {
+    const free = ['This is a friendly greeting, a casual way of saying hello. 😊', 'This is a request to compare two PDF documents with each other.', 'The user would like to be tested on chapter 2 of their material.'][i];
+    return { runs: [free], mono: false, parse: 'no', label: null, why: 'Without the allowed labels the model describes the message in its own words. There\'s nothing for your code to map to a route.' };
+  }
+  if (!s.L && s.F) {
+    const inv = ['{ "type": "greeting" }', '{ "type": "comparison_request" }', '{ "type": "quiz" }'][i];
+    return { runs: [inv], mono: true, parse: 'meh', label: null, why: 'Valid JSON, but with labels the model invented. Format alone isn\'t enough; it needs the exact allowed values.' };
+  }
+  if (s.L && !s.F) {
+    const prose = {
+      smalltalk: 'This message is smalltalk: the user is just saying hello.',
+      quiz_request: x.tricky ? 'I\'d say quiz_request, since it mentions the PDFs and asks for something to be done with them. It could also be a document_question.' : 'quiz_request. The user explicitly asks to be quizzed.',
+      document_question: 'This looks like a document_question: the user wants the two documents compared.',
+    }[guessed];
+    let runs = [prose];
+    if (!s.T && x.tricky && !s.E) runs = [prose, 'This is probably a document_question, because comparing documents is about their content.', prose];
+    return { runs, mono: false, parse: 'meh', label: guessed, why: 'The label is in there, but buried in a sentence (sometimes next to another label). Your code would have to search the text for it, which breaks easily.' };
+  }
+  const j = (l) => `{ "intent": "${l}" }`;
+  let runs = [j(guessed)];
+  if (!s.T && x.tricky && !s.E) runs = [j('quiz_request'), j(alt), j('quiz_request')];
+  return { runs, mono: true, parse: 'yes', label: guessed, why: '' };
+}
+function renderLab() {
+  const s = labState();
+  document.querySelectorAll('[data-m]').forEach((b) => b.classList.toggle('sel', Number(b.dataset.m) === li));
+  $('#labPrompt').innerHTML = buildPrompt(s, MSGS[li].m);
+  const r = labReply(s, li);
+  const varied = new Set(r.runs).size > 1;
+  $('#labReplyTitle').textContent = r.runs.length > 1 ? 'What the model replies (3 runs of the same prompt)' : 'What the model replies';
+  $('#labReply').innerHTML = `<div class="stack" style="gap:6px">${r.runs.map((t) => `<div class="reply${r.mono ? ' mono' : ''}">${esc(t)}</div>`).join('')}</div>`;
+  const right = r.label === MSGS[li].right && !varied;
+  const set = (id, cls, val) => { const el = $(id); el.className = 'chk ' + cls; el.querySelector('b').textContent = val; };
+  set('#cParse', r.parse === 'yes' ? 'yes' : r.parse === 'meh' ? 'meh' : 'no', r.parse === 'yes' ? '✓' : r.parse === 'meh' ? '~' : '✗');
+  set('#cRight', r.label === null ? 'no' : right ? 'yes' : varied ? 'meh' : 'no', r.label === null ? '✗' : right ? '✓' : varied ? '~' : '✗');
+  set('#cSame', varied ? 'no' : (s.T ? 'yes' : 'meh'), varied ? '✗' : (s.T ? '✓' : '~'));
+  const v = $('#labVerdict');
+  if (r.why) { v.className = 'verdict ' + (r.parse === 'no' ? 'bad' : 'warn'); v.textContent = r.why; return; }
+  if (varied) { v.className = 'verdict bad'; v.textContent = 'Same prompt, different answers on different runs. A borderline message plus randomness: turn on temperature 0, and add examples so it isn\'t borderline.'; return; }
+  if (!right) { v.className = 'verdict bad'; v.textContent = 'Parseable and consistent, but wrong: "pdf" sounds quiz-like. Examples of tricky cases fix this.'; return; }
+  if (!s.T) { v.className = 'verdict warn'; v.textContent = 'Right this time. Without temperature 0, a borderline message could still flip on another run.'; return; }
+  v.className = 'verdict good'; v.textContent = 'Readable by code, correct, and repeatable. Last step in real code: validate it with Zod anyway, because "almost always" isn\'t "always".';
+}
+['#tLabels', '#tExamples', '#tFormat', '#tTemp'].forEach((id) => $(id).addEventListener('change', renderLab));
+$('#labMsgs').addEventListener('click', (e) => { const b = e.target.closest('[data-m]'); if (b) { li = Number(b.dataset.m); renderLab(); } });
+$('#labAll').addEventListener('click', () => { ['#tLabels', '#tExamples', '#tFormat', '#tTemp'].forEach((id) => { $(id).checked = true; }); renderLab(); });
+renderLab();
+
+/* ================= Part 5: retry simulator ================= */
+const SCEN = {
+  ok: { label: 'Works first time', tries: ['ok'] },
+  s503: { label: '503 overloaded', tries: ['503', '503', 'ok'] },
+  s429: { label: '429 rate limit', tries: ['429', 'ok'] },
+  s400: { label: '400 bad request', tries: ['400', '400', '400'] },
+  s401: { label: '401 bad API key', tries: ['401', '401', '401'] },
+  hang: { label: 'Hangs (no answer)', tries: ['hang', 'ok'] },
+};
+let scen = 's503';
+$('#rtScen').innerHTML = Object.entries(SCEN).map(([k, v]) => `<button class="btn small${k === scen ? ' sel' : ''}" type="button" data-s="${k}">${v.label}</button>`).join('');
+$('#rtScen').addEventListener('click', (e) => { const b = e.target.closest('[data-s]'); if (!b) return; scen = b.dataset.s; document.querySelectorAll('[data-s]').forEach((x) => x.classList.toggle('sel', x === b)); });
+const RETRYABLE = new Set(['503', '429', 'hang']);
+function simulate() {
+  const retry = $('#rtRetry').checked, timeout = $('#rtTimeout').checked;
+  const tries = SCEN[scen].tries;
+  const items = []; const log = []; let t = 0; let outcome = 'fail'; let msg = '';
+  const maxTries = retry ? 3 : 1;
+  for (let n = 0; n < maxTries; n++) {
+    const r = tries[Math.min(n, tries.length - 1)];
+    if (r === 'ok') { items.push({ s: t, d: 1.2, cls: 'ok', txt: '200' }); t += 1.2; log.push(['o', `try ${n + 1}: 200 OK after 1.2 s`]); outcome = 'ok'; break; }
+    if (r === 'hang') {
+      if (!timeout) { items.push({ s: t, d: 60, cls: 'hang', txt: 'waiting…' }); t += 60; log.push(['e', `try ${n + 1}: no answer… still waiting after 60 s… and forever`]); outcome = 'stuck'; break; }
+      items.push({ s: t, d: 30, cls: 'fail', txt: 'timeout' }); t += 30; log.push(['e', `try ${n + 1}: no answer, aborted by the 30 s timeout`]);
+    } else {
+      items.push({ s: t, d: 0.4, cls: 'fail', txt: r }); t += 0.4; log.push(['e', `try ${n + 1}: ${r} after 0.4 s`]);
+      if (!RETRYABLE.has(r)) { log.push(['e', `${r} is not temporary: stop, don't retry`]); outcome = 'fatal'; msg = r; break; }
+    }
+    if (n < maxTries - 1) { const wait = Math.pow(2, n) + Math.round(Math.random() * 30) / 100; items.push({ s: t, d: wait, cls: 'wait', txt: `wait ${wait.toFixed(1)}s` }); t += wait; log.push(['', `backoff: waiting ${wait.toFixed(2)} s (2^${n} s + jitter)`]); }
+  }
+  if (outcome === 'fail') log.push(['e', 'out of tries: give up and tell the user']);
+  return { items, log, t, outcome, msg, retry, timeout };
+}
+$('#rtRun').addEventListener('click', () => {
+  const r = simulate();
+  const span = Math.max(4, r.t);
+  $('#rtScaleMid').textContent = (span / 2).toFixed(span > 20 ? 0 : 1) + ' s';
+  $('#rtScaleEnd').textContent = span.toFixed(span > 20 ? 0 : 1) + ' s';
+  const tl = $('#rtTl'); tl.innerHTML = ''; $('#rtLog').innerHTML = ''; $('#rtVerdict').hidden = true;
+  r.items.forEach((it, k) => setTimeout(() => {
+    const d = document.createElement('div'); d.className = 'tl-item ' + it.cls;
+    d.style.left = (it.s / span * 100) + '%'; d.style.width = Math.max(1.5, it.d / span * 100) + '%'; d.textContent = it.txt; d.title = it.txt;
+    tl.appendChild(d);
+  }, RM ? 0 : k * 350));
+  r.log.forEach(([c, line], k) => setTimeout(() => { $('#rtLog').insertAdjacentHTML('beforeend', `<span class="${c}">${esc(line)}</span>`); }, RM ? 0 : k * 350));
+  setTimeout(() => {
+    const v = $('#rtVerdict'); v.hidden = false;
+    if (r.outcome === 'ok') { v.className = 'verdict good'; v.textContent = r.items.length > 1 ? `Recovered: the user got an answer after ${r.t.toFixed(1)} s instead of an error.` : 'Fine. Most calls look like this.'; }
+    else if (r.outcome === 'stuck') { v.className = 'verdict bad'; v.textContent = 'No timeout: the request (and a server connection) waits forever, and the user stares at a spinner. Turn the timeout on.'; }
+    else if (r.outcome === 'fatal') { v.className = 'verdict warn'; v.textContent = r.msg === '401' ? 'Correct to stop: retrying a bad key wastes calls. Tell the user "something went wrong on our side" and alert the developer, not "check your internet" (DocMind\'s ISSUES #1).' : 'Correct to stop: a 400 means the request itself is wrong, so it fails the same way every time. Log it and fix the code.'; }
+    else { v.className = 'verdict bad'; v.textContent = r.retry ? 'Still failing after 3 tries: show a clear "the AI service is busy, try again in a minute" message.' : 'One try, one failure: the user gets an error for something that would have worked a second later. Turn retries on.'; }
+  }, RM ? 0 : Math.max(r.items.length, r.log.length) * 350 + 100);
+});
+
+/* ================= Part 6: limits calculator ================= */
+let callsPerQ = 2;
+function renderLm() {
+  const q = Number($('#lmUsers').value), cls = Number($('#lmCls').value) / 100;
+  $('#lmUsersOut').textContent = q; $('#lmClsOut').textContent = Math.round(cls * 100) + '%';
+  const per = callsPerQ + cls;
+  const rpm = q * per;
+  $('#lmRpm').textContent = rpm.toFixed(1);
+  $('#lmDay').textContent = Math.floor(500 / per);
+  const v = $('#lmVerdict');
+  if (rpm > 15) { v.className = 'verdict bad'; v.textContent = `${rpm.toFixed(1)} calls a minute is over the 15 limit: some users get 429 errors. Fixes: fewer calls per question, a queue, or a paid tier.`; }
+  else if (rpm > 11) { v.className = 'verdict warn'; v.textContent = 'Close to the per-minute limit. One busy moment and requests start failing.'; }
+  else { v.className = 'verdict good'; v.textContent = `Fits per minute. The daily limit is the real ceiling: about ${Math.floor(500 / per)} document questions a day for the whole app, on the free tier.`; }
+  document.querySelectorAll('#lmMode button').forEach((b) => b.classList.toggle('sel', Number(b.dataset.c) === callsPerQ));
+}
+$('#lmUsers').addEventListener('input', renderLm); $('#lmCls').addEventListener('input', renderLm);
+$('#lmMode').addEventListener('click', (e) => { const b = e.target.closest('[data-c]'); if (b) { callsPerQ = Number(b.dataset.c); renderLm(); } });
+renderLm();
+
+/* ================= Part 8: drill ================= */
+const QA = [
+  { title: 'Making the call', items: [
+    { lvl: 'e', q: 'What does an LLM API call actually look like?',
+      say: 'An HTTPS POST with a JSON body: the conversation, optional instructions and settings. The response is JSON with the model\'s reply, why it stopped, and how many tokens were used.',
+      explain: `<ul><li><b>Request:</b> the model's URL, an API key header, and a body with <code>contents</code> (the messages), optionally <code>systemInstruction</code>, <code>generationConfig</code> (temperature, max tokens, JSON mode) and <code>tools</code>.</li><li><b>Response:</b> <code>candidates</code> (the reply and its <code>finishReason</code>), <code>usageMetadata</code> (token counts), and the model version.</li></ul><p>For streaming you call a different endpoint and get the reply in pieces (lesson 7).</p>`,
+      docmind: '<p><code>generateAnswer</code> in <code>llm.service.ts</code> does exactly this with plain <code>fetch</code>.</p>' },
+    { lvl: 'e', q: 'Why shouldn\'t the frontend call the LLM API directly?',
+      say: 'Because the API key would be in the browser, where anyone can copy it and run up your bill. The backend also needs to add context, apply limits and permissions, and log usage.',
+      explain: `<p>Anything shipped to the browser is public: open devtools and it's there, including <code>VITE_*</code> environment variables. With your key, anyone can call the model as you. The backend is also where you add the user's documents, enforce who can see what, cap usage per user, and record what happened.</p>`,
+      docmind: '<p>The React app only calls DocMind\'s Express API with the user\'s JWT. Only the server knows <code>GEMINI_API_KEY</code>.</p>',
+      trap: '<p>"I\'ll hide the key in an environment variable in the frontend." Frontend env variables are baked into the public bundle.</p>' },
+    { lvl: 'e', q: 'What are the system, user and model (assistant) roles?',
+      say: 'System sets the rules and persona for the whole conversation. User messages are what the person says. Model (assistant) messages are the model\'s earlier replies, sent back so it has the context.',
+      explain: `<p>Because the model is stateless, every call includes the conversation so far as alternating user and model turns. The system instruction sits above them and is treated as "how to behave". Gemini calls the assistant role <code>model</code>; OpenAI calls it <code>assistant</code>.</p>`,
+      example: `systemInstruction: "You are DocMind. Answer only from the user's documents."
+contents:
+  user:  "What is Velmora known for?"
+  model: "Its lighthouse, the harbour and the Lantern Festival."
+  user:  "When was the lighthouse built?"     ← the new message`,
+      docmind: '<p><code>historyToContents</code> maps stored <code>assistant</code> messages to Gemini\'s <code>model</code> role and merges two same-role messages in a row, because turns should alternate.</p>' },
+    { lvl: 'e', q: 'Which generation settings do you usually set?',
+      say: 'Temperature (randomness), max output tokens (length cap), and for structured output, JSON mode with a schema. Sometimes top-p and stop sequences.',
+      explain: `<ul><li><b>Temperature:</b> 0 for classification and extraction; default or higher for writing.</li><li><b>Max output tokens:</b> caps cost and length; check <code>finishReason</code> for <code>MAX_TOKENS</code>.</li><li><b>JSON mode + schema:</b> when code reads the output.</li><li><b>Stop sequences:</b> end generation at a marker.</li></ul>`,
+      docmind: '<p>Classifier: <code>temperature: 0</code>, <code>responseMimeType: \'application/json\'</code>, <code>responseSchema</code>. Quiz: JSON mode with the quiz schema. Chat answers: model defaults.</p>' },
+    { lvl: 'm', q: 'How do you check a model\'s response before using it?',
+      say: 'Treat it like untrusted input. Check the HTTP status, check the finish reason, parse it, and validate it against a schema. If anything fails, retry or fall back to a safe default.',
+      explain: `<ol><li><code>res.ok</code>: did the call succeed?</li><li><code>finishReason</code>: <code>STOP</code>, or was it cut off or blocked?</li><li>Is there any text at all?</li><li>If you expected JSON: does <code>JSON.parse</code> work, and does it pass a Zod schema?</li><li>If not: retry once, or use a safe default, and log why.</li></ol>`,
+      docmind: '<p>The classifier returns <code>null</code> on bad JSON or a failed schema, and the router falls back to <code>document_question</code>. The quiz retries once, then returns a clean 502.</p>' },
+  ]},
+  { title: 'Prompting', items: [
+    { lvl: 'e', q: 'What is prompt engineering?',
+      say: 'Writing the instructions and context you send to a model so it reliably does what you need. In a backend it\'s less about clever wording and more about structure, examples, format and testing.',
+      explain: `<p>The parts that matter most: a clear task, the allowed outputs, the material to use, examples of tricky cases, the exact output format, and what to do when unsure. Then test the prompt on a fixed set of inputs, like you'd test a function.</p>` },
+    { lvl: 'e', q: 'Zero-shot vs few-shot prompting?',
+      say: 'Zero-shot gives only the instruction. Few-shot also gives a few example inputs with the correct outputs. Few-shot helps most with tricky or ambiguous cases and exact formats.',
+      explain: `<p>Examples show the model what you mean better than descriptions do. Choose examples that cover the edge cases, not just easy ones, and keep them short since they cost tokens on every call.</p>`,
+      example: `zero-shot:  "Classify: smalltalk / document_question / quiz_request"
+few-shot:   + "compare chapter 1 and 2"  → document_question
+            + "what is a quiz?"          → document_question
+            + "give me 5 practice qs"    → quiz_request`,
+      docmind: '<p>DocMind\'s classifier puts short example phrases inside each label\'s description ("follow-ups such as why? or and the second one?"), plus a rule for mixed messages.</p>' },
+    { lvl: 'e', q: 'How do you make an LLM give output your code can parse?',
+      say: 'Ask for a specific format, use the API\'s JSON mode with a schema, keep temperature low, and always validate the result in code, for example with Zod.',
+      explain: `<p>Prompt-only ("reply in JSON") works most of the time, but models sometimes add text around it or rename fields. JSON mode with a schema constrains the output much more. Validation is still needed, because "almost always" isn't "always". Lesson 8 goes deep.</p>`,
+      docmind: '<p>In Step 4.1 both modes produced valid quiz JSON 17/17 times, but the "bad reply gallery" proved Zod catches the failures when they happen.</p>' },
+    { lvl: 'e', q: 'What is chain-of-thought prompting?',
+      say: 'Asking the model to work through the problem step by step before giving the answer. It improves results on reasoning tasks but costs more tokens and time.',
+      explain: `<p>The model "thinks on paper": intermediate steps become part of its context, which helps with maths, logic and multi-step questions. You can ask for the reasoning and then only show the final answer. Newer reasoning models do this internally. For simple lookups or classification it just adds cost.</p>` },
+    { lvl: 'm', q: 'How did you improve DocMind\'s chat prompt over time?',
+      say: 'Mostly by fixing what testing showed: removing "Based on the provided context" openers, routing small talk to its own prompt, refusing general-knowledge questions, and finally moving rules into a system instruction with history as real turns.',
+      explain: `<ol><li>Classic prompt: rules → chunks → history → question last.</li><li>Answers opened with "Based on the provided context…": a rule now says to answer directly.</li><li>"hi" got "the context doesn't say": small talk now has its own prompt.</li><li>"capital of France?" got "Paris!": the rules now refuse anything not in the documents.</li><li>Agent: <code>systemInstruction</code> for rules, real turns for history, document text marked as material, not instructions.</li></ol>`,
+      docmind: '<p>The ideas are written up in <code>prompt-improvement.md</code> (PI.1–PI.6), with a status table of what\'s done.</p>' },
+    { lvl: 'm', q: 'How do you test a prompt?',
+      say: 'Keep a fixed set of test inputs with the expected outputs, including tricky cases, and run all of them after every prompt or model change. Compare before and after.',
+      explain: `<p>Prompts are code: a small wording change can fix one case and break another. A test set catches that. For labels, count correct answers. For free text, check against expected facts, by hand or with another model as a judge. Run it when you change the model too.</p>`,
+      docmind: '<p>The router eval: 52 labelled messages (<code>npm run step7</code>). The RAG set: 9 questions, classic 8/9 vs agent 9/9.</p>' },
+    { lvl: 'h', q: 'What is prompt injection, and how does it relate to calling the model?',
+      say: 'Text inside user input or documents that tries to override your instructions, like "ignore your rules". Defend by separating instructions from material, telling the model that material isn\'t instructions, and above all enforcing permissions in code.',
+      explain: `<p>The model can't reliably tell your instructions from instructions hidden in the content it reads. So never let the model be the thing that decides access: whose data, which actions. The prompt rule helps; code-level limits are what actually protect you. Lesson 14 covers it in depth.</p>`,
+      docmind: '<p>The agent\'s system instruction says document and tool text is material, never instructions; tested with an injection PDF in AG.3. The search tool can\'t be told to search another user\'s files: scope comes from the token.</p>' },
+  ]},
+  { title: 'Reliability', items: [
+    { lvl: 'e', q: 'Which API errors should you retry, and which not?',
+      say: 'Retry temporary ones: 429 (rate limit), 500/503 (provider trouble) and network errors or timeouts. Don\'t retry 400 (bad request), 401/403 (key problems) or 404, because they\'ll fail the same way again.',
+      explain: `<p>Ask: "would the same request succeed a bit later?" If yes, retry with a wait. If no, stop, log it, and show a clear error. Retrying permanent errors just burns calls and delays the error message.</p>` },
+    { lvl: 'e', q: 'What is exponential backoff, and why add jitter?',
+      say: 'Wait longer after each failed try, for example 1 s, then 2 s, then 4 s. Jitter adds a small random amount, so many clients that failed together don\'t all retry at the same instant.',
+      explain: `<p>Retrying immediately hammers an overloaded service and usually fails again. Doubling the wait gives it time to recover. Without jitter, a thousand clients that hit a 503 at the same moment retry at the same moment, and cause the next spike. Always cap the number of tries.</p>`,
+      example: `try 1 → 503
+wait 1.0 s + 0.23 s jitter
+try 2 → 503
+wait 2.0 s + 0.08 s jitter
+try 3 → 200 ✓          (or: give up, clear message to the user)`,
+      docmind: '<p>DocMind\'s upload jobs use BullMQ\'s exponential backoff (5 s → 10 s, 3 attempts). Chat calls have no retry yet (ISSUES #8).</p>' },
+    { lvl: 'e', q: 'Why does every model call need a timeout?',
+      say: 'Without one, a call that never answers holds the request and a server connection open indefinitely, and the user waits forever. A timeout turns a hang into an error you can retry or report.',
+      explain: `<p>In Node you add a timeout to <code>fetch</code> with an <code>AbortController</code> (or <code>AbortSignal.timeout(ms)</code>). Pick it from real measurements: long enough for normal slow replies, short enough that users don't give up first. For streaming, a time-to-first-token limit makes more sense than a total one.</p>`,
+      example: `const res = await fetch(url, {
+  method: 'POST',
+  body,
+  signal: AbortSignal.timeout(30_000),   // give up after 30 s
+})`,
+      docmind: '<p>Not done yet (ISSUES #8). The same Gemini call took 1–3 s one day and 25–53 s another.</p>' },
+    { lvl: 'm', q: 'What should the user see when the model fails?',
+      say: 'A short, honest message that says what happened and what to do, like "The AI service is busy, try again in a minute". The real error details go to the server logs, not the user.',
+      explain: `<p>Different failures deserve different messages: busy (try again), your input was too long (shorten it), something broke on our side (we're on it). Never show stack traces, raw provider errors or SQL. And don't blame the user's connection for a server-side problem.</p>`,
+      docmind: '<p><code>withErrorHandling</code> logs the full cause chain with <code>summarizeError</code> and sends a clean message. Known flaw: every failure says "check your internet connection", even a bad API key (ISSUES #1).</p>' },
+    { lvl: 'm', q: 'What would you do if the model provider is down for an hour?',
+      say: 'Fail gracefully: clear messages, keep the rest of the app working, and queue work that can wait. If it matters enough, fall back to another model or provider behind the same interface.',
+      explain: `<ul><li>Keep features that don't need the model working (browsing documents, history).</li><li>Show a clear status message instead of timeouts.</li><li>Queue non-urgent work (like embedding uploads) to run later.</li><li>Optional: a fallback model, which is easy if all calls go through one module.</li></ul>`,
+      docmind: '<p>Uploads already queue on BullMQ and retry. A model name in an environment variable (ISSUES #10) would allow switching without a code change.</p>' },
+    { lvl: 'h', q: 'How would you test code that calls an LLM?',
+      say: 'Mock the model at the boundary for unit tests, so they\'re fast, free and deterministic. Keep separate evals that call the real model to measure quality.',
+      explain: `<p>Replace the HTTP call with scripted responses: normal answers, malformed JSON, 503s, cut-off replies. That tests your parsing, retries and error handling without spending quota. Real-model checks run separately, less often, and measure quality rather than pass/fail.</p>`,
+      docmind: '<p>AG.4 replaced the global <code>fetch</code> with scripted Gemini stream bytes: 26 tests, 0 API calls, including streams cut mid-character and a 503 mid-loop.</p>' },
+  ]},
+  { title: 'Limits, cost and security', items: [
+    { lvl: 'e', q: 'What rate limits do LLM APIs have?',
+      say: 'Usually requests per minute, requests per day and tokens per minute, per model and per account. Hitting one returns a 429.',
+      explain: `<p>Limits decide how many users you can serve, so they're a design input, not an afterthought. Count how many model calls one user action makes, multiply by your traffic, and compare.</p>`,
+      docmind: '<p>Flash-Lite free tier: 15 requests per minute, 500 per day. An agent document question is 2 calls (sometimes 3 with the classifier), so roughly 200 document questions a day for the whole app.</p>' },
+    { lvl: 'e', q: 'How do you keep an API key safe?',
+      say: 'Only on the server, in environment variables, never in git or frontend code. If it ever leaks, rotate it immediately.',
+      explain: `<ul><li>Store it in <code>.env</code> locally (gitignored) and in the host's secret settings in production.</li><li>Never print it in logs or error messages.</li><li>Prefer sending it in a header rather than the URL, since URLs end up in logs more often.</li><li>Use separate keys for development and production when you can.</li><li>Leaked? Create a new key and delete the old one. Removing the file isn't enough: it may already be copied.</li></ul>`,
+      docmind: '<p>A real leak happened through VS Code\'s <code>.history/</code> folder, which had copies of <code>.env</code>. Both are gitignored now. DocMind currently passes the key as <code>?key=</code> in the URL; a header would be slightly safer.</p>' },
+    { lvl: 'e', q: 'How do you estimate and control LLM costs?',
+      say: 'Count tokens per call and calls per user action, then multiply by traffic. Control it by sending less (short prompts, fewer chunks), calling less (routing, caching), capping output length, and using smaller models where they\'re good enough.',
+      explain: `<p>Read <code>usageMetadata</code> on every response and log it with the feature name, so you can see which part of the app costs what. Watch for hidden repeats: history and system instructions are resent every turn.</p>`,
+      docmind: '<p>The router skips search and generation for small talk and quiz requests. Token logging is an open item (ISSUES #21).</p>' },
+    { lvl: 'm', q: 'SDK or raw REST calls? Why?',
+      say: 'SDKs save time with types, retries and streaming helpers. Raw REST shows exactly what\'s happening and avoids a dependency. Either way, keep every model call behind one module of your own.',
+      explain: `<p>I used raw <code>fetch</code> in DocMind on purpose, to learn the protocol, and it showed me things an SDK hides: the SSE framing, the <code>\\r\\n</code> line endings, the function-call turns. The cost was writing parsing and error handling myself. In a team I'd usually take the SDK, wrapped in our own interface.</p>` },
+    { lvl: 'm', q: 'How would you make it easy to switch models or providers?',
+      say: 'Put all model calls behind one small interface in your own code, keep the model name in configuration, and keep provider-specific details from leaking into the rest of the app. Then re-run your evals on the new model before switching.',
+      explain: `<p>Your app should call something like <code>generate(prompt, options)</code>, not build provider JSON everywhere. Only one module knows Gemini's request shape. Model names belong in config or environment variables. Different models behave differently, so the eval set is what tells you the switch is safe.</p>`,
+      docmind: '<p>Mostly there: calls go through <code>llm.service.ts</code>. Two leaks: Gemini\'s <code>generationConfig</code> shape is built inside <code>quiz.service.ts</code> (ISSUES #21), and the model name is hard-coded (ISSUES #10).</p>' },
+    { lvl: 'h', q: 'What does "-latest" in a model name risk?',
+      say: 'It\'s an alias the provider can point at a newer model at any time, so your app\'s behaviour can change without you deploying anything. Pin an exact version in production.',
+      explain: `<p>Aliases are convenient for experiments: you always get the newest model. In production, a silent model change can alter JSON habits, tool-calling behaviour or tone. Pin a version, and upgrade deliberately after re-running evals.</p>`,
+      docmind: '<p><code>gemini-flash-lite-latest</code> turned out to be <code>gemini-3.5-flash-lite</code>, read from <code>modelVersion</code> in the response.</p>' },
+  ]},
+];
+const LVL = { e: 'basic', m: 'solid', h: 'bonus' };
+function answerHTML(it) {
+  let h = `<div class="say"><span class="lab">Say this first</span><p>${it.say}</p></div>`;
+  if (it.explain) h += `<div class="part"><span class="lab">Explained simply</span>${it.explain}</div>`;
+  if (it.example) h += `<div class="part"><span class="lab">Example</span><pre class="ex">${esc(it.example)}</pre></div>`;
+  if (it.docmind) h += `<div class="part dm"><span class="lab">In DocMind</span>${it.docmind}</div>`;
+  if (it.push) h += `<div class="part push"><span class="lab">If they push further</span><p><b>${it.push[0]}</b></p>${it.push[1]}</div>`;
+  if (it.trap) h += `<div class="part trap"><span class="lab">Don't say</span>${it.trap}</div>`;
+  return h;
+}
+$('#qaList').innerHTML = QA.map((g) => `<div class="qa-group"><h3>${g.title}<span>${g.items.length} questions</span></h3>${g.items.map((it) => `<details class="qa"><summary>${it.q}<span class="lvl ${it.lvl}">${LVL[it.lvl]}</span></summary><div class="ans">${answerHTML(it)}</div></details>`).join('')}</div>`).join('');
+$('#openAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = true; }));
+$('#closeAll').addEventListener('click', () => document.querySelectorAll('details.qa').forEach((d) => { d.open = false; }));
+
+/* ================= Part 9: quiz ================= */
+const QUIZ = [
+  { q: 'Where should the Gemini API key live?', o: ['In the React app\'s .env as VITE_GEMINI_KEY', 'In the server\'s environment variables only', 'In the git repo, in a private file', 'In localStorage'], a: 1, why: 'Anything in the frontend bundle is public. Server only.' },
+  { q: 'The model replies "This is a friendly greeting!" when your code expected a label. What\'s missing from the prompt?', o: ['A higher temperature', 'The exact allowed labels (and a format)', 'More history', 'A longer message'], a: 1, why: 'Without the allowed outputs, the model answers in its own words.' },
+  { q: 'Which error should you retry?', o: ['400 bad request', '401 invalid key', '503 service overloaded', '404 model not found'], a: 2, why: 'Temporary. The others fail the same way every time.' },
+  { q: 'Why add jitter to backoff?', o: ['To make retries faster', 'So many clients don\'t retry at the same instant', 'To save tokens', 'Providers require it'], a: 1, why: 'Synchronised retries create the next overload spike.' },
+  { q: 'A call never returns. What protects your server?', o: ['A retry loop', 'A timeout', 'Temperature 0', 'JSON mode'], a: 1, why: 'Without a timeout, there\'s nothing to retry: you just wait.' },
+  { q: 'What does finishReason "MAX_TOKENS" tell you?', o: ['The answer is complete', 'The answer was cut off at the length limit', 'You hit the rate limit', 'The key is invalid'], a: 1, why: 'Half an answer, or half a JSON object. Don\'t save it as complete.' },
+  { q: 'Few-shot prompting means…', o: ['Calling the model a few times', 'Including a few example inputs with correct outputs', 'Using a smaller model', 'Lowering max tokens'], a: 1, why: 'Examples teach the tricky cases better than descriptions.' },
+  { q: 'Free tier: 500 calls a day, and each document question takes 2 calls. Roughly how many questions a day fit?', o: ['500', '250', '1,000', '50'], a: 1, why: '500 ÷ 2 = 250 (fewer if the classifier also runs).' },
+];
+const form = $('#quizForm');
+form.innerHTML = QUIZ.map((item, i) => `<fieldset class="qq" id="qq${i}"><legend>${i + 1}. ${esc(item.q)}</legend>${item.o.map((o, j) => `<label class="opt" for="q${i}o${j}"><input type="radio" name="q${i}" id="q${i}o${j}" value="${j}"><span>${esc(o)}</span></label>`).join('')}<p class="why">${esc(item.why)}</p></fieldset>`).join('');
+form.addEventListener('submit', (e) => e.preventDefault());
+let checked = false;
+$('#checkBtn').addEventListener('click', () => {
+  if (checked) {
+    checked = false; form.reset();
+    form.querySelectorAll('.opt').forEach((o) => o.classList.remove('right', 'wrong'));
+    form.querySelectorAll('.qq').forEach((q) => q.classList.remove('checked'));
+    form.querySelectorAll('input').forEach((inp) => { inp.disabled = false; });
+    $('#scoreOut').textContent = ''; $('#checkBtn').textContent = 'Check answers';
+    return;
+  }
+  let score = 0;
+  QUIZ.forEach((item, i) => {
+    const picked = form.querySelector(`input[name="q${i}"]:checked`);
+    $('#qq' + i).classList.add('checked');
+    $(`label[for="q${i}o${item.a}"]`).classList.add('right');
+    if (picked && Number(picked.value) === item.a) score++;
+    else if (picked) picked.closest('.opt').classList.add('wrong');
+  });
+  form.querySelectorAll('input').forEach((inp) => { inp.disabled = true; });
+  checked = true;
+  $('#scoreOut').textContent = `${score} / ${QUIZ.length}` + (score === QUIZ.length ? ' · solid' : score >= 6 ? ' · close, reread the misses' : ' · replay Parts 2–5 and try again');
+  $('#checkBtn').textContent = 'Try again';
+});
+
+/* ================= done toggle ================= */
+const KEY = 'docmind-revision:lesson-03';
+const doneBtn = $('#doneBtn');
+function paintDone(d) { doneBtn.classList.toggle('done', d); doneBtn.textContent = d ? '✓ Lesson done' : 'Mark lesson as done'; }
+let isDone = false;
+try { isDone = localStorage.getItem(KEY) === '1'; } catch (e) { /* storage blocked */ }
+paintDone(isDone);
+doneBtn.addEventListener('click', () => { isDone = !isDone; paintDone(isDone); try { localStorage.setItem(KEY, isDone ? '1' : '0'); } catch (e) { /* ignore */ } });
+})();
+</script>
+</body>
+</html>
