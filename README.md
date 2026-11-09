@@ -345,7 +345,7 @@ A few things that aren't obvious from the code alone:
 - **The model writes the search, code decides the scope.** The agent's tools take only what the model is good at (a search query). Who is asking and which documents can be searched are closed over by code from the verified token, so a sentence inside a PDF telling the model to "search another user's files" has nowhere to go. Tool names are looked up in a fixed map, the arguments are checked with Zod, and a bad call or a failing tool becomes `{ error }` data the model can react to.
 - **A hard step limit, enforced by leaving the tools out.** At most 3 model calls per answer. The last one is sent *without* tools, because the "don't call tools" mode was ignored by this model in testing. Every model turn is sent back exactly as received: Gemini attaches a signature to each one, and dropping it is a 400.
 - **Stream every step.** Each agent call uses Gemini's streaming endpoint; text is forwarded the moment it arrives and the turn is rebuilt from the pieces for the next call. The user sees what the agent is searching for, then the answer typing out, instead of dots for 5 seconds.
-- **The model never starts a quiz.** "Quiz me" gets an offer written by code and a button; the click calls the existing `POST /quiz`. A typed "yes" would need the server to remember a pending offer between two requests, which is a workflow problem (suspend/resume) for a later phase.
+- **The model never starts a quiz.** "Quiz me" gets an offer written by code and a button; the click calls the existing `POST /quiz`. A typed "yes" would need the server to remember a pending offer between two requests. That's a workflow problem (suspend/resume), planned next on Mastra's workflow engine ([suspend-resume.md](suspend-resume.md)).
 - **A token in a header, not a cookie.** The frontend and API live on different sites, where cookies are third-party and increasingly blocked. The tradeoff is that the token sits in `localStorage`, so answers are rendered as markdown *without* raw HTML.
 
 ---
@@ -379,8 +379,9 @@ This repo doubles as a learning log:
 - [topics/](topics/README.md): notes per concept, in my own words
 - [ai-backend-roadmap.md](ai-backend-roadmap.md): the original plan
 - [agents-plan.md](agents-plan.md), [background-jobs-plan.md](background-jobs-plan.md), [auth-jwt-plan.md](auth-jwt-plan.md): how each bigger feature was planned, with a results log of what was measured and what went wrong
+- [suspend-resume.md](suspend-resume.md): the plan for the next phase (a quiz workflow that pauses for the user, on Mastra), not built yet
 - [ISSUES.md](ISSUES.md): every known bug and issue, open and fixed
 
 ## What's next
 
-Multi-step workflows that can pause and wait for the user (a typed "yes" to the quiz offer instead of a button), then tests and observability. The open bugs and gaps are tracked in [ISSUES.md](ISSUES.md).
+Multi-step workflows that can pause and wait for the user, so the quiz offer can be answered by typing ("yes", "the second one", "cancel") and not only by clicking. The plan is [Mastra](https://mastra.ai)'s workflow engine used as a library inside this Express app. A step that needs the user calls `suspend()`, Mastra saves the run's state in the same Postgres database, and the next message resumes it, even after a restart. Mastra also guarantees a run is resumed only once, so a click plus a typed "yes" can't make two quizzes. Gemini, the agent, the tools, the quiz service, auth and the streaming protocol stay as they are. Plan and tracker: [suspend-resume.md](suspend-resume.md). After that: tests and observability. The open bugs and gaps are tracked in [ISSUES.md](ISSUES.md).

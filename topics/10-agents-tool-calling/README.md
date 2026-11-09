@@ -81,7 +81,7 @@ The API remembers nothing between requests (same as chat memory in topic 06), so
 07 streaming                     → the stream now carries status + sources events between tool steps
 08 structured output             → the LLM router; tool arguments validated with Zod like any model output
 10 (here)                        → routing, tools, the agent loop, Kind A vs Kind B
-11 workflows                     → Kind B with a typed "yes": the pending quiz is stored and resumed
+11 workflows                     → Kind B with a typed "yes": the pending quiz is stored and resumed (planned on Mastra)
 12 testing                       → the router and the loop are tested with a scripted fake model
 advanced/06 LLM security         → prompt injection through tool results
 ```

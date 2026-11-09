@@ -288,6 +288,22 @@ Built from [agents-plan.md](agents-plan.md) (steps AG.0–AG.7; its §9 results 
 - Rebuild Step 8.2's workflow using LangGraph.js, keep both versions (`/hand-rolled` and `/langgraph`)
 - Output: "built from scratch to understand the mechanics, then reimplemented with a framework" — a genuinely strong interview story
 
+**📝 Plan update (2026-11-07 → 11-10): Phase 8 is planned on Mastra, nothing built yet.** Steps 8.2/8.3 above are replaced by [suspend-resume.md](suspend-resume.md). Mastra's **workflow engine only** (`@mastra/core` + `@mastra/pg`) runs inside the existing Express app. Mastra handles step order, suspend, the Postgres snapshot, resume and the double-resume claim. DocMind still decides who is asking, whose run it is, what a reply means, and how the reply is streamed. The flow changed too, because Phase 7 built the quiz differently (an offer + button, no `createQuiz()` tool, no chapters):
+
+| Step | What | Gate / test |
+|---|---|---|
+| WF.0 | Install (exact versions), CommonJS + Node ≥ 22.13 check, telemetry off, export the `pg` pool | `tsc`, dev, build + start all load Mastra; memory measured |
+| WF.1 | `npm run step8` proof of concept: suspend → exit → resume in a new process → two resumes at once → kill mid-step | **the gate**: nothing in chat changes before it passes |
+| WF.2 | `quiz_workflow_runs` pointer table (user + session → runId) + repository | one waiting run per chat (unique index), expiry |
+| WF.3 | The 4-step quiz workflow (`resolve-document → choose-document → confirm → generate-quiz`), calling the existing services | in-process tests on the real DB |
+| WF.4 | Reply reader: "yes" / "second one" / "the React document" / "cancel" (rules, then LLM label) | labelled eval, 0 harmful mistakes |
+| WF.5 | `prepareChat` check before embedding, both chat routes, `POST /quiz-runs/:runId/resume` | HTTP tests |
+| WF.6 | Frontend: `quiz` SSE event opens the modal; buttons resume the same run | headless Chromium |
+| WF.7 | Full pass + restart test + live check | live on Render/Vercel |
+| WF.8 | Docs | — |
+
+Reading: [topic 11 README](topics/11-workflows-suspend-resume/README.md), then [More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md) (Part 1 concepts, Part 2 Mastra).
+
 **Milestone:** a real multi-turn workflow that survives being interrupted and resumed.
 
 ---

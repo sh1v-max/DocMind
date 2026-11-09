@@ -1,6 +1,6 @@
 # Suspend/Resume Plan: a durable quiz workflow on Mastra (Phase 8)
 
-**Status:** 📝 **plan only, nothing built** (written 2026-11-07). No package installed, no code or schema changed. This is Phase 8 of the roadmap (topic [11-workflows-suspend-resume](topics/11-workflows-suspend-resume)). Concept reading: [More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md), especially §3–§14. This file is the *build* plan: what changes in DocMind, in which order, and how each step is tested.
+**Status:** 📝 **plan only, nothing built** (written 2026-11-07, facts re-checked 2026-11-10). No package installed, no code or schema changed. This is Phase 8 of the roadmap (topic [11-workflows-suspend-resume](topics/11-workflows-suspend-resume)). Reading: the topic's [README.md](topics/11-workflows-suspend-resume/README.md) (the short version), then [More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md) Part 1 §3–§14 (the concepts) and **Part 2 §25–§45 (Mastra in depth: what it is, where it fits, every building block, a run traced across three requests)**. This file is the *build* plan: what changes in DocMind, in which order, and how each step is tested.
 
 Same shape as [agents-plan.md](agents-plan.md) and [background-jobs-plan.md](background-jobs-plan.md): tracker, the brief, the problem, how Mastra works, design, rules, steps with tests, what's left out, decisions, results log, code facts, research facts.
 
@@ -25,7 +25,7 @@ Same shape as [agents-plan.md](agents-plan.md) and [background-jobs-plan.md](bac
 
 ## 0. Start here + tracker
 
-**For Shiv, before WF.0:** read [More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md) §3–§14 (why the server can't wait, state machines, double messages, changing the subject, errors in a workflow), then §3 of this file. Answer the open decisions in §10, or say "go with the recommendations".
+**For Shiv, before WF.0:** read the topic [README.md](topics/11-workflows-suspend-resume/README.md), then [More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md) §3–§14 (why the server can't wait, state machines, double messages, changing the subject, errors in a workflow) and Part 2 (§25–§45, Mastra; §31 "A run's life" is the one to read twice), then §3 of this file. Answer the open decisions in §10, or say "go with the recommendations".
 
 **For Claude:** read [CLAUDE.md](CLAUDE.md), then this file. Build **one step at a time** (WF.0 → WF.8), explain each Mastra piece as it's introduced, let Shiv review, run the step's tests, fill in §11, tick the tracker, then move on. Never run `git commit`/`git push`. Code markers for this phase: `WF.N —`. **WF.1 (the proof of concept) is a gate:** nothing touches the chat until it passes.
 
@@ -193,8 +193,9 @@ new Mastra({
   }),
   workflows: { quizWorkflow },
   logger: false,               // or a quiet logger (D7); our pipelineLogger stays the main log
-  // boot recovery for RUNNING runs: 'off' (D5). Exact option name confirmed in WF.0
+  recovery: { workflows: 'off' },   // D5: no boot-time restart of RUNNING runs (default is 'auto'; key checked 2026-11-10)
 })
+// belt and braces on the workflow itself: createWorkflow({ ..., options: { autoRestartActiveRuns: false } })
 ```
 
 - **One connection pool:** `WorkflowsPG` accepts an existing `pg.Pool`. `db/client.ts` creates the pool but doesn't export it yet. WF.0 adds `export const pool`, so there are no extra Neon connections.
@@ -291,6 +292,7 @@ The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` 
 | Expired (30 min) | Lazy: the next message sees it, cancels it, routes normally | DocMind |
 | Another user's `runId` on `/quiz-runs/:id/resume` | **404** (pointer not found for this user). Mastra is never called | DocMind (auth rule: 404 not 403) |
 | Mastra/Postgres error | `withErrorHandling` → 503 JSON / `event: error`, and `summarizeError` logs the cause chain | existing error handling |
+| "cancel" arrives while `generate-quiz` is already running | `run.cancel()` fires `abortSignal`, but `generateQuiz()` doesn't listen, so the in-flight Gemini call finishes; only later steps are stopped. In practice the pointer is `running`, so the reply reader isn't even consulted: the message is answered as "a quiz is already being made" | Mastra cancel semantics (§13) + DocMind |
 
 ---
 
@@ -303,7 +305,8 @@ The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` 
 5. **Someone else's run = 404**, the same as a missing one.
 6. **The model never changes workflow state.** The LLM fallback only labels a reply; code validates it (candidate ids) and calls `resume`/`cancel`.
 7. **Resume is the claim.** Never call `resume()` for a run whose pointer isn't `waiting`, and treat `WORKFLOW_RESUME_ALREADY_CLAIMED` as a normal outcome, not a crash.
-8. **Every Mastra result is checked by `status`** (`success` / `suspended` / `failed` / `canceled` / `bailed`); no assumption that `start()` finished.
+8. **Every Mastra result is checked by `status`** (`success` / `suspended` / `failed` / `canceled`); no assumption that `start()` finished. A `bail()` also ends as **`success`** (the bail payload becomes the result), so a `success` is read through the output's `outcome` field (`quiz` / `cancelled` / `nothing_ready` / `error`).
+8b. **Nothing with a side effect above the `suspend` check.** A resumed step runs `execute` again from its first line; anything before `if (!resumeData) return suspend(...)` runs twice. Gemini calls and DB writes go below it, or in the next step.
 9. **Suspend payloads hold only what the user was shown** (candidate ids + filenames), never chunks, embeddings or quiz text.
 10. **SSE changes are additive**, and the frontend's `dispatch()` keeps no `default`.
 11. **Re-check the world on resume** (ownership + ready), because time passed while the run was paused.
@@ -321,7 +324,7 @@ The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` 
 - `package.json` `engines.node`: `"22.x"` → `">=22.13 <23"` (Mastra needs ≥ 22.13; check what Render actually runs).
 - `.env` / `.env.example` / Render: `MASTRA_TELEMETRY_DISABLED=1`.
 - `db/client.ts`: `export const pool` (one line).
-- **Checks:** `import { createWorkflow, createStep } from '@mastra/core/workflows'` compiles under your CommonJS `tsconfig` (`npx tsc --noEmit`), runs under `ts-node-dev`, and survives `npm run build && npm start`. Process memory before/after the import (`process.memoryUsage().rss`), since Render free has 512 MB. Find the exact boot-recovery option name in the `Mastra` config. Find out whether `WorkflowsPG` creates the `mastra` schema itself.
+- **Checks:** `import { createWorkflow, createStep } from '@mastra/core/workflows'` compiles under your CommonJS `tsconfig` (`npx tsc --noEmit`), runs under `ts-node-dev`, and survives `npm run build && npm start`. Process memory before/after the import (`process.memoryUsage().rss`), since Render free has 512 MB. Find out whether `WorkflowsPG` creates the `mastra` schema itself. (The boot-recovery key is already known: `recovery: { workflows: 'off' }`, §13.)
 - **Explain:** what a CJS/ESM dual package is, and why it decides whether this works at all.
 
 ### WF.1: Proof of concept: `src/step8-mastra-poc.ts` (`npm run step8 <mode>`) — the gate
@@ -337,6 +340,8 @@ A toy 2-step workflow (`poc-approval`): step 1 suspends asking "approve?", step 
 | `again <runId>` | resume an already finished run | a clear error, nothing re-runs |
 | `crash` | a step that waits 30 s; kill the process mid-step; start again with recovery `off` and `auto` | `off`: run stays `running` (our stale rule handles it). `auto`: Mastra restarts it at boot. Behaviour written down |
 | `cancel <runId>` | `run.cancel()` on a suspended run | status `canceled`, and resume is refused |
+| (all modes) | a counter inside step 1's `execute`, printed each time it runs | proves the paused step runs **again from its first line** on resume (More_on §32) |
+| `bail` | a variant where the resume answer is "no" and the step calls `bail()` | run status `success`, result = the bail payload (so `outcome` is what matters) |
 | `cleanup` | delete every `poc-approval` run | 0 rows left |
 
 **Explain while building:** what's inside a snapshot, where `suspend()` returns to, why the second process can continue, how the claim works (one conditional UPDATE), and why recovery-on-boot is risky for a step that spends money.
@@ -369,7 +374,9 @@ The whole §8 checklist again on a local server, then a restart test (suspend �
 
 ### WF.8: Docs
 
-CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout, §7 API + SSE, §8 data model, §9 gotchas, §13), README, CODE_EXPLAINED (Phase 8 section with line links), PROGRESS (topic 11), walkthrough + roadmap (how it turned out), topic 11 More_on status line, ISSUES.md for anything found. Topic 11 NOTES.md stays Shiv's.
+CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout, §7 API + SSE, §8 data model, §9 gotchas, §13), README (stack table, API, SSE table, decisions, limitations), CODE_EXPLAINED (Phase 8 section with line links), PROGRESS (topic 11 ✅), walkthrough + roadmap (how it turned out), topic 11 README + More_on (status lines, "planned" → what actually happened, a Part 3 like topic 10's), `topics/OVERVIEW.md`, ISSUES.md for anything found. Topic 11 NOTES.md stays Shiv's.
+
+**Already written before the build (2026-11-10, at Shiv's request):** topic 11 [README.md](topics/11-workflows-suspend-resume/README.md) (new), More_on Part 2 (§25–§45, Mastra in depth) + Part 1 refreshed, and "planned on Mastra" notes in PROGRESS, the roadmap, the walkthrough, README, OVERVIEW and CLAUDE.md. WF.8 turns those "planned" notes into "built" ones.
 
 ---
 
@@ -506,11 +513,24 @@ Read from the **published packages' own type definitions and compiled source** (
 **Telemetry**
 - `@mastra/core` sends anonymous events to PostHog (`us.posthog.com`) with OS, Node version and a hashed hostname. It's disabled when `MASTRA_TELEMETRY_DISABLED` is `1`, `true` or `yes` (read in `feature-telemetry-*.cjs`).
 
-**Not yet verified (WF.0/WF.1 will):** whether `WorkflowsPG` creates the `mastra` schema itself; the exact `Mastra` config key for recovery; whether TS 5.9 type-checks its `.d.ts` cleanly under `node10` resolution; memory added at runtime; behaviour on Neon's pooled endpoint; what Mastra's default logger prints.
+**Re-checked 2026-11-10 in the docs bundled inside `@mastra/core` 1.82.0 (`dist/docs/references/*.md`, so they match this exact version):**
+- **Recovery config key:** `new Mastra({ recovery: { workflows: 'auto' | 'off', workflowConcurrency, durableAgents } })`; default `{ durableAgents: 'off', workflows: 'auto', workflowConcurrency: 5 }` (`reference-core-mastra-class.md`). Per workflow: `createWorkflow({ options: { autoRestartActiveRuns: false } })` (`reference-workflows-workflow.md`).
+- **`bail()`:** "The run itself completes with a **success** status and the bail payload as its result" (`reference-workflows-run.md`). `bailed` is listed as a status, but the run reports `success`.
+- **`cancel()`:** works on running and suspended runs; sets `canceled`; "does not wait for running steps to stop"; a running step only stops if it checks `abortSignal`; calling it on a finished run leaves the status unchanged (`reference-workflows-run-methods-cancel.md`).
+- **Resume claim:** "Before it runs anything, `resume()` atomically claims the run by moving its stored status from `suspended` to `running`… throws `WORKFLOW_RESUME_ALREADY_CLAIMED` and executes no steps." Enforced only by adapters with `supportsConcurrentUpdates()`, and skipped if `shouldPersistSnapshot` excludes `running`. Over Mastra's own HTTP server a losing resume is a 409 (`reference-workflows-run-methods-resume.md`).
+- **Resume with only a runId:** `createRun({ runId })` first, then `resume()`; `step` can be omitted when exactly one step is suspended (`docs-workflows-suspend-and-resume.md`).
+- **Resumed step:** the docs' pattern is `if (!resumeData) return await suspend(...)` inside `execute`, i.e. `execute` runs again with `resumeData` set; `suspendData` holds the original suspend payload on resume. WF.1 counts the calls to prove it.
+- **Validation:** `options.validateInputs` validates workflow input and resume data; a failure throws instead of starting/resuming.
+- **Retries:** per step `retries: n`, per workflow `retryConfig: { attempts, delay }` (`docs-workflows-error-handling.md`). The plan uses neither (generateQuiz retries itself).
+- **Snapshot anatomy:** `runId`, `status`, `context` (input + per-step `payload` / `status` / `suspendPayload` / `resumePayload` / `output` / timestamps), `suspendedPaths`, `serializedStepGraph`, `result`, `timestamp` (`docs-workflows-snapshots.md`). The docs call the table `workflow_snapshots`; the Postgres constant is `TABLE_WORKFLOW_SNAPSHOT = "mastra_workflow_snapshot"` (`dist/storage/constants.d.ts`).
+- **License:** Apache-2.0 (`@mastra/core` and `@mastra/pg`).
+
+**Not yet verified (WF.0/WF.1 will):** whether `WorkflowsPG` creates the `mastra` schema itself; whether TS 5.9 type-checks its `.d.ts` cleanly under `node10` resolution; memory added at runtime; behaviour on Neon's pooled endpoint; what Mastra's default logger prints and whether `logger: false` is accepted; what `resume()` does on a finished or cancelled run.
 
 **Sources**
 - [Mastra: Suspend and resume](https://mastra.ai/docs/workflows/suspend-and-resume.md)
 - [Mastra: Snapshots](https://mastra.ai/docs/workflows/snapshots.md)
 - [Mastra: PostgreSQL storage](https://mastra.ai/integrations/databases/postgresql)
 - Mastra docs bundled in `@mastra/pg` 1.35.0: `integrations-databases-neon.md`, `reference-storage-composite.md`
+- Mastra docs bundled in `@mastra/core` 1.82.0 (`dist/docs/references/`): `docs-workflows-overview.md`, `docs-workflows-suspend-and-resume.md`, `docs-workflows-human-in-the-loop.md`, `docs-workflows-snapshots.md`, `docs-workflows-error-handling.md`, `docs-workflows-control-flow.md`, `reference-workflows-run.md`, `reference-workflows-run-methods-resume.md`, `reference-workflows-run-methods-cancel.md`, `reference-workflows-workflow.md`, `reference-core-mastra-class.md`
 - npm registry: `npm view @mastra/core` / `@mastra/pg` (versions, engines, exports, peers); type definitions and compiled source of `@mastra/core@1.82.0` and `@mastra/pg@1.35.0`

@@ -17,7 +17,7 @@ Companion doc to [ai-backend-roadmap.md](../ai-backend-roadmap.md) — the tools
 | Streaming | Server-Sent Events (SSE) | stream chat replies word by word |
 | Job queue *(later)* | BullMQ + Upstash Redis | background PDF ingestion, offline vs online work |
 | Agents / tool calling *(later)* | Gemini function calling | LLM decides when to search vs. answer directly |
-| Workflows *(later)* | hand-rolled state machine, then LangGraph.js | multi-step flows with suspend/resume |
+| Workflows *(planned)* | **Mastra** workflows (`@mastra/core` + `@mastra/pg`), only the workflow engine, inside Express; the hand-rolled state machine and LangGraph.js are kept as concept material | multi-step flows with suspend/resume, state saved in Postgres; see [suspend-resume.md](../suspend-resume.md) |
 | Testing *(later)* | Vitest | mock the LLM boundary, test everything deterministic |
 | Deploy *(later)* | Render (free tier) | API + background worker |
 
@@ -33,7 +33,7 @@ Everything is free — no credit card needed anywhere in this plan.
 - **Structured output** — forcing an LLM to return reliable JSON (Zod-validated), not just prose
 - **Background jobs** — why slow, nobody's-waiting work runs on a queue instead of blocking a request
 - **Agents & tool calling** — letting the LLM decide *when* to call a tool instead of always running the same flow
-- **Suspend/resume workflows** — multi-step flows that pause, save state, and continue on the next message
+- **Suspend/resume workflows** — multi-step flows that pause, save state, and continue on the next message (planned on Mastra: a step calls `suspend()`, a snapshot is saved in Postgres, and the next message calls `resume()`)
 
 ## Progress
 

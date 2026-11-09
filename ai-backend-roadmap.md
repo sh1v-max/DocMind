@@ -254,6 +254,8 @@ This is where your chatbot stops being "always do RAG search" and starts genuine
 - Learn: [LangGraph.js docs](https://langchain-ai.github.io/langgraphjs/) (free, open-source, no cost)
 - Build: reimplement C.2's workflow using LangGraph.js instead of your hand-rolled version, keep both in your repo as `/hand-rolled` and `/langgraph` folders. "I built it from scratch to understand the mechanics, then reimplemented with a framework" is a genuinely strong interview story — it shows you understand what the framework is doing for you, not just how to import it.
 
+- 📝 **Plan change (2026-11-07, nothing built yet):** Phase C will be built on **Mastra workflows** instead of a hand-rolled table plus LangGraph. Mastra is an open-source TypeScript AI framework; only its workflow engine and Postgres storage are used, as a library inside Express. No Mastra agents or tools, and Gemini, the agent, the tools and `quiz.service.ts` all stay. Also changed from C.2's text, because Phase B was built differently: there's no `createQuiz()` tool and no chapters to pick. The workflow is "pick a document if several → confirm → call the existing `generateQuiz()`". It suspends at each question and resumes on the user's next message ("yes", "the second one", "cancel"), found through a small DocMind table keyed by user + chat session. The hand-rolled version stays as concept material ([More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md) Part 1; Part 2 is Mastra). Plan + tracker: [suspend-resume.md](suspend-resume.md). Free-tier check: Mastra is npm packages, and its tables live in the same Neon database (schema `mastra`), so there's no new service and no card needed.
+
 ---
 
 ## Phase D — Testing & Observability (2 days, ~8 hrs)
