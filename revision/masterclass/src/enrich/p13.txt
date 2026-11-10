@@ -1,0 +1,201 @@
+@Q 13.1
+S: The user problem: finding answers inside long PDFs is slow, and generic chatbots don’t know your files and make things up. DocMind indexes your PDFs, answers questions only from them with sources, remembers the conversation, and can quiz you on a document. The engineering goal was to build each part of an AI backend for real: ingestion, vector search, RAG, streaming, structured output, queues, auth and an agent loop, all on free tiers and deployed.
+Q: Who would use it?
+A: Students and professionals who need to study or query their own documents; for me, it’s also a portfolio project showing AI backend skills end to end.
+N: “It’s ChatGPT for PDFs” with nothing about how it works.
+@Q 13.2
+Q: What would you change in the architecture first?
+A: Store originals in object storage, move the worker to its own service, and add a vector index once the data grows.
+N: Describing only the frontend.
+@Q 13.3
+S: Each component maps to a folder: <code>middleware/auth.ts</code> (requireAuth), <code>routes/</code> (thin HTTP), <code>services/</code> (ingestion, chat preparation, router, agent, quiz, LLM and embedding clients), <code>tools/</code> (agent tools with a fixed name→tool map), <code>repositories/</code> (all SQL, userId required), <code>queue/</code> and <code>workers/</code> (BullMQ), <code>schemas/</code> (Zod for quiz, intents, auth). Rules: no SQL outside repositories, no req/res in services.
+Q: Why does the worker run inside the API process?
+A: Render’s free tier has no separate worker service; there’s a standalone entry point (<code>npm run worker</code>) for when it moves out.
+N: “It’s all in index.ts.”
+@Q 13.4
+S: All data calls go through one helper that adds the Bearer token and handles 401s (re-bootstrap a guest or show sign-in). Chat uses POST /chat-stream with a JSON body and reads the SSE stream with fetch + a manual parser (TextDecoder with stream: true, split on blank lines), because EventSource can’t send headers or POST. Unknown SSE event types are ignored, so new backend events don’t break old frontends.
+Q: How does the frontend know a document is ready?
+A: It polls GET /documents every 2 s (10 s after a minute) while anything is processing; uploadFile() resolves only when the document is ready.
+N: “It uses WebSockets.”
+@Q 13.6
+S: The embedding model maps text to 3072-number vectors where similar meaning means a small cosine distance. DocMind uses it in three places: chunk vectors at ingestion, the user message (embedded once and reused for routing and, when the agent’s first search uses the message as-is, for that search), and example phrases per intent for the router. The same model for all three is required for the distances to mean anything.
+Q: What happens if the embedding API is down?
+A: Uploads stay processing and the job retries (then fails with a reason); chat fails at the embed step with an error message.
+N: “It generates the answers.”
+@Q 13.7
+S: Only metadata is persisted for documents (filename, size, text length, chunk count, owner, status, error, created_at); the original PDF bytes are parsed in memory during upload and then discarded. Chunks hold the text and vectors. That kept the free-tier stack simple, at the cost of re-upload for re-processing and no original-page view.
+Q: How would you add originals?
+A: Upload to object storage (presigned URL), store the key on the document row, and let the worker read from storage.
+N: Claiming PDFs are stored in Postgres.
+@Q 13.8
+S: Chunks are rows in <code>chunks</code>: id, document_id, content, embedding vector(3072). They’re created in document order by a 500-word splitter. Ownership and readiness are on the document, so every search joins documents and filters by user and status; deleting a document deletes its chunks (code order: row first, then chunks, since there are no foreign keys).
+Q: What’s missing that you’d add?
+A: chunk_index and page number (for neighbour expansion and citations), a foreign key with cascade, and returning chunk ids from search for evaluation.
+N: “Chunks are stored in Redis.”
+@Q 13.10
+Q: Which challenge taught you the most?
+A: The rate limiter: it showed that “works locally” means nothing behind proxies, and that measuring beats guessing.
+N: “There weren’t real challenges, it went smoothly.”
+@Q 13.11
+S: Order matters: auth first (who), cap before multer (don’t read a file you’ll reject), parse and chunk in the request (fast, needs the bytes), save the row as processing (so the UI can show it and chat can 409), enqueue with jobId = documentId (no double queueing; 503 and row removed if Redis fails), respond 202. The worker does the slow part: embed and store chunks idempotently, then set ready.
+Q: What does the user see during processing?
+A: The document in the sidebar marked “Processing…”, and chat/quiz options enabled only once ready.
+N: “It embeds everything during the upload request.” (That was the design before Phase 6.)
+@Q 13.12
+S: pdf-parse v2 reads the PDF’s text layer page by page; DocMind joins page texts for chunking and checks the per-page texts to decide whether the PDF has any text. Limitations: no OCR (scans rejected), multi-column layouts and tables can come out in imperfect order, and the library adds page markers to joined text (which is why the per-page check exists).
+Q: How would you add OCR?
+A: If a page has no text, send its image to an OCR service or a multimodal model in the worker, and mark such documents as slower to process.
+N: “It uses an LLM to read the PDF.”
+@Q 13.13
+Q: How would you test this?
+A: Fixture PDFs: a normal one, an image-only one (expect 400), a password-protected one, an over-limit one (413), and a truncated/corrupted file (expect a clean error, no stuck row).
+N: “Corrupted PDFs can’t happen.”
+@Q 13.14
+S: <code>chunkText(text, 500)</code> splits on whitespace into words and slices groups of 500, joining with spaces. It ignores paragraphs, headings and sentence boundaries and has no overlap, so a fact near a boundary can be split. It was a deliberate simplest-first baseline (the code comment says strategy trade-offs are a later topic).
+Q: What exact change would you make first?
+A: Paragraph- and sentence-aware packing to ~400 words with ~60 words of overlap, then compare recall on the 9-question set and new boundary questions.
+N: Claiming it uses semantic chunking.
+@Q 13.15
+S: The worker receives chunk texts (not the PDF) in the job, deletes any existing chunks for the document, calls the Gemini embedding endpoint with the API key in a header, and inserts chunks with their vectors; on success it marks the document ready. Retries come from BullMQ’s attempts (3, exponential 5 s → 10 s). Embedding calls count against the provider’s per-minute limits, which is the main scaling constraint.
+Q: Why put chunk texts in the job and not the PDF?
+A: Smaller job payloads in Redis (free-tier command and memory limits) and the expensive parsing already happened in the request.
+N: “Embeddings are generated in the browser.”
+@Q 13.16
+S: The pgvector extension provides the vector(3072) type. Drizzle writes the vector column like any other value; queries use Drizzle’s cosineDistance helper, which renders <code>embedding &lt;=&gt; '[…]'</code>, mapped to a number. Without an index, Postgres computes the distance for each candidate row after the owner/status join filter, which is fine at DocMind’s scale.
+Q: Why no index yet?
+A: Data is small, and pgvector indexes cap vector at 2,000 dimensions; adding one needs halfvec or shorter embeddings, plus care with post-filtering by user.
+N: “Postgres stores them as JSON.”
+@Q 13.18
+Q: What happens if the user deletes the document mid-job?
+A: The delete removes the row first; when the worker tries to mark it ready, 0 rows update, so the worker deletes the chunks it stored: no orphans.
+N: “Failures are just logged.”
+@Q 13.19
+S: Readiness is enforced at several layers so no path can use half-ingested data: the single-document chat path checks status before any Gemini call (409), retrieval and quiz sampling join documents with status = 'ready', and the frontend only offers ready documents. “All documents” chat simply ignores processing ones.
+Q: Why 409 and not 404?
+A: The document exists and belongs to the user; the request conflicts with its current state (not ready yet).
+N: “Yes, it just returns partial results.”
+@Q 13.20
+Q: How would you add a progress percentage?
+A: Store chunks_done/chunk_count on the document, update it from the worker every batch, and show it in the sidebar.
+N: “Status is kept in the frontend only.”
+@Q 13.21
+Q: Why not always use the LLM classifier?
+A: Cost and latency on a 15-requests/minute free tier: the vectors are free (the message is embedded anyway), and the LLM is only needed on close or risky calls.
+N: “It uses keywords like ‘quiz’.”
+@Q 13.22
+S: Routing happens once per message in prepareChat, after embedding and loading history. The router returns an intent, how it was decided (vector or LLM) and the margin. Each intent maps to a code path: smalltalk builds a short prompt with no search; document_question runs the agent loop with tools; quiz_request returns a fixed offer with an action button. If routing fails or is unsure, it defaults to document_question, the safest path.
+Q: Why default to document_question?
+A: A wrong “smalltalk” would answer without searching (risking a hallucination); a wrong “document question” just searches unnecessarily.
+N: “The router picks between several LLM agents.”
+@Q 13.23
+Q: Would multiple agents ever make sense in DocMind?
+A: Possibly a separate quiz agent with a createQuiz tool behind approval (planned as an experiment, Phase 8b), but only if it beats the current button-based flow.
+N: Inventing multiple agents to sound impressive.
+@Q 13.24
+S: Yes, and it effectively is: there is one agent loop. The router exists to avoid running a tool-capable loop for messages that don’t need it (greetings, quiz requests), saving calls on a 15-request/minute free tier and avoiding needless searches. Dropping the router would simplify code at the cost of latency and quota.
+N: “No, multiple agents are required.”
+@Q 13.25
+Q: What does the smalltalk path refuse?
+A: General-knowledge questions, so the app doesn’t become a general chatbot answering without sources.
+N: Vague answers like “the agent handles everything”.
+@Q 13.26
+Q: If you added a second agent, how would they communicate?
+A: Through the orchestrating code (a workflow or a supervisor calling the sub-agent as a tool), passing structured inputs and outputs, not free-form chats between agents.
+N: “They talk to each other through the database.”
+@Q 13.27
+Q: How do you test these paths?
+A: AG.4’s in-process tests faked Gemini’s SSE responses (26/26), including bad arguments and the step limit, with zero API calls.
+N: “If the model returns bad output, the request fails.”
+@Q 13.28
+S: Context = system instruction (grounding and injection rules) + the last 8 messages of this session as real user/model turns + tool declarations + the new message, rebuilt for every request because the API is stateless. Within one agent run, the conversation also grows with each tool call and result. History is loaded per user and session, so a guessed session id returns nothing.
+Q: What’s weak about it?
+A: It counts messages, not tokens, and older context is dropped rather than summarised.
+N: “Gemini remembers the conversation.”
+@Q 13.29
+S: Tools never throw into the loop: unknown names, invalid arguments and exceptions become <code>{ error }</code> results the model can read. The loop is bounded (3 model calls, last without tools), so even repeated failures end with an answer. The saved answer is exactly what was streamed, including a give-up line if steps ran out.
+Q: Would you retry inside the tool?
+A: For transient DB errors, a single quick retry would help; it isn’t implemented yet.
+N: “The whole request crashes.”
+@Q 13.30
+Q: How do you prove it?
+A: The live check used two throwaway guests: neither could see, chat with, quiz or delete the other’s documents.
+N: “The model is told not to access other users’ documents.”
+@Q 13.31
+Q: Why can the model call it more than once?
+A: Multi-part questions and follow-ups may need several focused queries; the description explicitly allows it, and the loop allows up to two rounds of tool calls.
+N: Calling it “searchDoc” and inventing parameters.
+@Q 13.32
+S: listDocuments answers meta-questions chunk search can’t: “which files do I have?”, “how many?”, “is my PDF ready?”. It queries the documents table for the current user and returns filename, status, chunk count and upload date. It has no parameters at all, so there’s nothing for the model to get wrong or abuse.
+Q: Could it leak data?
+A: No: the user id comes from the tool context, and it only returns that user’s rows.
+N: Saying it searches the content.
+@Q 13.33
+S: Inputs are minimal on purpose: the search tool accepts only a query string (trimmed, 1–500 characters), and the list tool accepts nothing. Everything that controls scope (user id, which document or “all”) is fixed by code before the loop starts, so the model can’t widen its access.
+Q: Why not let the model pass a documentId to search one file?
+A: It would help multi-document questions, but must be validated against the session’s allowed documents; it’s one proposed fix for ISSUES #37.
+N: “The model passes userId.”
+@Q 13.34
+S: Each tool has a Zod schema; the loop calls safeParse on the model’s arguments before running anything. Failures become an error result with a readable message, which the model sees and can correct. It’s the same principle as validating a request body: the model is an untrusted client.
+Q: What did the bad-args tests cover?
+A: Missing query, wrong type, too long, unknown tool name; each returned an error result and the loop continued.
+N: “Gemini validates them.”
+@Q 13.35
+Q: Why not return the distance score to the model?
+A: It would tempt the model to over-interpret numbers; filenames and content are what it needs to answer and cite.
+N: Returning raw database rows.
+@Q 13.36
+Q: What should happen if the user has no documents at all?
+A: Document questions in “All documents” mode return 404 with a message before any model call; a quiz request returns a sentence telling them to upload first.
+N: “The model makes up an answer.”
+@Q 13.37
+S: The tool’s JSON result is sent back as a functionResponse turn after the model’s function-call turn (which is resent unchanged, with its thoughtSignature). The next model call reads the results alongside the system instruction, so it answers grounded in them, or searches again. The backend separately collects all returned chunks (deduplicated) as sources and streams them to the UI.
+N: “The tool result is shown to the user directly.”
+@Q 13.38
+S: Gemini can return several functionCall parts in one model turn; DocMind executes each and sends all responses back in the next request. The loop limit counts model calls (max 3, last without tools), so at most two rounds of tool calls can happen, each with possibly several calls.
+Q: Do you execute parallel calls concurrently?
+A: No: <code>streamAgent</code> runs them one after another in a <code>for…of</code> loop (each with its own status event), then sends all results back in one turn. Running independent searches with Promise.all would cut latency; the status events would need reordering.
+N: “Only one tool per turn.”
+@Q 13.39
+Q: Why not let the model call DELETE directly?
+A: Deletion is irreversible; a human click is the approval, and the existing endpoint already has the ownership checks and safe delete order.
+N: A tool that deletes whatever id the model passes.
+@Q 13.40
+Q: What would you log?
+A: Every proposed and confirmed deletion with user id, document id, time and conversation id, for audit and debugging.
+N: “The system prompt will stop misuse.”
+@Q 13.42
+S: The data is relational with ownership everywhere (users, documents, messages), needs transactions and constraints, and pgvector puts the vectors next to it; Neon’s free tier offers managed Postgres with pgvector. It also meant one technology to learn deeply rather than two.
+Q: Any downside you hit?
+A: Neon is in Ohio while Render is in Oregon, adding ~50–70 ms per query (ISSUES #26).
+N: “Because MongoDB doesn’t support AI.”
+@Q 13.43
+S: pgvector lets one SQL statement do the whole retrieval: vector distance ordering, join to documents, filter by owner and status, return filename for citations. No sync between systems, no second bill, transactional deletes, and the same backups. At DocMind’s scale an exact scan is fast enough; HNSW is available when needed.
+Q: What would make you switch?
+A: Very large scale or latency requirements beyond what tuned pgvector delivers, measured.
+N: “It’s the only option.”
+@Q 13.44
+Q: Would you choose a smaller dimension next time?
+A: Probably 768 or 1536 output dimensions if the model supports it, measured on the eval set: smaller storage and an indexable vector column.
+N: “It’s the best model” without evidence.
+@Q 13.45
+N: “Nothing, embeddings are standard.”
+@Q 13.46
+Q: How would you choose a better strategy objectively?
+A: Build a labelled question set (including boundary questions), run recall@k and answer accuracy for 2–3 strategies, pick the best, keep the set for regressions.
+N: Defending it as optimal.
+@Q 13.47
+Q: Which would you do this week if you had one week?
+A: Tests for auth isolation and the agent loop, then timeouts/retries on Gemini calls: they protect everything else.
+N: A list with no priorities.
+@Q 13.48
+Q: Why haven’t you fixed them already?
+A: I prioritised learning each concept end to end and logged everything in a numbered issues file to fix in one pass; I can show the list.
+N: “There’s no technical debt.”
+@Q 13.49
+Q: What would you monitor in production?
+A: Latency per stage, Gemini error rates and 429s, token usage and cost per user, queue depth and job failures, retrieval quality on an eval set, and auth failure rates.
+N: “Deploy it on a bigger server.”
+@Q 13.50
+Q: What would you do in the first hour of such a spike?
+A: Turn on per-user rate limits and a queue/“busy” message for chat, keep uploads queued, and request higher provider quotas; then scale out.
+N: “It would be fine, Node handles concurrency.”

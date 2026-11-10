@@ -1,0 +1,448 @@
+@Q 7.1
+E: A company handbook bot: an employee asks “How many sick days do I get?”; the system retrieves the leave-policy section and the model answers “12 days per year [1]” with a link to the section.
+@Q 7.2
+S: Two problems pushed RAG into the mainstream: models don’t know private or recent information, and retraining them for every document change is slow and expensive. The 2020 RAG paper combined a retriever with a generator so knowledge could live in an updatable index; with modern instruction-following LLMs the pattern became the default way to build “chat with your data”. It also adds traceability: you can show which sources an answer used.
+E: A legal team adds 200 new contracts on Monday; with RAG they’re searchable after ingestion, with no model retraining.
+Q: Would a bigger context window make RAG unnecessary?
+A: Not for large or many-user corpora: you still can’t send everything per request, and cost/latency/attention problems grow with context. Long context and RAG are complementary.
+N: “RAG was introduced to make models faster.”
+@Q 7.3
+S: RAG solves knowledge access: grounding answers in specific, current, permissioned data. It reduces hallucinations by giving the model evidence, enables citations, keeps knowledge updatable (re-index instead of retrain), and enforces access control at retrieval time (each user only retrieves what they may see). It doesn’t teach the model new skills or styles; that’s what fine-tuning or prompting is for.
+E: A per-customer support bot: same model for everyone, different retrieved documents per customer.
+Q: Which problem does RAG not solve?
+A: Reasoning errors, poor writing style, tasks needing the whole corpus at once (global counts, full summaries) and bad source data.
+N: “RAG makes the model smarter.”
+@Q 7.4
+E: Step through the “Complete RAG” animation in lesson 7.A: 15 steps from upload to evaluation.
+Q: Which stage would you invest in first for a new system?
+A: Extraction and chunking quality plus a small eval set; most downstream problems start there.
+N: Describing only “embed the query, search, send to the LLM”.
+@Q 7.5
+S: Ingestion converts raw files into indexed, searchable units with metadata, and tracks the lifecycle: accepted → processing → ready/failed, re-ingest on change, delete on removal. It includes validation (type, size, duplicate detection), storage of the original, extraction, cleaning, chunking, embedding, indexing, and status/progress reporting. It runs asynchronously and must be idempotent because jobs are retried.
+E: Upload a 40-page PDF → 202 → worker extracts 40 pages → 95 chunks → 1 batched embedding call per 64 chunks → rows inserted in one transaction → status ready.
+Q: What should happen when a document is re-uploaded with changes?
+A: Detect by hash, re-run ingestion that replaces the old chunks atomically, and invalidate caches.
+N: “Ingestion is just uploading the file.”
+@Q 7.6
+S: Preprocessing turns messy extracted text into clean, structured text: fixing encoding and Unicode (ligatures, non-breaking spaces), removing boilerplate (headers, footers, page numbers, navigation), rejoining hyphenated line breaks, normalising whitespace, detecting language, converting tables to a consistent format, and keeping structure (heading hierarchy, list items, page numbers) as metadata. Garbage here becomes garbage embeddings.
+C js:
+function clean(text) {
+  return text
+    .normalize('NFKC')                         // "ﬁ" → "fi", full-width → normal
+    .replace(/ /g, ' ')                   // non-breaking spaces
+    .replace(/^Page \d+ of \d+$/gm, '')        // page footers
+    .replace(/-\n(?=[a-z])/g, '')              // "retriev-\nal" → "retrieval"
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+Q: How do you detect repeated headers and footers?
+A: Find lines that appear on most pages at the same position (first/last lines) and drop them.
+N: Skipping cleaning because “the LLM can handle messy text”.
+@Q 7.7
+S: Extraction depends on the format: PDFs contain positioned glyphs, so extractors rebuild words, lines and reading order (multi-column layouts and tables are the hard part); DOCX and HTML have real structure you can keep; images and scanned PDFs need OCR or a vision model. Always check the result: empty or near-empty text means no text layer.
+E: pdf-parse / pdf.js for text PDFs; mammoth for DOCX; a readability extractor for web pages; Tesseract or a cloud OCR/vision model for scans.
+Q: How do you detect a scanned PDF?
+A: Very little extracted text per page relative to page count; check per page, since some libraries add page markers (DocMind’s pdf-parse returned 12 characters for a textless PDF).
+N: “All PDFs contain text.”
+@Q 7.8
+S: Chunking exists for three reasons: models have input limits; one vector per long document averages many topics into a vague point that matches no specific question well; and the LLM should receive only the relevant passages, not whole documents, to keep cost, latency and distraction low. Chunks are also the unit of citation.
+E: A 200-page manual as one vector would be “about the product”; as 400 chunks, “how to reset the device” finds the exact page.
+Q: Could you avoid chunking with a long-context model?
+A: For one short document per question, yes; for many documents or users, retrieval of chunks is still needed.
+N: “Chunking is only needed because of token limits.”
+@Q 7.9
+S: Chunks are sent to the embedding model in batches (fewer requests), with retries and rate limiting; each returned vector is stored with its chunk. Important choices: the same model and settings for queries; optional context prefixes (title/section) to make chunks self-contained; normalisation if the metric expects it; and recording the model version. It’s usually the slowest and most rate-limited part of ingestion.
+E: 95 chunks, batch size 64 → 2 requests; with a 100 requests/min limit, a big backlog must be queued and paced.
+Q: What if one batch fails?
+A: Retry that batch; the job must be idempotent so a full re-run doesn’t duplicate chunks.
+N: Embedding one chunk per request without limits.
+@Q 7.10
+S: Retrieval maps the question to candidate passages: build a search query (rewrite with history), embed it, run nearest-neighbour search with permission and metadata filters, optionally run keyword search and fuse, optionally rerank, apply a relevance threshold, and return the top passages with their metadata. Quality is measured by recall (did we get what’s needed) and precision (how much noise).
+E: “What about annual plans?” → rewrite → “refund policy for annual subscription plans” → 40 vector + 40 keyword candidates → RRF → rerank → top 5.
+Q: What’s the most common silent retrieval bug?
+A: Missing or wrong filters (another tenant’s data, or excluding the right document), because results still look plausible.
+N: “Retrieval is just a vector search.”
+@Q 7.11
+S: Context construction decides what the model actually sees: which chunks (after dedupe), in which order (most relevant first; adjacent chunks of the same document merged in reading order), with which labels (source id, file, section, page), within what token budget (leaving room for history and answer), and wrapped in delimiters that mark them as data. It’s where answer quality and citation accuracy are often won or lost.
+E: <code>&lt;source id="2" file="handbook.pdf" page="14"&gt;…&lt;/source&gt;</code> blocks, with near-duplicate overlap chunks removed.
+Q: Why put the most relevant chunk first?
+A: Models attend best to the beginning and end of the context; important evidence in the middle is more often ignored.
+N: Concatenating raw chunks with no labels or limits.
+@Q 7.12
+S: Generation turns context + question into an answer under instructions: answer only from sources, cite them, follow a format, admit when the answer isn’t present. Settings: low temperature for factual QA, enough max tokens, optionally structured output (answer + citations array). Afterwards: validate citations point to provided sources, stream to the user, save the answer with sources and usage.
+E: “The refund window is 30 days for monthly plans [1]. Annual plans aren’t mentioned in your documents.”
+Q: How can you check citations automatically?
+A: Ask for citations as ids in a structured field, verify each id exists in the provided sources, and optionally verify each cited sentence with a judge.
+N: “Generation is the same as without RAG.”
+@Q 7.13
+E: Fine-tune: teach the model your support tone and ticket-classification labels. RAG: answer from this week’s release notes. Both: a fine-tuned model that also retrieves documents.
+N: “Fine-tuning is the better way to add knowledge.”
+@Q 7.14
+S: Hallucinations remain because generation is still probabilistic text prediction: the retrieved text may be irrelevant or incomplete (retrieval miss), the model may blend its prior knowledge with the sources, misread numbers or negations, over-generalise from a similar case, or answer when it should say “not found”. Long or noisy contexts make this worse. RAG reduces the rate; grounding prompts, citations, verification and evaluation reduce it further.
+E: Sources mention the 2023 revenue; the user asks about 2024; the model “answers” with 2023’s number.
+Q: How do you measure the rate?
+A: Faithfulness scoring on an eval set (claims supported by context), including unanswerable questions.
+N: “With RAG the model can only say what’s in the documents.”
+@Q 7.15
+E: “How many contracts mention arbitration?” needs counting across all documents; top-k retrieval can’t answer it, but a SQL query over extracted metadata can.
+Q: How do you handle aggregate questions then?
+A: Route them to structured queries (text-to-SQL over extracted fields, or precomputed metadata), or to map-reduce over documents, instead of plain RAG.
+N: “RAG has no real limitations.”
+@Q 7.16
+S: Chunking defines the retrievable units of your corpus. Each chunk should be self-contained enough to answer a question on its own, small enough to be specific, and labelled with where it came from. The strategy depends on content type (prose, tables, code, Q&amp;A pairs) and question type (fact lookup vs explanation).
+E: An FAQ page: one chunk per question-answer pair. A novel: paragraph-sized chunks with overlap.
+Q: Does the chunk you embed have to be the chunk you send to the LLM?
+A: No: parent-child retrieval embeds small chunks and sends larger parents.
+N: “Chunking is just splitting every N characters.”
+@Q 7.17
+S: Fixed-size chunking cuts every N units (characters, words or tokens), often with overlap. It’s fast, deterministic, gives uniform chunk sizes (predictable prompt size) and is a good baseline. Its weakness: boundaries ignore meaning, so sentences, tables and key facts get split.
+E: 512-token chunks with 64-token overlap is a common starting point.
+Q: Characters, words or tokens?
+A: Tokens match model limits and costs best; words are a fine approximation; characters split words.
+N: “Fixed-size chunking is always bad.” It’s a reasonable baseline.
+@Q 7.18
+S: Recursive splitting tries separators from most to least meaningful: blank lines (paragraphs), newlines, sentence ends, spaces, and finally characters. A piece that fits is kept whole; only oversized pieces are split further with the next separator. Then small pieces are merged up to the size limit. Result: chunks rarely break mid-sentence and respect paragraphs when possible.
+E: Run <code>recursiveSplit()</code> in the chunking lesson mentally on a 3-paragraph text with a 1,200-character limit: paragraphs stay together unless one is too long.
+Q: Does it understand meaning?
+A: No, it only respects formatting boundaries; semantic chunking uses embeddings for meaning.
+N: Confusing it with semantic chunking.
+@Q 7.19
+S: Semantic chunking embeds each sentence (or small window), computes similarity between consecutive ones, and places boundaries where similarity drops sharply (a topic shift), often with min/max size limits. Chunks then align with topics instead of arbitrary lengths.
+E: An article that moves from “pricing” to “security” gets a boundary exactly at the shift even if paragraphs are uneven.
+N: “Semantic chunking always beats other methods.”
+@Q 7.20
+S: Structure-aware chunking uses the document’s own organisation: headings and sections in Markdown/HTML/DOCX, numbered clauses in contracts, slides in decks, functions in code, rows in tables. Each chunk carries its heading path (“Billing › Refunds › Annual plans”), which both improves embedding (context) and lets the UI cite precisely. Oversized sections are split further with a recursive splitter.
+E: A Markdown docs site: split at ## headings, prepend “Page title › Section” to each chunk.
+Q: What if the PDF has no reliable structure?
+A: Fall back to recursive splitting; layout-aware parsers or vision models can sometimes recover headings.
+N: Ignoring headings and losing context.
+@Q 7.21
+S: With overlap, consecutive chunks share some text (e.g. the last 50 words of chunk 1 start chunk 2). A fact near a boundary then appears complete in at least one chunk. Costs: more storage and embedding calls (roughly overlap/size extra), and near-duplicate results that waste top-k slots unless deduplicated.
+E: Size 400, overlap 60: about 15% more chunks.
+Q: How much overlap?
+A: Commonly 10–20% of chunk size; measure on boundary-heavy questions.
+N: “More overlap is always better.”
+@Q 7.22
+E: Measured comparison on a 60-question set: 256 tokens → recall@5 0.71; 512 → 0.83; 1024 → 0.78 (illustrative numbers). Pick 512 and re-test after other changes.
+Q: Should all document types share one chunk size?
+A: Not necessarily: FAQs, contracts, code and narrative text often need different strategies.
+N: “There’s a universally correct chunk size.”
+@Q 7.23
+S: Tiny chunks (a sentence or two) lose their subject and context: “It increased by 15%” doesn’t say what “it” is, so the embedding is vague, keyword search can’t match the subject, and the LLM gets fragments. You also need many more chunks per question to cover an answer, and indexes get larger.
+E: Chunk: “approximately $10 million, representing 15% growth” never mentions revenue or 2023, so “2023 revenue” doesn’t retrieve it.
+Q: Fix without making chunks bigger?
+A: Contextual prefixes (title/section) or neighbour/parent expansion.
+N: “Smaller chunks are always more precise.”
+@Q 7.24
+S: Large chunks mix several topics, so their single vector is an average that matches specific questions weakly (lower precision); they consume the prompt budget so fewer distinct sources fit; and the relevant sentence is buried, so the LLM may miss it. They also exceed embedding input limits if too big (text beyond the limit is truncated or rejected).
+E: A 3,000-token chunk covering billing, security and SLA ranks mediocre for all three topics.
+Q: When are large chunks acceptable?
+A: For narrative content where answers need surrounding reasoning, especially combined with reranking.
+N: “Bigger chunks give the LLM more context, so they’re better.”
+@Q 7.25
+S: Yes: subject and value across a boundary (“revenue was … / … $10M”), a table split from its header, a definition split from the term, a condition split from its exception (“Refunds are allowed … / … except for annual plans”). The last is dangerous: the model can answer confidently from half a rule.
+E: Try sizes 18–22 words with 0 overlap in the chunking lab and watch the revenue sentence split.
+Q: How do you find such splits in your data?
+A: Include boundary questions in the eval set and inspect retrieved chunks for failures.
+N: “Embeddings understand the missing half anyway.”
+@Q 7.27
+E: A pricing table split into chunks of one row each: “Pro | ₹999 | 5 users” is meaningless without the header; “Plan: Pro. Price: ₹999 per month. Users: 5.” is self-contained.
+Q: What about very large tables?
+A: Group rows into chunks that repeat the header, and consider extracting them into a real SQL table for exact queries.
+N: Flattening tables into running text.
+@Q 7.28
+E: A repository assistant: chunk <code>src/services/chat.service.ts</code> per exported function, with metadata <code>{ file, symbol: 'prepareChat', lines: '120-210' }</code>, and prepend the file path to the embedded text.
+Q: Why hybrid search for code?
+A: Identifiers like <code>prepareChat</code> or error strings must match exactly; embeddings help with “where do we handle retries?”.
+N: Splitting code every N characters.
+@Q 7.29
+E: A product manual with wiring diagrams: OCR any labels, generate a caption (“Diagram: connecting the sensor to port A”), index the caption with page number, and show the page image next to the answer.
+Q: Multimodal embeddings or captions?
+A: Captions are simpler and work with text search; multimodal embeddings help when users search for visual content directly.
+N: Ignoring images, losing information only present in diagrams.
+@Q 7.30
+S: Metadata is attached at chunk creation and travels with every chunk: document id and filename (citation, deletion), owner/tenant/ACL (permissions), page and heading path (citation, context), chunk index (neighbour expansion, ordering), created/updated dates (freshness filters), language, document type, and the embedding model version. Keep it in typed columns for filtering, or JSONB for flexible fields.
+E: “Only search documents from 2024 in the HR folder” becomes a WHERE clause instead of hoping similarity handles it.
+Q: Should metadata be embedded too?
+A: Short contextual metadata (title/section) in the embedded text helps; filters should be real columns.
+N: Only storing text and vectors.
+@Q 7.31
+S: Semantic search ranks documents by similarity of embeddings, capturing synonyms, paraphrases and even cross-language matches. It’s strong for natural-language questions and weak for exact identifiers, rare names and precise numbers.
+E: “laptop won’t turn on” finds “device fails to power up”.
+Q: What’s a dense vs sparse retriever?
+A: Dense = embedding vectors (semantic); sparse = term-based vectors like BM25 or learned sparse models (SPLADE).
+N: “Semantic search understands everything keyword search does.”
+@Q 7.32
+S: Keyword search indexes terms (after tokenising, lowercasing, stemming, removing stop words) in an inverted index: term → list of documents containing it. A query looks up its terms and ranks matches by statistics such as term frequency, document frequency and length (BM25). It’s fast, explainable, exact, and supports phrase and boolean queries.
+E: Postgres: <code>to_tsvector('english', content) @@ websearch_to_tsquery('english', 'error E1234')</code> ranked by <code>ts_rank_cd</code>.
+Q: What does stemming do?
+A: Reduces words to a root (“running” → “run”) so variants match.
+N: “Keyword search is obsolete.”
+@Q 7.33
+S: Hybrid search runs a lexical retriever and a semantic retriever over the same corpus with the same filters, then merges their ranked lists (RRF or weighted score fusion). Results that both retrievers like rise to the top; each covers cases the other misses.
+E: See the RRF lab and <code>retrieve()</code> in the RAG implementation lesson.
+Q: Does hybrid search double latency?
+A: Run both queries in parallel (or in one SQL statement); the added time is usually small compared with the LLM call.
+N: “Hybrid means using two embedding models.”
+@Q 7.35
+H: For each query term t in document d: score += IDF(t) × tf·(k1+1) / (tf + k1·(1 − b + b·|d|/avgdl)). tf = how often t occurs in d; IDF(t) ≈ log(1 + (N − n_t + 0.5)/(n_t + 0.5)) where n_t = documents containing t; k1 ≈ 1.2 controls saturation; b ≈ 0.75 controls length normalisation.
+E: In 10,000 support articles, “the” appears everywhere (IDF ≈ 0, adds nothing); “E1234” appears in 3 (high IDF): a chunk mentioning E1234 twice beats one mentioning “timeout” ten times.
+Q: Is Postgres ts_rank BM25?
+A: No, it’s a different ranking without corpus-wide IDF; extensions like pg_search (ParadeDB) or engines like Elasticsearch provide BM25.
+N: “BM25 is a neural model.”
+@Q 7.36
+S: Steps: (1) run both retrievers with identical permission filters, retrieving more than you need (e.g. 40 each); (2) fuse: RRF by rank (robust, no tuning) or normalised weighted scores (tunable, e.g. 0.7 vector + 0.3 keyword); (3) deduplicate; (4) optionally rerank the fused top 30–50; (5) keep top-k. Tune k values and weights on an eval set.
+N: Adding raw BM25 and cosine scores together.
+@Q 7.37
+H: score(d) = Σ over retrievers 1 / (k + rank_r(d)), with k ≈ 60 and ranks starting at 1; documents missing from a list get nothing from it. Example with k = 60: rank 1 in both lists → 2/61 ≈ 0.0328; rank 1 in one list only → 1/61 ≈ 0.0164; rank 3 and rank 5 → 1/63 + 1/65 ≈ 0.0313.
+E: Move the k slider in the RRF lab: small k favours top-ranked items strongly; large k flattens the differences.
+Q: Why k = 60?
+A: It was the value used in the original RRF paper and works well across tasks; it reduces the dominance of the very top rank.
+N: “RRF needs scores to be normalised first.”
+@Q 7.38
+S: Reranking is a second-stage model that scores (query, candidate) pairs more precisely than the first-stage retriever and reorders them. Options: cross-encoder rerankers (hosted APIs or open models), LLM-as-reranker (ask a model to score or order passages; slower and costlier), or heuristics (recency, source authority). It’s applied to tens of candidates, not the whole corpus.
+E: Retrieve 50 → rerank → keep 5; recall stays high and the 5 sent to the LLM are much more relevant.
+Q: Where does reranking add latency?
+A: One model pass per candidate (often batched): typically 100–500 ms for 50 short passages on a hosted reranker.
+N: “Reranking means sorting by date.”
+@Q 7.39
+E: Query “Can I cancel an annual plan and get a refund?”; vector search ranks a generic “cancel your subscription” page first; the reranker, reading both together, promotes the “Annual plan refunds” section that actually answers.
+Q: Is reranking worth it for small corpora?
+A: Often yes for quality, since it’s cheap at small candidate counts; measure with your eval set.
+N: “Vector search already gives perfect ranking.”
+@Q 7.40
+S: A cross-encoder concatenates query and passage into one input ([CLS] query [SEP] passage), runs a transformer over both together so every query token can attend to every passage token, and outputs a single relevance score. This joint reading captures fine-grained matches (negations, specific conditions) that independent embeddings miss. It can’t precompute anything per document, so it’s used only to rerank shortlists.
+E: Popular open rerankers include the bge-reranker family; hosted ones include Cohere Rerank and Voyage rerankers.
+Q: Can a cross-encoder be used for first-stage retrieval?
+A: Not at scale: it would need one model pass per document per query.
+N: “A cross-encoder produces embeddings.”
+@Q 7.41
+S: A bi-encoder (two-tower model) encodes query and document separately into vectors with the same (or paired) encoder, and relevance is the similarity of the vectors. Since document vectors are computed once at ingestion, a query needs only one encoder pass plus an index lookup: that’s why it powers first-stage retrieval over millions of items.
+E: Every embedding model used for vector search is a bi-encoder.
+Q: What’s the cost of separate encoding?
+A: The query and document never interact inside the model, so subtle relevance (exceptions, negation) is captured less well.
+N: “Bi-encoder means two languages.”
+@Q 7.42
+E: Pipeline: bi-encoder retrieves 50 from 2M chunks in ~20 ms; cross-encoder reranks the 50 in ~200 ms; LLM reads the top 5.
+Q: Is there something in between?
+A: Late-interaction models (ColBERT) store per-token vectors and compare them at query time: more precise than bi-encoders, cheaper than cross-encoders, but larger indexes.
+N: “They’re the same thing with different names.”
+@Q 7.43
+S: Metadata filtering restricts candidates with exact conditions on structured fields: permissions (user, tenant, ACL), scope (selected documents, folder), recency (date ranges), type and language. Permission filters are mandatory and enforced in code; relevance filters can come from the user’s UI selections or from query understanding (“policies from 2024”).
+E: <code>WHERE d.user_id = $1 AND d.id = ANY($2) AND d.created_at &gt;= '2024-01-01'</code> combined with ORDER BY distance.
+Q: Can the LLM choose filters?
+A: It can propose relevance filters (e.g. a date range parsed from the question) that you validate; never permission filters.
+N: “Filtering is optional.”
+@Q 7.44
+S: Query expansion adds alternative terms so retrieval matches documents phrased differently: synonyms (“refund” → “reimbursement, money back”), expanded acronyms (“SLA” → “service level agreement”), spelling variants, or LLM-generated related phrasings. It mainly helps keyword search (vocabulary mismatch) and can help vector search for very short queries. Over-expansion adds noise, so keep it small and measure.
+E: “PTO policy” → “paid time off, leave policy, vacation days”.
+Q: How do you prevent expansion drifting off-topic?
+A: Limit to a few terms, weight the original query higher, and evaluate recall/precision with and without it.
+N: “Expansion always improves results.”
+@Q 7.45
+S: An LLM rewrites the user question into several queries (paraphrases, or sub-questions for multi-part questions); each is retrieved separately; results are fused (RRF) and deduplicated. This raises recall for ambiguous or compound questions at the cost of extra LLM and search calls.
+C js:
+async function multiQueryRetrieve(userId, question) {
+  const { data } = await chat({ temperature: 0.3, schema: z.object({ queries: z.array(z.string()).min(1).max(4) }), messages: [
+    { role: 'system', content: 'Write up to 4 search queries that together cover the question. One per sub-question or phrasing.' },
+    { role: 'user', content: question } ] });
+  const lists = await Promise.all([question, ...data.queries].map((q) => retrieve({ userId, query: q, k: 20 })));
+  const scores = new Map();
+  for (const list of lists) list.forEach((hit, i) => scores.set(hit.id, { hit, s: (scores.get(hit.id)?.s ?? 0) + 1 / (60 + i + 1) }));
+  return [...scores.values()].sort((a, b) => b.s - a.s).slice(0, 6).map((x) => x.hit);
+}
+Q: When is it not worth it?
+A: For short, specific questions where single-query retrieval already has high recall; it adds a model call to every request.
+N: “Multi-query means asking the user several questions.”
+@Q 7.46
+S: Small “child” chunks (a few sentences) are embedded and searched for precise matching; each points to a larger “parent” (section or page) that’s returned to the LLM. You get precise retrieval and enough surrounding context. Variants: sentence-window retrieval (embed sentences, return ±N sentences) and auto-merging (if several children of one parent match, return the parent).
+E: SQL for parent-child in the lesson “Query transformation, parent-child and contextual retrieval”.
+Q: What’s the cost?
+A: More rows to embed and store (children), and parents can make prompts larger; cap parents per answer.
+N: “Parent-child means documents and chunks.”
+@Q 7.47
+S: Many chunks only make sense in context (“The company” = which company? “this plan” = which plan?). Contextual retrieval prepends a short description of the chunk’s place in its document to the text before embedding and keyword indexing: at minimum the title and section path, or an LLM-generated 1–2 sentence context per chunk (more expensive at ingestion, cheaper with prompt caching of the document). Retrieval then matches questions that mention the missing subject.
+C js:
+// cheap version: deterministic context header
+const textToEmbed = (doc, chunk) => `${doc.title} › ${chunk.headingPath.join(' › ')}\n\n${chunk.content}`;
+// richer version: one short LLM call per chunk (cache the document prefix where the provider supports it)
+const contextFor = (docText, chunk) => chat({ temperature: 0, maxTokens: 80, messages: [
+  { role: 'system', content: 'In one sentence, say what this chunk is about within the document, naming its subject.' },
+  { role: 'user', content: `<document>${docText}</document>\n<chunk>${chunk.content}</chunk>` } ] });
+Q: Do you show the context header to the user?
+A: Usually not; it’s for search. Keep the original chunk text for display and citation.
+N: “Contextual retrieval means using conversation history.”
+@Q 7.48
+E: “What’s the limit?” in a chat about API pricing: rewrite with history → “API rate limit for the Pro plan”; if history doesn’t disambiguate, ask “Do you mean the request rate limit or the storage limit?”.
+C js:
+// diversity with MMR: avoid five near-identical chunks for an ambiguous query
+function mmr(queryVec, candidates, k = 5, lambda = 0.7) {
+  const picked = [];
+  while (picked.length < k && candidates.length) {
+    let best, bestScore = -Infinity;
+    for (const c of candidates) {
+      const rel = cosine(queryVec, c.embedding);
+      const red = picked.length ? Math.max(...picked.map((p) => cosine(c.embedding, p.embedding))) : 0;
+      const score = lambda * rel - (1 - lambda) * red;          // relevant but not redundant
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    picked.push(best); candidates = candidates.filter((c) => c !== best);
+  }
+  return picked;
+}
+Q: What is MMR?
+A: Maximal marginal relevance: picks results that are relevant to the query but dissimilar to ones already picked, covering several interpretations.
+N: “Just increase k.”
+@Q 7.49
+E: A weekly eval job: 80 questions → recall@5 0.86, MRR 0.71, faithfulness 0.93, answer correctness 0.82, p95 latency 3.1 s, $0.004/question; compared with last week’s run before merging changes.
+Q: Who labels the data?
+A: Domain experts or the team for a starter set; then add real failing questions from production with their correct sources.
+N: “Ask a few questions manually and see if answers look right.”
+@Q 7.50
+S: Precision@k = (relevant items in the top k) / k. It tells you how much noise you send to the LLM. With few relevant chunks per question, precision@k is capped (2 relevant chunks → at most 0.4 precision@5), so interpret it together with recall.
+E: Top 5 contains 2 relevant chunks → 0.4.
+Q: Why might you accept low precision?
+A: If a reranker or the LLM can ignore noise, recall matters more; but noise costs tokens and can mislead.
+N: Confusing precision with accuracy of the final answer.
+@Q 7.51
+S: Recall@k = (relevant items retrieved in the top k) / (total relevant items). For RAG it’s the ceiling on answer quality: information not retrieved can’t be used (unless the model knows it, which is what we don’t want to rely on).
+E: 2 relevant chunks exist, 1 is in the top 5 → recall@5 = 0.5.
+Q: How do you raise recall?
+A: Hybrid search, query rewriting/multi-query, better chunking, larger candidate sets with reranking.
+N: “Recall is the share of results that are relevant.” That’s precision.
+@Q 7.52
+S: Reciprocal rank for one query = 1 / position of the first relevant result (0 if none in the list). MRR averages it over all queries. It focuses on how quickly the first good result appears, which suits cases where one relevant chunk is enough.
+E: First relevant at rank 1, 2, and not found for three queries → (1 + 0.5 + 0) / 3 = 0.5.
+Q: When is MRR misleading?
+A: When answers need several chunks: MRR ignores everything after the first hit.
+N: “MRR measures the average rank.”
+@Q 7.53
+S: DCG sums each result’s relevance gain divided by log2(position + 1), so lower positions count less; NDCG divides by the best possible DCG for that query (ideal ordering), giving 0–1 comparable across queries. It supports graded relevance (0, 1, 2, 3 for not/partly/very relevant).
+E: The worked example in lesson 7.D: relevant at positions 2 and 4 → NDCG@5 = 0.65 (verified by running the code).
+Q: Why the logarithm?
+A: It models users (and models) paying less attention further down, without making position 10 worthless.
+N: “NDCG is only for web search.”
+@Q 7.54
+H: Typical computation: (1) split the answer into atomic claims with an LLM; (2) for each claim, ask a judge model (or NLI model) whether the provided context supports it; (3) faithfulness = supported claims / total claims.
+E: Answer with 4 claims, 3 supported by the sources → 0.75.
+Q: Can a faithful answer be wrong?
+A: Yes, if the source itself is wrong or outdated; faithfulness measures grounding, not truth.
+N: “Faithfulness = the answer is correct.”
+@Q 7.55
+S: Answer relevancy checks whether the response addresses the user’s actual question, regardless of correctness: an answer about monthly refunds to a question about annual refunds is irrelevant even if faithful. Common methods: an LLM judge scoring relevance, or generating questions from the answer and measuring their similarity to the original question.
+E: Q: “Can I get a refund on an annual plan?” A: “Monthly plans can be refunded within 30 days.” → faithful, low relevancy.
+Q: What lowers relevancy most often?
+A: Retrieval of near-topic chunks and vague questions; the model answers what the context covers instead of what was asked.
+N: Treating relevancy and faithfulness as the same.
+@Q 7.56
+S: Context precision (as in RAGAS-style metrics) asks: of the retrieved chunks, how many are actually useful for answering, and are the useful ones ranked near the top? It’s a rank-aware precision of the context, typically judged by an LLM against the question and reference answer.
+E: Retrieved [useful, junk, useful, junk, junk] scores lower than [useful, useful, junk, junk, junk].
+Q: How do you improve it?
+A: Reranking, relevance thresholds, fewer chunks, better filters.
+N: “It measures how precise the answer is.”
+@Q 7.57
+S: Context recall asks whether the retrieved context contains everything needed for the reference answer: split the reference into statements and check each is attributable to some retrieved chunk. It measures retrieval completeness from the answer’s perspective, useful when you don’t have chunk-level relevance labels.
+E: Reference answer has 3 facts, the context supports 2 → 0.67.
+Q: What does low context recall with high faithfulness tell you?
+A: The model stayed grounded but couldn’t answer fully because retrieval missed information.
+N: “Context recall measures the model’s memory.”
+@Q 7.58
+S: Retrieval quality measures the search component (did we fetch the right evidence: recall, precision, MRR, NDCG, context precision/recall). Generation quality measures the model’s use of that evidence (faithfulness, answer relevancy, correctness, citation accuracy, format). Measuring both locates failures: bad retrieval + good generation → fix search; good retrieval + bad generation → fix prompt/model/context construction.
+E: The 2×2: retrieval ok/bad × answer ok/bad; the “retrieval ok, answer bad” cell is Scenario B below.
+Q: Can generation compensate for poor retrieval?
+A: Only by using prior knowledge, which is exactly the unfaithful behaviour you want to avoid.
+N: Measuring only end answers.
+@Q 7.59
+C json:
+[
+  { "id": "q17", "question": "What is the refund window for annual plans?",
+    "relevant_chunks": ["policy.pdf#12", "policy.pdf#13"],
+    "reference_answer": "14 days from purchase for annual plans.",
+    "type": "lookup" },
+  { "id": "q18", "question": "Who is our auditor?", "relevant_chunks": [],
+    "reference_answer": "Not in the documents.", "type": "unanswerable" }
+]
+Q: How many questions do you need?
+A: Start with 30–50 covering each question type; grow to a few hundred from production failures. Consistency over time matters more than size.
+N: Using only easy questions written by the same person who wrote the prompt.
+@Q 7.60
+C js:
+// claim-level grounding check with a judge model
+const Verdicts = z.object({ claims: z.array(z.object({ claim: z.string(), supported: z.boolean(), sourceId: z.number().nullable() })) });
+async function checkFaithfulness(answer, sources) {
+  const { data } = await chat({ temperature: 0, schema: Verdicts, messages: [
+    { role: 'system', content: 'Split the answer into factual claims. For each, say if the sources support it and which source id. Be strict.' },
+    { role: 'user', content: `Sources:\n${sources.map((s, i) => `[${i + 1}] ${s.content}`).join('\n')}\n\nAnswer:\n${answer}` } ] });
+  const supported = data.claims.filter((c) => c.supported).length;
+  return { score: data.claims.length ? supported / data.claims.length : 1, unsupported: data.claims.filter((c) => !c.supported) };
+}
+Q: Should this run on every production answer?
+A: Sometimes for high-risk domains (block or flag low scores); otherwise on samples and on the eval set, because it adds cost and latency.
+N: “Hallucinations can only be detected by humans.”
+@Q 7.61
+E: “Who is our auditor?” with no matching chunk above a 0.35 similarity floor → “I couldn’t find that in your documents. Try uploading the annual report, or rephrase.”
+Q: How do you stop the model from answering from general knowledge anyway?
+A: Explicit instruction + a fixed fallback sentence, no retrieved context when nothing passes the threshold, and eval questions that check this behaviour.
+N: Letting the model answer from training data without saying so.
+@SCN Scenario: one answer split
+Y: Answers about values and numbers are vague or say “not found”, though the document contains them; retrieved chunks contain the subject but not the value (or vice versa).
+U: Fixed-size chunking without overlap cutting sentences; chunks too small to carry their subject; no neighbour or parent expansion.
+I: Find the document text containing the answer, look at the chunk boundaries around it, and check which half was retrieved for the failing question.
+F: Sentence/paragraph-aware chunking with 10–20% overlap; contextual headers; neighbour expansion or parent-child retrieval; add boundary questions to the eval set.
+G js:
+// neighbour expansion: fetch chunk_index ± 1 for each hit and merge per document in order
+async function withNeighbours(hits) {
+  const keys = hits.flatMap((h) => [h.chunk_index - 1, h.chunk_index, h.chunk_index + 1].map((i) => [h.document_id, i]));
+  const { rows } = await pool.query(
+    `SELECT document_id, chunk_index, content FROM chunks
+     WHERE (document_id, chunk_index) IN (SELECT * FROM unnest($1::uuid[], $2::int[]))
+     ORDER BY document_id, chunk_index`, [keys.map((k) => k[0]), keys.map((k) => k[1])]);
+  return rows;
+}
+@SCN Scenario A: irrelevant results
+Y: Answers say “not found” or are off-topic; users report the bot “doesn’t know” things that are in the docs; retrieved sources look loosely related.
+U: Raw follow-up queries; missing documents (failed ingestion, scans); poor chunks; wrong filters; model mismatch; exact-term queries; ANN post-filtering.
+I: For a failing question, locate the correct chunk with ILIKE; compute its distance and rank with exact search, with and without filters; log the exact embedded query; compare embedding model versions.
+F: Fix the broken link: rewrite queries, re-ingest failed docs, rechunk, fix filters or ANN settings; then add hybrid search and reranking where ranks are close; track recall@k.
+G sql:
+-- where does the right chunk rank for this query (exact, no index), and is it filtered out?
+SELECT c.id, rank() OVER (ORDER BY c.embedding <=> $1) AS r, d.user_id = $2 AS visible, d.status
+FROM chunks c JOIN documents d ON d.id = c.document_id
+ORDER BY c.embedding <=> $1 LIMIT 100;
+@SCN Scenario B: correct context
+Y: Retrieved sources contain the answer but the response is wrong, incomplete or contradicts the sources; citations point to the right chunk with a wrong claim.
+U: Weak or conflicting instructions; context too long or noisy; important chunk in the middle; history overriding context; high temperature; a weak model for the task; numbers/negations misread.
+I: Log the exact final prompt; reproduce with temperature 0; reduce the context to the single relevant chunk and see if the answer becomes correct; try another model.
+F: Strict grounding instructions with mandatory citations and a not-found path; fewer, reranked chunks with the best first; lower temperature; a faithfulness check; a stronger model for answering.
+G js:
+const system = [
+  'Answer ONLY using the sources. Every sentence must end with citations like [1].',
+  'If the sources disagree, say so and cite both. If they do not contain the answer, say: "I couldn\'t find that in your documents."',
+  'Quote numbers exactly as written in the sources.',
+].join('\n');
+@SCN Scenario C: cross-document
+Y: Answers to comparison or multi-document questions cite only one document, or miss facts from the others.
+U: One global top-k dominated by the most similar document; a single query that matches one document’s wording; no per-document scope.
+I: Look at the distribution of retrieved chunks per document for these questions; check whether the missing documents rank in the top 50.
+F: Decompose into per-document or per-entity sub-queries, per-document quotas or MMR, grouped and labelled context, and a check that each required document is cited.
+G sql:
+-- top 2 chunks per selected document, then merge
+SELECT * FROM (
+  SELECT c.*, row_number() OVER (PARTITION BY c.document_id ORDER BY c.embedding <=> $1) AS rn
+  FROM chunks c JOIN documents d ON d.id = c.document_id
+  WHERE d.user_id = $2 AND d.id = ANY($3)
+) t WHERE rn <= 2;
+@SCN Scenario D: a 2,000-page PDF
+Y: Upload requests time out or crash the instance (out of memory); documents stay “processing” for hours; partial indexes after failures.
+U: Synchronous processing in the request; whole-file buffering; one giant job with no checkpoints; rate limits on embeddings; no progress tracking.
+I: Check memory and request duration metrics, job logs per stage, queue depth, embedding 429s, and which page range failed.
+F: Direct-to-storage upload, 202 + background jobs per page range, streaming/page-wise extraction, batched rate-limited embedding, idempotent per-range writes, progress counters, retries per range and a clear partial-failure state.
+G js:
+// fan out page-range jobs; each is idempotent by (documentId, from)
+const RANGE = 50;
+for (let from = 1; from <= pageCount; from += RANGE) {
+  await queue.add('ingest-range', { documentId, from, to: Math.min(from + RANGE - 1, pageCount) },
+    { jobId: `${documentId}:${from}`, attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
+}
+await pool.query('UPDATE documents SET pages_total = $2, pages_done = 0 WHERE id = $1', [documentId, pageCount]);

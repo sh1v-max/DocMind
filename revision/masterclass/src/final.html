@@ -1,0 +1,102 @@
+<div class="phase-h"><div class="eyebrow">Final assessment</div><h1>Whole-curriculum assessment</h1>
+<p class="prose" style="margin:0;color:var(--muted)">Part 1: 40 multiple-choice questions in 10 areas (score each area separately). Part 2: 11 open questions you answer out loud or on paper before revealing the model answer, then rate yourself. Take it without notes, in one sitting (~75 minutes). Anything below 80% in an area points to the phase to redo.</p></div>
+
+<h2 class="sec"><span class="k">A</span>JavaScript and Node.js · redo Phase 2</h2>
+<x-quiz id="final-js">
+<x-mcq a="2"><x-t>Output: <code>console.log(1); setTimeout(()=>console.log(2)); queueMicrotask(()=>console.log(3)); console.log(4);</code></x-t><x-o>1 2 3 4</x-o><x-o>1 4 2 3</x-o><x-o>1 4 3 2</x-o><x-o>1 3 4 2</x-o><x-why>Sync, then microtasks, then timers.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Inside an async function, code after <code>await x</code> runs…</x-t><x-o>as a microtask after x settles</x-o><x-o>immediately</x-o><x-o>in the timers phase</x-o><x-o>on another thread</x-o><x-why>Continuations are microtasks.</x-why></x-mcq>
+<x-mcq a="3"><x-t>You must embed 500 chunks with a provider limit of 100/min. Best approach?</x-t><x-o>Promise.all on all 500</x-o><x-o>A for loop with no await</x-o><x-o>Promise.race</x-o><x-o>A concurrency-limited pool plus a rate limiter and retries on 429</x-o><x-why>Bound concurrency and rate.</x-why></x-mcq>
+<x-mcq a="1"><x-t>Which work uses libuv’s thread pool?</x-t><x-o>TCP sockets</x-o><x-o>fs.readFile and async crypto like pbkdf2</x-o><x-o>setTimeout</x-o><x-o>Promise.then</x-o><x-why>File system, DNS lookup, some crypto, zlib.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">B</span>Express, HTTP and security · redo Phase 3</h2>
+<x-quiz id="final-express">
+<x-mcq a="2"><x-t>Correct order?</x-t><x-o>routes → cors → requireAuth</x-o><x-o>requireAuth → cors → routes</x-o><x-o>cors → json → requireAuth → routes → error handler</x-o><x-o>error handler → routes</x-o><x-why>Preflights need CORS before auth; error handler last.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Another user’s document id should return…</x-t><x-o>404</x-o><x-o>403</x-o><x-o>200 with empty body</x-o><x-o>500</x-o><x-why>Don’t confirm it exists.</x-why></x-mcq>
+<x-mcq a="3"><x-t>The main protection against SQL injection is…</x-t><x-o>escaping quotes by hand</x-o><x-o>a WAF</x-o><x-o>input length limits</x-o><x-o>parameterized queries</x-o><x-why>Values never become SQL.</x-why></x-mcq>
+<x-mcq a="1"><x-t>A client retried POST /payments after a timeout and the user was charged twice. Fix?</x-t><x-o>Longer timeout</x-o><x-o>Idempotency key with a unique constraint and stored response</x-o><x-o>Disable retries everywhere</x-o><x-o>Use PUT</x-o><x-why>Make the operation safe to repeat.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">C</span>SQL and databases · redo Phase 4</h2>
+<x-quiz id="final-sql">
+<x-mcq a="1"><x-t>“Users and their document counts, including zero.”</x-t><x-o>INNER JOIN + count(*)</x-o><x-o>LEFT JOIN + count(d.id) + GROUP BY</x-o><x-o>LEFT JOIN + count(*)</x-o><x-o>UNION</x-o><x-why>count(column) skips NULLs.</x-why></x-mcq>
+<x-mcq a="2"><x-t>WHERE vs HAVING?</x-t><x-o>Same thing</x-o><x-o>HAVING filters rows before grouping</x-o><x-o>WHERE filters rows; HAVING filters groups</x-o><x-o>HAVING only works with joins</x-o><x-why>Aggregates belong in HAVING.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Read-modify-write of credits loses updates under concurrency. Simplest fix?</x-t><x-o>UPDATE … SET credits = credits - 1 WHERE id = $1 AND credits > 0</x-o><x-o>SELECT then UPDATE in app code</x-o><x-o>A cache</x-o><x-o>A sleep</x-o><x-why>Atomic statement.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Why review generated migration SQL?</x-t><x-o>It’s always wrong</x-o><x-o>Style</x-o><x-o>Speed</x-o><x-o>A rename can appear as drop + add and lose data</x-o><x-why>Read before you run.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">D</span>LLM fundamentals · redo Phase 5</h2>
+<x-quiz id="final-llm">
+<x-mcq a="1"><x-t>A request has 6,000 input and 500 output tokens. What dominates latency?</x-t><x-o>Input tokens</x-o><x-o>Usually the 500 sequentially decoded output tokens (plus prefill for very long inputs)</x-o><x-o>The API key check</x-o><x-o>JSON parsing</x-o><x-why>Decode is one token per step.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Best temperature for routing classification?</x-t><x-o>0</x-o><x-o>0.9</x-o><x-o>1.5</x-o><x-o>Doesn’t matter</x-o><x-why>Repeatable, most likely label.</x-why></x-mcq>
+<x-mcq a="2"><x-t>finish_reason = "length" means…</x-t><x-o>success</x-o><x-o>the prompt was too long</x-o><x-o>output hit max tokens and was cut off</x-o><x-o>rate limited</x-o><x-why>Truncated output.</x-why></x-mcq>
+<x-mcq a="3"><x-t>An instruction hidden inside an uploaded PDF tells the model to reveal other users’ files. Strongest defence?</x-t><x-o>A longer system prompt</x-o><x-o>Lower temperature</x-o><x-o>A bigger model</x-o><x-o>Tools that can only access the caller’s data, scoped in code</x-o><x-why>Least privilege makes the attack harmless.</x-why></x-mcq>
+<x-mcq a="1"><x-t>Streaming improves…</x-t><x-o>total cost</x-o><x-o>time to first token / perceived latency</x-o><x-o>accuracy</x-o><x-o>context window</x-o><x-why>Same tokens, earlier display.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">E</span>Embeddings and vector search · redo Phase 6</h2>
+<x-quiz id="final-emb">
+<x-mcq a="2"><x-t>pgvector <code>&lt;=&gt;</code> is…</x-t><x-o>Euclidean distance</x-o><x-o>negative inner product</x-o><x-o>cosine distance</x-o><x-o>Jaccard</x-o><x-why>1 − cosine similarity.</x-why></x-mcq>
+<x-mcq a="0"><x-t>HNSW vs exact search?</x-t><x-o>HNSW is faster but approximate (recall can be below 100%)</x-o><x-o>HNSW is exact</x-o><x-o>Exact search is always faster</x-o><x-o>They’re identical</x-o><x-why>Speed for a little recall.</x-why></x-mcq>
+<x-mcq a="3"><x-t>pgvector index on a 3072-dim <code>vector</code> column?</x-t><x-o>Works fine</x-o><x-o>Needs IVFFlat</x-o><x-o>Needs more RAM only</x-o><x-o>Above the 2,000-dimension index limit for vector; use halfvec or fewer dimensions</x-o><x-why>A real DocMind constraint (ISSUES #23).</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">F</span>RAG · redo Phase 7</h2>
+<x-quiz id="final-rag">
+<x-mcq a="1"><x-t>Follow-up “and who founded it?” retrieves junk. Fix?</x-t><x-o>Bigger chunks</x-o><x-o>Rewrite into a standalone query using history before embedding</x-o><x-o>Higher temperature</x-o><x-o>More overlap</x-o><x-why>Embed meaning, not pronouns.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Relevant {X}; returned [A, B, X, C, D]. Recall@5, MRR?</x-t><x-o>1.0, 0.33</x-o><x-o>0.2, 1.0</x-o><x-o>1.0, 1.0</x-o><x-o>0.33, 0.2</x-o><x-why>Found it (recall 1); first at rank 3.</x-why></x-mcq>
+<x-mcq a="2"><x-t>Cross-encoder reranking works best on…</x-t><x-o>the whole corpus</x-o><x-o>the top 1</x-o><x-o>a candidate list of ~20–100 from first-stage retrieval</x-o><x-o>queries only</x-o><x-why>Two-stage retrieval.</x-why></x-mcq>
+<x-mcq a="3"><x-t>“Summarise this 200-page PDF” with top-3 retrieval gives a partial summary. Best fix?</x-t><x-o>Top-300</x-o><x-o>Lower temperature</x-o><x-o>Smaller chunks</x-o><x-o>Precompute a summary at ingestion (map-reduce over sections)</x-o><x-why>Whole-document tasks don’t fit similarity search (DocMind ISSUES #36).</x-why></x-mcq>
+<x-mcq a="1"><x-t>Faithfulness is low but context recall is high. Where’s the problem?</x-t><x-o>Retrieval</x-o><x-o>Generation/grounding</x-o><x-o>Chunking</x-o><x-o>Embedding model</x-o><x-why>The facts were there; the answer didn’t stick to them.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Why can hybrid search beat pure vector search?</x-t><x-o>Exact terms (codes, names) match reliably with keywords</x-o><x-o>It uses fewer tokens</x-o><x-o>It’s always faster</x-o><x-o>It removes the need for chunking</x-o><x-why>Complementary strengths.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">G</span>Agents and tool calling · redo Phase 8</h2>
+<x-quiz id="final-agents">
+<x-mcq a="2"><x-t>Who executes a tool?</x-t><x-o>The LLM</x-o><x-o>The provider</x-o><x-o>Your backend, after validating and authorizing</x-o><x-o>The browser</x-o><x-why>Red flag #3 if you get this wrong.</x-why></x-mcq>
+<x-mcq a="1"><x-t>Model calls a tool with invalid arguments. You…</x-t><x-o>crash the request</x-o><x-o>return an error result so it can correct itself (counts toward the step limit)</x-o><x-o>execute anyway</x-o><x-o>retry the HTTP call</x-o><x-why>Errors are data.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Best way to force a final answer at the step limit?</x-t><x-o>Throw</x-o><x-o>Return the last tool result</x-o><x-o>Ask the user</x-o><x-o>Send the last request without tools</x-o><x-why>DocMind does this (mode NONE was ignored).</x-why></x-mcq>
+<x-mcq a="0"><x-t>A destructive tool should…</x-t><x-o>take one validated id, be owner-scoped in SQL, and need human approval</x-o><x-o>trust the system prompt</x-o><x-o>accept a list of ids from the model</x-o><x-o>run at temperature 0</x-o><x-why>Defence in depth.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">H</span>Workflows and Mastra · redo Phase 9</h2>
+<x-quiz id="final-wf">
+<x-mcq a="1"><x-t>On resume, Mastra re-runs the suspended step…</x-t><x-o>from the line after suspend()</x-o><x-o>from the top of execute, with resumeData set</x-o><x-o>not at all</x-o><x-o>twice</x-o><x-why>Keep side effects below the suspend check.</x-why></x-mcq>
+<x-mcq a="2"><x-t>Server restarts while a run is RUNNING (Mastra defaults).</x-t><x-o>Run is lost</x-o><x-o>Run is marked failed</x-o><x-o>Recovery re-drives it from the last snapshot</x-o><x-o>Run becomes suspended</x-o><x-why><code>recovery: { workflows: 'auto' }</code> by default.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Why idempotency if steps have retries?</x-t><x-o>A step may have done its side effect before failing or crashing</x-o><x-o>Retries are slow</x-o><x-o>Mastra requires it</x-o><x-o>It isn’t needed</x-o><x-why>Re-execution must be harmless.</x-why></x-mcq>
+<x-mcq a="3"><x-t>The steps are fixed and the process takes 10 minutes with an approval. Use…</x-t><x-o>one long HTTP request</x-o><x-o>an autonomous agent</x-o><x-o>a cron job</x-o><x-o>a persisted workflow with suspend/resume</x-o><x-why>Durable, predictable, pausable.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">I</span>System design · redo Phase 10</h2>
+<x-quiz id="final-sd">
+<x-mcq a="2"><x-t>Upload of a 2,000-page PDF should return…</x-t><x-o>200 after processing</x-o><x-o>500</x-o><x-o>202 with a status to poll, processing in background jobs</x-o><x-o>413 always</x-o><x-why>Async with progress.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Fair retrieval across three documents in one question?</x-t><x-o>Per-document sub-queries or quotas, then combine with labels</x-o><x-o>Top-3 over everything</x-o><x-o>Bigger embeddings</x-o><x-o>Higher temperature</x-o><x-why>Prevents one document dominating (DocMind ISSUES #37).</x-why></x-mcq>
+<x-mcq a="1"><x-t>Where should uploaded original files live?</x-t><x-o>A bytea column on documents</x-o><x-o>Private object storage, with the key on the document row</x-o><x-o>The API server’s local disk</x-o><x-o>Redis</x-o><x-why>Blobs in object storage; servers are ephemeral.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">J</span>Debugging and production · redo Phase 12</h2>
+<x-quiz id="final-debug">
+<x-mcq a="1"><x-t>Every request hangs; pool waitingCount keeps growing. First suspect?</x-t><x-o>Slow DNS</x-o><x-o>Leaked clients (no release in finally) or long transactions</x-o><x-o>JWT expiry</x-o><x-o>CORS</x-o><x-why>Pool exhaustion.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Token spend tripled after a deploy. First move?</x-t><x-o>Switch providers</x-o><x-o>Lower temperature</x-o><x-o>Turn off the feature</x-o><x-o>Break usage down by feature, user and tokens/calls per request to find the driver</x-o><x-why>Measure, then cut.</x-why></x-mcq>
+<x-mcq a="2"><x-t>Works locally, rate limiter broken on the host. Likely cause?</x-t><x-o>Node version</x-o><x-o>Database</x-o><x-o>Proxies in front: wrong trust-proxy hop count</x-o><x-o>React</x-o><x-why>DocMind needed 3 hops on Render.</x-why></x-mcq>
+</x-quiz>
+
+<h2 class="sec"><span class="k">K</span>Part 2: open questions (answer first, then reveal)</h2>
+<x-q n="F.1" tag="must solid" label="Code 1"><x-t>Write <code>mapWithConcurrency(items, limit, fn)</code> that returns allSettled-style results in input order.</x-t><x-say>Start <code>min(limit, n)</code> workers sharing an index counter; each loops: take next index, await fn in try/catch, store <code>{status, value|reason}</code> at that index; await all workers.</x-say><x-simple><p>Full runnable version: Phase 11, exercise 2. Check yourself on: order preserved, failures isolated, peak in-flight ≤ limit, empty input.</p></x-simple></x-q>
+<x-q n="F.2" tag="must solid" label="Code 2"><x-t>Write an Express handler <code>GET /documents/:id</code> that is safe against IDOR and SQL injection, returns 400/404 correctly, and passes errors to the error handler.</x-t><x-code><pre data-l="js">app.get('/documents/:id', requireAuth, async (req, res) => {
+  const parsed = z.uuid().safeParse(req.params.id);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid id' });
+  const { rows } = await pool.query(
+    'SELECT id, filename, status, created_at FROM documents WHERE id = $1 AND user_id = $2', [parsed.data, req.user.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+  res.json(rows[0]);
+});   // Express 5 forwards a rejected promise to the error handler</pre></x-code></x-q>
+<x-q n="F.3" tag="must solid" label="Debug"><x-t>Find the bugs: <code>app.post('/chat', async (req,res) => { const doc = repo.getDocument(req.body.documentId); const answer = await llm(req.body.message + doc.text); res.json({ answer }); })</code></x-t><x-say>Missing await on getDocument; no ownership (no user id passed; documentId should be validated and scoped to req.user.id); no validation of message (type/length); prompt built by concatenation with no grounding instructions or delimiters (injection); no error handling for provider failures; no check that the document is ready; whole document text pasted into the prompt (size/cost) instead of retrieval.</x-say></x-q>
+<x-q n="F.4" tag="must solid" label="RAG design"><x-t>Design retrieval for a support bot whose users ask about error codes and vague “it’s not working” problems. What do you build and how do you measure it?</x-t><x-say>Hybrid search (BM25 for codes + vectors for vague descriptions) fused with RRF, query rewriting from the conversation, metadata filters (product/version), a reranker on the top 50, a relevance threshold with a clarifying question when low. Measure recall@5/MRR on a labelled set mixing code queries and vague queries, plus faithfulness and resolution rate online.</x-say></x-q>
+<x-q n="F.5" tag="must solid" label="Agent design"><x-t>Design the tools and safety rules for an agent that can search a user’s documents, read their profile, and delete a document.</x-t><x-say>searchDocuments({query}), getMyProfile() (no id argument), deleteDocument({documentId: uuid}) with requireApproval. Scope from the session; fixed tool map; Zod validation; owner-scoped SQL; timeouts; result size caps; step limit with tools-off last call; duplicate-call blocking; approval stored per user and claimed once; audit log.</x-say></x-q>
+<x-q n="F.6" tag="must solid" label="Workflow design"><x-t>A quiz-generation workflow must wait for the user to choose a document, survive deploys, and never generate twice for one click. Design it.</x-t><x-say>Steps: pick-document (suspend with the list if none chosen) → confirm → generate (structured output + Zod + shuffle) → save (unique on request key). Storage in Postgres; resume endpoint checks owner and claims the waiting state once; nothing with side effects above suspend; generate step idempotent by request key; recovery on boot for running runs; expire stale waits. (This is DocMind’s planned Phase 8.)</x-say></x-q>
+<x-q n="F.7" tag="must solid" label="System design"><x-t>In 5 minutes, design an AI quiz generator for 10,000 users. Include the data flow.</x-t><x-say>Upload → storage → ingestion jobs (chunks with section metadata) → user requests a quiz (idempotency key) → job/workflow samples chunks per section → batched structured generation with concurrency caps → validation (schema, answerability, dedupe by embedding) → drafts → ready → user takes it (attempts table) → regenerate single questions. Postgres + pgvector, queue + autoscaled workers, per-user budgets, usage logging, eval of question quality.</x-say></x-q>
+<x-q n="F.8" tag="must solid" label="Project 1"><x-t>Explain what happens in DocMind from the moment a user types “and who founded it?” to the last streamed word.</x-t><x-say>POST /chat-stream with token → requireAuth → validate → (one document: must be ready) → embed the message → load the last 8 user-scoped messages → router: vector scores, maybe LLM classifier → document_question → agent: system instruction + history turns + tools → Gemini returns searchDocuments({ query: "who founded the Lantern Festival" }) → status event “Searching for …” → owner-scoped top-3 search → sources event → function response → Gemini streams the answer (tools omitted on the last step if needed) → text events → saved exactly as streamed → done.</x-say></x-q>
+<x-q n="F.9" tag="must solid" label="Project 2"><x-t>What are DocMind’s three biggest weaknesses, and what would you do first?</x-t><x-say>No automated tests; no timeouts/retries/fallback on Gemini calls; whole-document tasks (summaries, fair multi-document search) don’t fit top-3 retrieval. First: tests around auth isolation and the agent loop with a faked Gemini (the AG.4 in-process tests already show the fake), then timeouts + retries, then precomputed summaries.</x-say></x-q>
+<x-q n="F.10" tag="must solid" label="Production 1"><x-t>Users report answers citing documents they never uploaded. Walk through your response.</x-t><x-say>Treat as a security incident: reproduce with their ids; check the retrieval query for the owner filter (and any ANN post-filter or cache key missing the user); check whether sources come from another user’s session (history query scoping); hotfix by disabling the path or adding the filter; audit logs for affected users; add a cross-user test; notify per policy.</x-say></x-q>
+<x-q n="F.11" tag="must solid" label="Production 2"><x-t>Your provider returns 503 for 20 minutes during peak. What happens in a well-built system?</x-t><x-say>Retries with backoff+jitter for a few seconds; circuit breaker opens; fallback model serves requests (validated the same way) or users get a clear “temporarily unavailable” message; non-urgent jobs wait in the queue and resume; non-AI features work normally; alerts fire; after recovery the breaker closes on successful probes.</x-say></x-q>

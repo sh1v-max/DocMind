@@ -1,0 +1,585 @@
+<x-obj><ul><li>Explain workflows vs agents, and sequential, parallel, conditional and loop execution.</li><li>Explain persistence, suspend/resume, human-in-the-loop, retries, idempotency and compensating actions with failure cases.</li><li>Build a course-generation workflow in Mastra with approval, parallel generation, retries, duplicate prevention and crash recovery.</li></ul></x-obj>
+<x-pre><ul><li>Phase 3 (idempotency, background jobs), Phase 4 (transactions), Phase 8 (agents).</li><li class="verify">Mastra APIs on this page were checked against the docs bundled in <code>@mastra/core</code> 1.82.0 (Nov 2026). Mastra moves fast: re-check the version you install.</li></ul></x-pre>
+
+<h2 class="sec"><span class="k">9.A</span>Lessons</h2>
+
+<x-lesson t="Workflows vs agents" tag="must">
+<x-def>A <b>workflow</b> is a process whose steps and order are defined in code as a graph: step A, then B and C in parallel, then D if a condition holds. Each step may call an LLM, but the <b>path</b> is decided by your code. An agent lets the model decide the path.</x-def>
+<x-why>Many AI features are multi-step processes with a known shape: generate outline → approve → generate lessons → save. Letting an agent improvise that order adds cost and risk for no benefit. Workflows give predictable execution, per-step retries, persisted state that survives restarts, and pausing for humans.</x-why>
+<x-in><ul><li><b>Deterministic workflow:</b> same input → same path (the LLM output inside a step may vary, the structure doesn’t).</li><li><b>Non-deterministic process:</b> the path itself depends on model decisions (an agent).</li><li>Common combination: a workflow whose individual steps call an agent for an open-ended sub-task.</li></ul></x-in>
+<x-an>A workflow is a recipe card: steps in order, “while the sauce simmers, chop the onions” (parallel), “if guests are vegetarian, skip step 4” (branch). An agent is a chef improvising with what’s in the fridge.</x-an>
+<x-real>Order fulfilment, document ingestion pipelines, report generation, onboarding flows, content generation with review, approval chains.</x-real>
+</x-lesson>
+
+<x-lesson t="Control flow: sequential, parallel, branch, foreach" tag="must">
+<x-def>The shapes a workflow graph can take.</x-def>
+<x-in><table><thead><tr><th>Shape</th><th>Mastra</th><th>Use when</th></tr></thead><tbody>
+<tr><td>Sequential</td><td><code>.then(step)</code></td><td>a step needs the previous output</td></tr>
+<tr><td>Parallel</td><td><code>.parallel([a, b])</code> (output keyed by step id)</td><td>independent steps; total time = slowest one</td></tr>
+<tr><td>Conditional</td><td><code>.branch([[cond, step], …])</code> (every true condition runs)</td><td>different paths for different inputs</td></tr>
+<tr><td>Loop over items</td><td><code>.foreach(step, { concurrency: n })</code> (default 1 = sequential; output array keeps input order)</td><td>same step for each item, with a concurrency cap</td></tr>
+<tr><td>Repeat until</td><td><code>.dountil(step, cond)</code> / <code>.dowhile</code></td><td>retry until quality passes, poll until ready</td></tr>
+<tr><td>Reshape data</td><td><code>.map(async ({ inputData }) => …)</code></td><td>adapt one step’s output to the next step’s input</td></tr></tbody></table>
+<p>If any step in a <code>.parallel()</code> throws, the whole parallel block fails. For partial success, catch inside the step and return <code>{ failed: true }</code>.</p></x-in>
+<x-vis><x-w w="flow" f="course"></x-w></x-vis>
+</x-lesson>
+
+<x-lesson t="State, persistence, suspend/resume and recovery" tag="must">
+<x-def><b>Workflow state</b> is what’s known so far: inputs, each step’s status and output. <b>Persistence</b> writes it to storage after each step (a snapshot). <b>Suspend</b> stops a run at a step and saves it; <b>resume</b> continues it later, even in another process.</x-def>
+<x-why>A human approval might take hours; a server deploy restarts the process every few days; an LLM step might fail at 60%. Without persisted state you’d restart from zero or lose the run. With it, the run continues from the last completed step.</x-why>
+<x-in><ol><li><code>run.start()</code> executes steps; after each, the engine saves a snapshot (status + step results) to storage.</li><li>A step calls <code>suspend(payload)</code>: the snapshot is saved with status <code>suspended</code> and the payload; <code>start()</code> returns <code>{ status: 'suspended', suspended: [stepId] }</code>. Nothing is running now.</li><li>Later, any process: <code>createRun({ runId })</code> + <code>run.resume({ step, resumeData })</code>. The engine loads the snapshot, <b>claims</b> it (status suspended → running, atomically), and <b>re-runs the suspended step’s execute from the top</b> with <code>resumeData</code> set.</li><li>Server restart while a run is <code>running</code>: Mastra’s default <code>recovery: { workflows: 'auto' }</code> re-drives such runs from the last snapshot at boot. Suspended runs simply wait.</li></ol>
+<p><b>Rule that follows from step 3:</b> nothing with a side effect may sit above the <code>if (!resumeData) return suspend(...)</code> line, or it runs twice.</p></x-in>
+<x-vis><x-w w="workflow"></x-w></x-vis>
+<x-an>A video game save point. Quitting (crash) loses only the progress since the last save. Waiting for a friend to join (approval) is a save + pause; when they arrive you load and continue.</x-an>
+<x-mist><ul><li>Expecting <code>start()</code> to mean finished. Always check <code>result.status</code>: success, suspended, failed, canceled (and remember <code>bail()</code> ends as <b>success</b> with the bail payload as the result).</li><li>Assuming <code>run.cancel()</code> stops a step that’s already running: it doesn’t unless the step listens to <code>abortSignal</code>.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Retries, idempotency and compensating actions" tag="must">
+<x-def><b>Retries</b> re-run a failed step. <b>Idempotency</b> makes re-running safe. A <b>compensating action</b> undoes the effect of an earlier completed step when a later step fails (the saga pattern).</x-def>
+<x-in><ul><li>Retries happen at several layers (HTTP client, step <code>retries: n</code>, workflow <code>retryConfig: { attempts, delay }</code>, a re-run of the whole workflow). Pick one or two layers on purpose; multiplying them multiplies LLM spend.</li><li>A step can run more than once (retry, crash after the work but before the snapshot, recovery). So each step’s side effects must be idempotent: upserts on natural keys (<code>(course_id, module_no, lesson_no)</code>), “skip if already done” checks, idempotency keys on external APIs.</li><li>Compensation: workflows can’t roll back across systems with one transaction. If step 4 charges a card and step 5 fails permanently, run a compensating step (refund) and mark the run failed. For pure content generation, the usual “compensation” is simply: keep drafts unpublished, or delete them.</li></ul></x-in>
+<x-real>Payments + order creation (refund on failure), booking flights + hotels (cancel the flight if the hotel fails), course generation (drafts invisible until a final publish transaction).</x-real>
+</x-lesson>
+
+<x-lesson t="Build it: course generation in Mastra" tag="must">
+<x-def>A complete workflow: validate + dedupe → outline (LLM, structured) → suspend for approval → lessons in parallel with a concurrency cap and retries → module quizzes → publish in one transaction. Uses the <code>chat()</code> helper from Phase 5 for LLM calls, <code>pg</code> for app tables, and <code>@mastra/pg</code> for workflow snapshots.</x-def>
+<x-impl><pre data-l="sql">CREATE TABLE courses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL, request_key text NOT NULL,          -- idempotency: one course per user + request
+  topic text NOT NULL, status text NOT NULL DEFAULT 'draft',  -- draft | awaiting_approval | generating | published | rejected | failed
+  outline jsonb, outline_approved_at timestamptz, run_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, request_key));
+CREATE TABLE lesson_drafts (
+  course_id uuid NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+  module_no int NOT NULL, lesson_no int NOT NULL, title text NOT NULL, body text NOT NULL,
+  PRIMARY KEY (course_id, module_no, lesson_no));             -- re-runs can't duplicate
+CREATE TABLE module_quizzes (
+  course_id uuid NOT NULL REFERENCES courses(id) ON DELETE CASCADE, module_no int NOT NULL,
+  questions jsonb NOT NULL, PRIMARY KEY (course_id, module_no));</pre>
+<pre data-l="js">// mastra/course.workflow.js
+import { createWorkflow, createStep } from '@mastra/core/workflows';
+import { z } from 'zod';
+import { pool } from '../db.js';
+import { chat } from '../llm.js';
+
+const Outline = z.object({
+  title: z.string().min(3),
+  modules: z.array(z.object({
+    title: z.string().min(3),
+    lessons: z.array(z.object({ title: z.string().min(3) })).min(2).max(6),
+  })).min(1).max(10),
+});
+const Lesson = z.object({ body: z.string().min(400) });
+const Quiz = z.object({ questions: z.array(z.object({
+  question: z.string(), options: z.array(z.string()).length(4), correctIndex: z.number().int().min(0).max(3),
+})).length(5) });
+
+// 1. dedupe + create the course row (idempotent upsert)
+const prepare = createStep({
+  id: 'prepare',
+  inputSchema: z.object({ userId: z.string(), requestKey: z.string(), topic: z.string().min(3).max(200), modules: z.number().int().min(1).max(10) }),
+  outputSchema: z.object({ courseId: z.string(), topic: z.string(), modules: z.number(), outline: Outline.nullable(), approved: z.boolean() }),
+  execute: async ({ inputData, bail, runId }) => {
+    const { rows: [c] } = await pool.query(
+      `INSERT INTO courses (user_id, request_key, topic, run_id) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, request_key) DO UPDATE SET run_id = EXCLUDED.run_id
+       RETURNING id, status, outline, outline_approved_at`,
+      [inputData.userId, inputData.requestKey, inputData.topic, runId]);
+    if (c.status === 'published') return bail({ outcome: 'duplicate', courseId: c.id });  // ends the run as success
+    return { courseId: c.id, topic: inputData.topic, modules: inputData.modules, outline: c.outline, approved: !!c.outline_approved_at };
+  },
+});
+
+// 2. outline: skip the LLM if a previous run already produced one
+const outline = createStep({
+  id: 'outline',
+  inputSchema: prepare.outputSchema,
+  outputSchema: prepare.outputSchema.extend({ outline: Outline }),
+  execute: async ({ inputData }) => {
+    if (inputData.outline) return { ...inputData, outline: inputData.outline };
+    const { data } = await chat({ temperature: 0.4, schema: Outline, messages: [
+      { role: 'system', content: 'You design concise, practical courses. No duplicate module or lesson titles.' },
+      { role: 'user', content: `Course topic: ${inputData.topic}. Exactly ${inputData.modules} modules, 2-6 lessons each.` } ] });
+    await pool.query("UPDATE courses SET outline = $2, status = 'awaiting_approval' WHERE id = $1", [inputData.courseId, data]);
+    return { ...inputData, outline: data };
+  },
+});
+
+// 3. human approval: suspend until the user answers
+const approve = createStep({
+  id: 'approve-outline',
+  inputSchema: outline.outputSchema,
+  outputSchema: outline.outputSchema,
+  suspendSchema: z.object({ courseId: z.string(), outline: Outline }),
+  resumeSchema: z.object({ approved: z.boolean() }),
+  execute: async ({ inputData, resumeData, suspend, bail }) => {
+    if (inputData.approved) return inputData;                               // approved in an earlier run
+    if (!resumeData) return await suspend({ courseId: inputData.courseId, outline: inputData.outline });
+    // ↑ nothing with side effects above this line: execute runs again from the top on resume
+    if (!resumeData.approved) {
+      await pool.query("UPDATE courses SET status = 'rejected' WHERE id = $1", [inputData.courseId]);
+      return bail({ outcome: 'rejected', courseId: inputData.courseId });
+    }
+    await pool.query("UPDATE courses SET outline_approved_at = now(), status = 'generating' WHERE id = $1", [inputData.courseId]);
+    return { ...inputData, approved: true };
+  },
+});
+
+// 4. one lesson (run by foreach, 3 at a time)
+const LessonItem = z.object({ courseId: z.string(), topic: z.string(), moduleNo: z.number(), moduleTitle: z.string(),
+  lessonNo: z.number(), title: z.string(), siblings: z.array(z.string()) });
+const writeLesson = createStep({
+  id: 'write-lesson',
+  retries: 2,                                                              // step-level retry for flaky LLM calls
+  inputSchema: LessonItem,
+  outputSchema: z.object({ moduleNo: z.number(), lessonNo: z.number() }),
+  execute: async ({ inputData: l }) => {
+    const done = await pool.query('SELECT 1 FROM lesson_drafts WHERE course_id = $1 AND module_no = $2 AND lesson_no = $3',
+      [l.courseId, l.moduleNo, l.lessonNo]);
+    if (done.rowCount) return { moduleNo: l.moduleNo, lessonNo: l.lessonNo };   // already generated: no LLM spend
+    const { data } = await chat({ temperature: 0.5, maxTokens: 1500, schema: Lesson, messages: [
+      { role: 'system', content: 'Write one lesson in Markdown. Stay on the lesson title. Do not repeat sibling lessons.' },
+      { role: 'user', content: `Course: ${l.topic}\nModule: ${l.moduleTitle}\nLesson: ${l.title}\nOther lessons in this module: ${l.siblings.join('; ')}` } ] });
+    await pool.query(
+      'INSERT INTO lesson_drafts (course_id, module_no, lesson_no, title, body) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+      [l.courseId, l.moduleNo, l.lessonNo, l.title, data.body]);
+    return { moduleNo: l.moduleNo, lessonNo: l.lessonNo };
+  },
+});
+
+// 5. one quiz per module
+const writeQuiz = createStep({
+  id: 'write-quiz',
+  retries: 2,
+  inputSchema: z.object({ courseId: z.string(), moduleNo: z.number(), moduleTitle: z.string() }),
+  outputSchema: z.object({ moduleNo: z.number() }),
+  execute: async ({ inputData: m }) => {
+    const { rows } = await pool.query('SELECT body FROM lesson_drafts WHERE course_id = $1 AND module_no = $2 ORDER BY lesson_no', [m.courseId, m.moduleNo]);
+    const { data } = await chat({ temperature: 0.3, schema: Quiz, messages: [
+      { role: 'system', content: 'Write 5 multiple-choice questions answerable from the lessons only. Options must be distinct.' },
+      { role: 'user', content: rows.map((r) => r.body).join('\n\n---\n\n').slice(0, 24000) } ] });
+    if (data.questions.some((q) => new Set(q.options).size !== 4)) throw new Error('duplicate options');   // → retry
+    await pool.query('INSERT INTO module_quizzes (course_id, module_no, questions) VALUES ($1,$2,$3) ON CONFLICT (course_id, module_no) DO UPDATE SET questions = EXCLUDED.questions',
+      [m.courseId, m.moduleNo, JSON.stringify(data.questions)]);
+    return { moduleNo: m.moduleNo };
+  },
+});
+
+// 6. publish: only if everything exists, in one transaction
+const publish = createStep({
+  id: 'publish',
+  inputSchema: z.object({ courseId: z.string(), expectedLessons: z.number(), expectedModules: z.number() }),
+  outputSchema: z.object({ outcome: z.literal('published'), courseId: z.string() }),
+  execute: async ({ inputData }) => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: [n] } = await client.query(
+        `SELECT (SELECT count(*) FROM lesson_drafts WHERE course_id = $1)::int AS lessons,
+                (SELECT count(*) FROM module_quizzes WHERE course_id = $1)::int AS quizzes`, [inputData.courseId]);
+      if (n.lessons !== inputData.expectedLessons || n.quizzes !== inputData.expectedModules) throw new Error(`incomplete: ${JSON.stringify(n)}`);
+      await client.query("UPDATE courses SET status = 'published' WHERE id = $1", [inputData.courseId]);
+      await client.query('COMMIT');
+    } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+    return { outcome: 'published', courseId: inputData.courseId };
+  },
+});
+
+export const courseWorkflow = createWorkflow({
+  id: 'course-generation',
+  inputSchema: prepare.inputSchema,
+  outputSchema: z.object({ outcome: z.string(), courseId: z.string() }),
+})
+  .then(prepare)
+  .then(outline)
+  .then(approve)
+  .map(async ({ inputData: c }) => c.outline.modules.flatMap((m, mi) => m.lessons.map((l, li) => ({
+    courseId: c.courseId, topic: c.topic, moduleNo: mi + 1, moduleTitle: m.title, lessonNo: li + 1, title: l.title,
+    siblings: m.lessons.map((x) => x.title).filter((t) => t !== l.title) }))))
+  .foreach(writeLesson, { concurrency: 3 })                                  // rate-limit friendly
+  .map(async ({ getStepResultAsync }) => {
+    const c = await getStepResultAsync(approve);
+    return c.outline.modules.map((m, i) => ({ courseId: c.courseId, moduleNo: i + 1, moduleTitle: m.title }));
+  })
+  .foreach(writeQuiz, { concurrency: 3 })
+  .map(async ({ getStepResultAsync }) => {
+    const c = await getStepResultAsync(approve);
+    return { courseId: c.courseId, expectedModules: c.outline.modules.length,
+      expectedLessons: c.outline.modules.reduce((s, m) => s + m.lessons.length, 0) };
+  })
+  .then(publish)
+  .commit();</pre>
+<pre data-l="js">// mastra/index.js
+import { Mastra } from '@mastra/core';
+import { PostgresStore } from '@mastra/pg';
+import { courseWorkflow } from './course.workflow.js';
+export const mastra = new Mastra({
+  storage: new PostgresStore({ id: 'mastra-storage', connectionString: process.env.DATABASE_URL }),
+  workflows: { courseWorkflow },
+  // recovery: { workflows: 'off' },   // default 'auto' re-drives RUNNING runs at boot; turn off if you'd rather decide
+});
+
+// routes/courses.js
+const wf = () => mastra.getWorkflow('courseWorkflow');
+
+app.post('/courses', requireAuth, validate(NewCourse), async (req, res) => {
+  const run = await wf().createRun({ resourceId: req.user.id });
+  const result = await run.start({ inputData: { ...req.valid.body, userId: req.user.id } });  // runs until suspend/finish
+  if (result.status === 'suspended') {
+    const { rows: [c] } = await pool.query('SELECT id, outline FROM courses WHERE run_id = $1 AND user_id = $2', [run.runId, req.user.id]);
+    return res.status(202).json({ status: 'awaiting_approval', runId: run.runId, courseId: c.id, outline: c.outline });
+  }
+  if (result.status === 'success') return res.json(result.result);         // e.g. { outcome: 'duplicate', courseId }
+  res.status(502).json({ error: 'Course generation failed. Try again.' });
+});
+
+app.post('/courses/:courseId/approval', requireAuth, async (req, res) => {
+  // app-level claim: only the owner, only once (a double click gets 409)
+  const { rows: [c] } = await pool.query(
+    `UPDATE courses SET status = 'resuming' WHERE id = $1 AND user_id = $2 AND status = 'awaiting_approval' RETURNING run_id`,
+    [req.params.courseId, req.user.id]);
+  if (!c) return res.status(409).json({ error: 'Nothing waiting for approval (already answered, or not yours).' });
+  const run = await wf().createRun({ runId: c.run_id });
+  // long-running: respond now, let the client poll GET /courses/:id
+  run.resume({ step: 'approve-outline', resumeData: { approved: req.body.approved === true } })
+    .then((r) => r.status === 'failed' && pool.query("UPDATE courses SET status = 'failed' WHERE id = $1", [req.params.courseId]))
+    .catch((err) => console.error({ evt: 'resume_failed', courseId: req.params.courseId, err: err.message }));
+  res.status(202).json({ status: 'generating' });
+});</pre></x-impl>
+<x-walk><ol><li><b>POST /courses</b> → <code>prepare</code> upserts the course on (user, requestKey) → <code>outline</code> calls the LLM with a schema, saves it, status awaiting_approval → <code>approve-outline</code> has no resumeData → <code>suspend()</code> → snapshot saved → <code>start()</code> returns suspended → 202 with the outline.</li><li><b>User approves</b> → the UPDATE claims the course for that user exactly once → <code>resume()</code> re-runs <code>approve-outline</code> from its first line, now with <code>resumeData.approved = true</code> → status generating.</li><li><code>.map</code> flattens modules into lesson items → <code>.foreach</code> writes 3 lessons at a time, each skipping work already saved, each retried up to 2 times.</li><li>Quizzes per module, then <code>publish</code> verifies counts and flips status in one transaction. Until then users never see a half-built course.</li><li><b>Crash during lessons:</b> on boot, recovery re-drives the running run from the last snapshot; any lesson already in <code>lesson_drafts</code> is skipped, so no duplicate rows and no double LLM spend for finished lessons.</li><li><b>Lesson 7 fails 3 times:</b> foreach fails → run failed → status failed. Calling POST /courses again with the same requestKey: <code>prepare</code> finds the draft course, <code>outline</code> and <code>approve</code> skip (already done), lessons 1–6 are skipped, only 7–10 are generated.</li></ol></x-walk>
+<x-mist><ul><li>Writing to the DB above the <code>suspend()</code> check.</li><li>Awaiting a multi-minute <code>resume()</code> inside the HTTP request.</li><li>Trusting the runId from the client without checking the owner.</li></ul></x-mist>
+<x-dm>DocMind’s Phase 8 plan (suspend-resume.md, written 2026-11-07, <b>not built</b>) uses Mastra workflows only, with <code>WorkflowsPG</code> on the existing pool and a pointer table <code>quiz_workflow_runs</code> for user + session lookup. The first case: a typed “yes” to the quiz offer must survive between two requests.</x-dm>
+</x-lesson>
+
+<h2 class="sec"><span class="k">9.1</span>Workflow fundamentals</h2>
+<x-q n="9.1" tag="must basic"><x-t>What is a workflow?</x-t><x-say>A defined sequence or graph of steps, with data flowing from one step to the next, executed by an engine that tracks each step’s status and can retry, pause and resume.</x-say>
+<x-simple>A workflow engine executes a defined graph of steps for each run: it passes data from step to step, records each step’s status and output, retries failed steps by policy, can pause (suspend/sleep) and continue later, and lets you inspect runs. The definition is code (or config) and the order is fixed by it; individual steps can call anything, including LLMs or agents.</x-simple>
+<x-eg>Order fulfilment: validate payment → reserve stock → ship → email, with retries per step and a human check for high-value orders.</x-eg>
+<x-fu q="How is it different from a job queue?">A queue runs independent jobs; a workflow coordinates many steps of one process with state across them (a workflow engine often uses queues underneath).</x-fu>
+<x-no>“A workflow is a list of function calls in a route handler.” (No persistence, retries or resume.)</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.2" tag="must basic"><x-t>What is the difference between a workflow and an agent?</x-t><x-say>In a workflow, code decides the order of steps; in an agent, the model decides the next action at runtime. Workflows are predictable and easy to retry and audit; agents are flexible for open-ended tasks.</x-say>
+<x-eg>“Generate a course” (fixed steps) → workflow. “Help me understand my documents” (open-ended, choose tools) → agent. “Generate a course, researching each topic” → workflow whose research step calls an agent.</x-eg>
+<x-fu q="Can an agent call a workflow?">Yes, as a tool: the agent decides to start it; the workflow guarantees the process.</x-fu>
+<x-no>“Workflows can’t use LLMs.”</x-no>
+<x-ev>Key distinction.</x-ev></x-q>
+<x-q n="9.3" tag="must basic"><x-t>What is a deterministic workflow?</x-t><x-say>One where the same input always follows the same path of steps. LLM outputs inside steps can vary, but the structure doesn’t.</x-say>
+<x-simple>Deterministic here means the control flow is fixed by code: given the same inputs and step outputs, the same steps run in the same order. This is what makes replay, resume and debugging possible: the engine can re-run from a snapshot and know which step is next. LLM outputs inside steps are still non-deterministic, so steps must validate their outputs and be safe to re-run.</x-simple>
+<x-eg>Temporal-style engines require workflow code to be deterministic so they can replay history; Mastra persists step results in snapshots for a similar purpose.</x-eg>
+<x-fu q="Can a deterministic workflow branch on an LLM classification?">Yes: the branch logic is deterministic given the step’s (stored) output; on resume the stored output is reused, not regenerated.</x-fu>
+<x-no>“Deterministic means the LLM gives the same answer every time.”</x-no>
+<x-ev>Precision.</x-ev></x-q>
+<x-q n="9.4" tag="must basic"><x-t>What is a non-deterministic process?</x-t><x-say>A process whose path or result can differ between runs with the same input, like an agent choosing tools, or any LLM sampling at temperature &gt; 0.</x-say>
+<x-simple>A non-deterministic process can take different paths or produce different results for the same input: an agent deciding tools, sampling at temperature &gt; 0, timing-dependent concurrency, external data that changes. Non-determinism isn’t bad, but it must be contained: record outputs so re-runs don’t re-decide, validate results, and bound behaviour with limits.</x-simple>
+<x-eg>Asking an agent the same question twice may produce 2 searches one time and 3 the next.</x-eg>
+<x-fu q="How do you test something non-deterministic?">Fix what you can (temperature 0, seeds, fakes), test properties (valid schema, cites a source, under N steps) rather than exact strings, and evaluate on sets of runs.</x-fu>
+<x-no>“Non-deterministic means random and useless.”</x-no>
+<x-ev>Precision.</x-ev></x-q>
+<x-q n="9.5" tag="must basic"><x-t>What are workflow steps?</x-t><x-say>Units of work with a defined input, output and execute function: validate, call an LLM, write to the DB. In Mastra: <code>createStep({ id, inputSchema, outputSchema, execute })</code>.</x-say>
+<x-simple>A step is the smallest unit the engine tracks: it has an id, an input schema, an output schema, and an execute function; optionally suspend/resume schemas and retry settings. The engine validates input, runs execute, validates output, and stores the result in the run snapshot. Good steps are small enough to retry cheaply, large enough to be meaningful, and idempotent.</x-simple>
+<x-eg><code>createStep({ id: 'write-lesson', retries: 2, inputSchema: LessonItem, outputSchema: z.object({ moduleNo, lessonNo }), execute })</code>.</x-eg>
+<x-fu q="How big should a step be?">One logical action with one side effect (one LLM call + one write), so a retry repeats little and is safe.</x-fu>
+<x-no>“Steps are just functions; size doesn’t matter.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.6" tag="must basic"><x-t>What is sequential execution?</x-t><x-say>Running steps one after another, each receiving the previous step’s output.</x-say>
+<x-simple>Sequential steps form a chain where each consumes the previous output; total time is the sum. Use it for real dependencies (outline before lessons, validation before charging). Mastra: <code>.then(a).then(b)</code>.</x-simple>
+<x-eg>prepare → outline → approve: each needs the previous result.</x-eg>
+<x-fu q="How do you pass the original input to a later step?">Carry it through outputs, use <code>.map()</code> to combine, read an earlier step with <code>getStepResultAsync</code>, or use workflow state.</x-fu>
+<x-no>“Sequential is always slower, so avoid it.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.7" tag="must basic"><x-t>What is parallel execution?</x-t><x-say>Running independent steps at the same time and continuing when all finish; total time is the slowest step instead of the sum.</x-say>
+<x-simple>Independent steps start together and the workflow continues when all complete; total time ≈ the slowest step. In Mastra, <code>.parallel([a, b])</code> outputs an object keyed by step id; <code>.foreach(step, { concurrency: n })</code> runs one step per array item with a cap. If any parallel step throws, the block fails, so catch inside steps when partial success is acceptable.</x-simple>
+<x-eg>Generating summaries for 3 modules in parallel takes ~1 call’s time instead of 3.</x-eg>
+<x-fu q="What limits how parallel you should go?">Provider rate limits, DB pool size, memory, and cost spikes.</x-fu>
+<x-no>“Parallel steps share variables safely.” (They should communicate through outputs, not shared mutable state.)</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.8" tag="must basic"><x-t>What is conditional branching?</x-t><x-say>Choosing which step(s) to run based on data, e.g. a short course skips quiz generation. In Mastra, <code>.branch()</code> runs every step whose condition is true.</x-say>
+<x-simple>Branching selects steps based on data. In Mastra’s <code>.branch([[condition, step], …])</code> every condition that’s true runs its step (not just the first), and the output is keyed by step id like parallel. Simple skips can be an <code>if</code> inside a step that returns its input unchanged. Conditions should use stored step outputs so resumed runs follow the same path.</x-simple>
+<x-code><pre data-l="js">createWorkflow({ id: 'triage', inputSchema: Ticket, outputSchema: z.any() })
+  .then(classify)                                   // { category: 'billing' | 'bug' | 'other' }
+  .branch([
+    [async ({ inputData }) =&gt; inputData.category === 'billing', billingStep],
+    [async ({ inputData }) =&gt; inputData.category === 'bug', createIssueStep],
+  ])
+  .commit();</pre></x-code>
+<x-fu q="What if no condition is true?">No branch step runs; design a default condition or handle it after the branch.</x-fu>
+<x-no>“.branch runs only the first matching branch.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.9" tag="must basic"><x-t>What is workflow state?</x-t><x-say>Everything about a run so far: input, current status, each step’s status and output, suspend payloads. It’s what you need to continue the run.</x-say>
+<x-simple>Run state = input, status (running, suspended, success, failed, canceled, waiting), each step’s status and output, suspend payloads and resume data, plus optional shared workflow state. It’s what makes inspection (“where is this run?”), resume and retry possible. Keep business data in your own tables and keep run state focused on orchestration.</x-simple>
+<x-eg>Snapshot for a course run: <code>{ status: 'suspended', steps: { prepare: success, outline: success, 'approve-outline': suspended { outline } } }</code>.</x-eg>
+<x-fu q="Should large data (lesson bodies) go into run state?">Prefer storing large content in your tables and passing ids, to keep snapshots small.</x-fu>
+<x-no>“State lives in memory while the server runs.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.10" tag="must basic"><x-t>What is workflow persistence?</x-t><x-say>Saving workflow state to durable storage (Postgres, etc.) after steps, so a run survives restarts and can be resumed by any instance.</x-say>
+<x-simple>Persistence writes run state to durable storage after steps and on suspend, usually a table keyed by workflow name + run id. Any process with access to the storage can load the run, so a different instance (after a deploy or crash) can resume it. Mastra uses its storage adapters (e.g. Postgres via <code>@mastra/pg</code>), with tables like <code>mastra_workflow_snapshot</code>.</x-simple>
+<x-eg>A run suspended on Monday is resumed on Wednesday by a different server instance after two deploys.</x-eg>
+<x-fu q="What happens if the database is down during a step?">The engine can’t persist; the step’s result may be lost and the step re-run later, so steps must be idempotent.</x-fu>
+<x-no>“Persistence means logging.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.11" tag="must basic"><x-t>What is suspend/resume?</x-t><x-say>Pausing a run inside a step and saving its state (suspend), then continuing it later with new data such as a user’s answer (resume), possibly in a different process.</x-say>
+<x-simple>Suspend stops the run at a step and saves its state with a payload explaining what it’s waiting for; nothing runs while suspended (no thread or request held). Resume loads the state, claims the run, and continues the suspended step with resume data (validated by a resume schema). In Mastra the step’s execute runs again from its first line, now with resumeData, so code above the suspend call must be safe to repeat.</x-simple>
+<x-eg>Step “approve-outline”: <code>if (!resumeData) return await suspend({ outline })</code>.</x-eg>
+<x-fu q="Suspend vs sleep?">Suspend waits for external input (resume); sleep waits for time (in Mastra the run status is “waiting”).</x-fu>
+<x-no>“Suspend keeps a promise waiting in memory.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.12" tag="must basic"><x-t>Why would a workflow need to suspend?</x-t><x-say>To wait for something outside its control: human approval, a user’s choice, an external webhook, a scheduled time, without holding a process or HTTP request open.</x-say>
+<x-eg>Waiting for a manager’s approval on an expense, a user choosing an option, a payment provider’s webhook, a document finishing processing, or a scheduled date.</x-eg>
+<x-fu q="Why not keep the HTTP request open until the user answers?">Requests time out, connections drop, deploys restart processes; the wait might be hours or days.</x-fu>
+<x-no>“Workflows suspend to save CPU.”</x-no>
+<x-ev>Purpose.</x-ev></x-q>
+<x-q n="9.13" tag="must solid"><x-t>What happens if a workflow crashes halfway through?</x-t><x-say>Without persistence, the run is lost. With persistence, the last snapshot shows which steps finished; the engine (or your code) re-runs from the first unfinished step. The step that was in progress runs again, so it must be idempotent.</x-say>
+<x-simple>The process dies mid-step: in-memory progress is lost, but the last snapshot records which steps completed. On restart (or when a recovery job runs), the engine finds runs still marked running and re-executes from the first incomplete step. Whatever the interrupted step did before the crash (partial DB writes, API calls) happens again on re-run, so idempotent side effects are essential.</x-simple>
+<x-eg>Lesson 7 was written to the DB but the crash happened before the snapshot recorded it; on re-run the lesson step sees the draft exists and skips the LLM call.</x-eg>
+<x-fu q="Does Mastra resume automatically?">By default (<code>recovery: { workflows: 'auto' }</code>) it re-drives running runs at boot; it can be turned off globally or per workflow.</x-fu>
+<x-ev>Failure reasoning.</x-ev></x-q>
+<x-q n="9.14" tag="must solid"><x-t>How do you resume execution?</x-t><x-say>Load the run by id from storage and call resume with the suspended step and the resume data (Mastra: <code>createRun({ runId })</code> then <code>run.resume({ step, resumeData })</code>). For crashed running runs, Mastra’s recovery re-drives them at boot by default.</x-say>
+<x-simple>Two cases. Suspended runs: your code calls resume with the run id, the suspended step id and resume data, after checking the user may resume it. Crashed running runs: the engine’s recovery or your own job restarts them from the last snapshot. Failed runs: either re-run (new run with the same business key so idempotent steps skip finished work) or use engine features to restart from a step.</x-simple>
+<x-eg><code>const run = await wf.createRun({ runId }); await run.resume({ step: 'approve-outline', resumeData: { approved: true } });</code></x-eg>
+<x-fu q="What if two resume calls race?">Mastra claims the run atomically (suspended → running); the loser gets WORKFLOW_RESUME_ALREADY_CLAIMED; add your own app-level claim to return a clean 409.</x-fu>
+<x-no>“Resume restarts the whole workflow.”</x-no>
+<x-ev>Mechanics.</x-ev></x-q>
+<x-q n="9.15" tag="must basic"><x-t>What is a human-in-the-loop workflow?</x-t><x-say>A workflow that pauses for a person to review, edit, approve or choose before continuing, typically for quality control or risky actions.</x-say>
+<x-simple>Human-in-the-loop (HITL) inserts a person at decision points: approve/reject, edit generated content, choose between options, or handle cases the system flags as uncertain. Implementation: suspend with a payload the UI can render, notify the person, accept their decision through an authenticated endpoint, validate it against a resume schema, and resume. Also plan for timeouts (reminders, expiry) and audit (who approved what, when).</x-simple>
+<x-eg>A course outline review screen with “Approve”, “Request changes (feedback)” and “Cancel”.</x-eg>
+<x-fu q="Where is HITL most valuable in AI systems?">Before irreversible or expensive actions and where quality matters more than speed (publishing, sending, deleting, paying).</x-fu>
+<x-no>“HITL means a human does the work instead of the AI.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="9.16" tag="must solid"><x-t>What is idempotency in workflows?</x-t><x-say>Designing each step so running it twice has the same effect as once (skip if done, upsert by natural key), because retries, crashes and recovery can re-run steps.</x-say>
+<x-eg>Step “save lesson”: <code>INSERT … ON CONFLICT (course_id, module_no, lesson_no) DO NOTHING</code>; step “send email”: record <code>email_sent_at</code> and skip if set; step “charge card”: pass an idempotency key to the payment API.</x-eg>
+<x-fu q="Which side effects are hardest to make idempotent?">External ones without idempotency support (emails, SMS, third-party APIs); record intent and completion in your DB and check before acting.</x-fu>
+<x-no>“The engine guarantees each step runs once.”</x-no>
+<x-ev>Key reliability idea.</x-ev></x-q>
+<x-q n="9.17" tag="must solid"><x-t>How do you prevent duplicate execution?</x-t><x-say>Dedupe at the start (idempotency key → one run per request), claim resumes atomically (suspended → running in one conditional update), make side effects idempotent with unique constraints, and use stable job/run ids.</x-say>
+<x-simple>Duplicate execution has several sources: the client submitting twice, two resumes, recovery re-running a step, retries, and two workers picking the same job. Guards at each level: an idempotency key per business request (one run per user+request), an atomic claim for resumes, unique constraints for writes, and stable run/job ids. Check the business key before starting expensive work.</x-simple>
+<x-eg>POST /courses twice with the same Idempotency-Key → second call returns the first course or run.</x-eg>
+<x-fu q="Is a client-generated run id enough?">Only if it’s stored with a unique constraint and validated per user; otherwise another user could collide or guess it.</x-fu>
+<x-no>“Disable the button and it’s solved.”</x-no>
+<x-ev>Practical safety.</x-ev></x-q>
+<x-q n="9.18" tag="must solid"><x-t>How would you handle workflow retries?</x-t><x-say>Step-level retries with backoff for transient failures, limited counts, only on idempotent steps; don’t stack retries at several layers; after exhausting them, fail the run with state saved so it can be re-run from the failed step.</x-say>
+<x-simple>Classify failures: transient (timeouts, 429, 5xx) → retry with backoff; invalid LLM output → retry once or twice; permanent (bad input, missing data) → don’t retry, fail with a reason. Configure retries per step (Mastra <code>retries</code>) or per workflow (<code>retryConfig: { attempts, delay }</code>), avoid stacking with the HTTP client’s own retries, and make sure retried steps are idempotent. After exhaustion, the run fails with state saved so it can be re-run without repeating finished steps.</x-simple>
+<x-eg>Lesson step: retries 2 at the step level; the LLM client retries 429s internally once; total worst case 2 × 2 = 4 calls for a lesson.</x-eg>
+<x-fu q="Should validation errors from Zod be retried?">Output validation failures from an LLM, yes (a new sample may be valid); input validation failures, no.</x-fu>
+<x-no>Setting high retry counts everywhere.</x-no>
+<x-ev>Design.</x-ev></x-q>
+<x-q n="9.19" tag="must solid"><x-t>What is a compensating action?</x-t><x-say>A step that undoes the business effect of an earlier completed step when a later one fails, because you can’t roll back across systems: refund a charge, cancel a reservation, delete unpublished drafts.</x-say>
+<x-eg>Booking saga: reserve flight ✓ → reserve hotel ✓ → charge card ✗ (declined) → compensate: cancel hotel, cancel flight, mark booking failed, notify the user.</x-eg>
+<x-code><pre data-l="js">// a tiny saga runner: run steps, and on failure run compensations in reverse
+async function runSaga(steps, ctx) {
+  const done = [];
+  try {
+    for (const s of steps) { await s.run(ctx); done.push(s); }
+  } catch (err) {
+    for (const s of done.reverse()) await s.compensate?.(ctx).catch((e) =&gt; log({ evt: 'compensation_failed', step: s.id, e: e.message }));
+    throw err;
+  }
+}</pre></x-code>
+<x-fu q="Must compensations be idempotent?">Yes: they can be retried too (a refund call might time out).</x-fu>
+<x-no>“Just roll back the database transaction.” (External effects can’t be rolled back by your DB.)</x-no>
+<x-ev>Saga awareness.</x-ev></x-q>
+<x-q n="9.20" tag="must solid"><x-t>When would you use a workflow instead of a single agent?</x-t><x-say>When the steps and order are known, the process is long-running, needs pauses for people, must survive restarts, needs per-step retries, or must be auditable and cost-predictable.</x-say>
+<x-eg>Monthly report generation: fetch data → compute metrics → LLM narrative → human review → publish: a workflow; an agent would add nothing but risk.</x-eg>
+<x-fu q="Can you start with an agent and later replace it with a workflow?">Yes: agent traces often reveal the common path, which you can then encode as a workflow.</x-fu>
+<x-no>“Workflows are for non-AI tasks only.”</x-no>
+<x-ev>Judgement.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">9.2</span>Mastra</h2>
+<x-q n="9.21" tag="must basic"><x-t>What is Mastra?</x-t><x-say>An open-source TypeScript framework for AI applications: agents with tools and memory, workflows with suspend/resume and storage, RAG helpers, evals and observability, with a model router for many providers.</x-say>
+<x-simple>Mastra provides: agents (instructions, model, tools, memory, maxSteps, streaming, tool approval), tools (createTool with Zod schemas), workflows (typed steps, control flow, suspend/resume, snapshots, recovery), storage adapters (Postgres and others), RAG utilities, evals/scorers, tracing, a model router for many providers via “provider/model” strings, and a local dev playground. It runs inside your Node app or as its own server.</x-simple>
+<x-eg>DocMind plans to use only Mastra workflows + Postgres storage inside the existing Express app.</x-eg>
+<x-fu q="Is Mastra tied to one LLM provider?">No, models are chosen per agent/call via its router (provider/model ids).</x-fu>
+<x-no>“Mastra is a model.”</x-no>
+<x-ev>Awareness.</x-ev></x-q>
+<x-q n="9.22" tag="must basic"><x-t>What problems does Mastra solve?</x-t><x-say>It packages the plumbing you’d otherwise hand-write: the agent tool loop, provider adapters, workflow graphs with typed steps, persisted snapshots, suspend/resume and recovery, tool approval, memory, tracing.</x-say>
+<x-simple>Building production AI features means repeatedly writing the same plumbing: provider adapters, tool loops, schema conversion, retries, streaming, memory, durable multi-step processes that survive restarts, human approval, and observability. Mastra packages these with TypeScript types and Zod schemas so teams focus on prompts, tools and business logic.</x-simple>
+<x-eg>Without a framework, a suspendable approval requires your own state table, claim logic, resume endpoint and recovery job (Phase 8’s hand-made version); with Mastra it’s <code>suspend()</code>/<code>resume()</code> plus storage.</x-eg>
+<x-fu q="What doesn’t it solve?">Your data model, authorization, retrieval quality, prompt quality and cost decisions.</x-fu>
+<x-no>“It removes the need to understand agents.”</x-no>
+<x-ev>Purpose.</x-ev></x-q>
+<x-q n="9.23" tag="must basic"><x-t>What is a Mastra agent?</x-t><x-say>An <code>Agent</code> instance with an id, instructions, a model and tools; <code>generate()</code> or <code>stream()</code> runs the tool loop with options like <code>maxSteps</code>.</x-say>
+<x-simple>An Agent is configured with an id, a name, instructions (static or a function of request context), a model, tools (and optionally sub-agents and workflows), memory, and defaults. <code>generate()</code> runs the loop and returns text, tool calls/results, usage and a runId; <code>stream()</code> streams text and tool events. Options per call include <code>maxSteps</code>, <code>requestContext</code> (per-request values like userId) and structured output.</x-simple><x-code><pre data-l="js">const agent = new Agent({ id: 'doc-agent', name: 'Docs', instructions: '…', model: process.env.MASTRA_MODEL, tools: { searchDocuments } });
+const out = await agent.generate('What is chunk overlap?', { maxSteps: 4 });</pre></x-code>
+<x-code><pre data-l="js">import { RequestContext } from '@mastra/core/request-context';
+const rc = new RequestContext(); rc.set('userId', req.user.id);
+const out = await docAgent.generate([{ role: 'user', content: req.body.message }], { maxSteps: 4, requestContext: rc });
+res.json({ answer: out.text });</pre></x-code>
+<x-fu q="How do tools get the user id?">Through the request context available in the tool’s execute context, set by your route from the session.</x-fu>
+<x-no>“Mastra agents run autonomously on a schedule.”</x-no>
+<x-ev>API familiarity.</x-ev></x-q>
+<x-q n="9.24" tag="must basic"><x-t>What is a Mastra tool?</x-t><x-say>A typed function created with <code>createTool({ id, description, inputSchema, outputSchema, execute })</code> that agents can call; options include <code>requireApproval</code>. execute receives the validated input first and a context (with requestContext, abortSignal) second.</x-say>
+<x-simple>A Mastra tool is an object from <code>createTool({ id, description, inputSchema, outputSchema, execute })</code>. Mastra converts the input schema to the provider’s format, validates arguments before calling <code>execute(input, context)</code>, can validate output, and supports options like <code>requireApproval</code>, suspend/resume schemas for tools, and MCP metadata. The same tool can be used by agents, called inside workflow steps, or exposed over MCP.</x-simple>
+<x-eg>The <code>searchDocuments</code> createTool in lesson 8.A.</x-eg>
+<x-fu q="Where does authorization go?">Inside execute (and your repository), using the request context user, exactly as with hand-written tools.</x-fu>
+<x-no>“Mastra tools are executed by the model.”</x-no>
+<x-ev>API familiarity.</x-ev></x-q>
+<x-q n="9.25" tag="must basic"><x-t>What is a Mastra workflow?</x-t><x-say>A graph of steps built with <code>createWorkflow({ id, inputSchema, outputSchema })</code> and <code>.then / .parallel / .branch / .foreach / .map</code>, finished with <code>.commit()</code>, executed through runs that persist snapshots to storage.</x-say>
+<x-simple>A workflow is created with an id and input/output schemas, built by chaining control-flow methods (<code>.then</code>, <code>.parallel</code>, <code>.branch</code>, <code>.foreach</code>, <code>.dountil/.dowhile</code>, <code>.map</code>, <code>.sleep</code>) and finished with <code>.commit()</code>. It’s registered on a Mastra instance (which provides storage), and executed via runs: <code>createRun()</code> → <code>start()</code> / <code>resume()</code> / <code>cancel()</code>. Results report status and per-step outputs.</x-simple>
+<x-eg><code>createWorkflow({ id: 'course-generation', inputSchema, outputSchema }).then(prepare).then(outline).then(approve)…commit()</code>.</x-eg>
+<x-fu q="Why register it on the Mastra instance?">So it gets storage (snapshots), logging and recovery; an unregistered workflow has nowhere to persist suspend state.</x-fu>
+<x-no>“A workflow is an agent with steps.”</x-no>
+<x-ev>API familiarity.</x-ev></x-q>
+<x-q n="9.26" tag="must solid"><x-t>How do agents and workflows interact?</x-t><x-say>A workflow step can call an agent (for an open-ended sub-task) and an agent can be given a workflow as a tool. The workflow keeps the overall process predictable; the agent handles the part that needs judgement.</x-say>
+<x-simple>Agents can be used inside workflow steps (a step calls <code>agent.generate()</code> for an open-ended sub-task, and the workflow keeps the overall order and persistence), agents can be given workflows as tools (the agent decides when to start a defined process), and a step can itself be created from an agent or tool. The workflow provides structure and durability; the agent provides judgement.</x-simple>
+<x-eg>A “research topic” step inside course generation calls a research agent with a web-search tool; everything else stays deterministic.</x-eg>
+<x-fu q="What’s the risk of an agent inside a workflow step?">The step becomes slower and less predictable; give it maxSteps, timeouts and output validation like any LLM step.</x-fu>
+<x-no>“You must choose either agents or workflows.”</x-no>
+<x-ev>Architecture.</x-ev></x-q>
+<x-q n="9.27" tag="must basic"><x-t>How do you define a custom tool?</x-t><x-say><code>createTool</code> with a unique id, a description that says when to use it, Zod input/output schemas, and an execute that takes scope (user id) from the request context rather than from the input.</x-say>
+<x-code><pre data-l="js">import { createTool } from '@mastra/core/tools';
+import { z } from 'zod';
+export const listDocuments = createTool({
+  id: 'list-documents',
+  description: "List the user's documents (filename, status). Use when they ask which files they have.",
+  inputSchema: z.object({}),
+  outputSchema: z.object({ documents: z.array(z.object({ filename: z.string(), status: z.string() })) }),
+  execute: async (_input, context) =&gt; {
+    const userId = context?.requestContext?.get('userId');
+    if (!userId) throw new Error('no user in context');
+    const rows = await repo.listDocuments(userId);
+    return { documents: rows.map((d) =&gt; ({ filename: d.filename, status: d.status })) };
+  },
+});</pre></x-code>
+<x-fu q="How do you test this tool without the agent?">Call <code>listDocuments.execute({}, { requestContext })</code> directly with a fake repository.</x-fu>
+<x-no>Accepting userId in inputSchema.</x-no>
+<x-ev>API.</x-ev></x-q>
+<x-q n="9.28" tag="must basic"><x-t>How do you define a workflow step?</x-t><x-say><code>createStep({ id, inputSchema, outputSchema, execute: async ({ inputData, ... }) => output })</code>, optionally with <code>suspendSchema</code>, <code>resumeSchema</code> and <code>retries</code>.</x-say>
+<x-eg><code>createStep({ id: 'outline', inputSchema: CourseState, outputSchema: CourseState.extend({ outline: Outline }), execute: async ({ inputData }) => ({ ...inputData, outline: await makeOutline(inputData) }) })</code>.</x-eg>
+<x-fu q="What parameters does execute receive?">The 1.82 step reference lists inputData, resumeData, suspendData, suspend, runId, getStepResultAsync, getInitData, state/setState, retryCount, mastra and requestContext; bail() is documented in the error-handling and suspend/resume docs.</x-fu>
+<x-no>“Steps can’t access earlier steps’ results.”</x-no>
+<x-ev>API.</x-ev></x-q>
+<x-q n="9.29" tag="must solid"><x-t>How do you pass data between workflow steps?</x-t><x-say>Each step’s output becomes the next step’s <code>inputData</code>; <code>.map()</code> reshapes it; after <code>.parallel()</code> the output is keyed by step id; <code>await getStepResultAsync(stepOrId)</code> reads an earlier step’s output (the sync <code>getStepResult</code> is deprecated); workflow state (<code>stateSchema</code>/<code>setState</code>) holds shared values.</x-say>
+<x-eg>After <code>.parallel([summary, quiz])</code> the next step receives <code>{ summary: {...}, quiz: {...} }</code> keyed by step id; a <code>.map(async ({ inputData }) => ({ text: inputData.summary.text, questions: inputData.quiz.questions }))</code> reshapes it.</x-eg>
+<x-fu q="What happens if schemas don’t line up between steps?">TypeScript flags it at build time (where types allow), and Mastra’s runtime validation fails the step; use .map to adapt.</x-fu>
+<x-no>Passing data through global variables.</x-no>
+<x-ev>Data flow.</x-ev></x-q>
+<x-q n="9.30" tag="must basic"><x-t>How do you validate step input and output?</x-t><x-say>With the step’s Zod <code>inputSchema</code> and <code>outputSchema</code>, which Mastra validates at runtime, plus your own Zod validation of any LLM output inside the step before returning it.</x-say>
+<x-simple>Each step declares Zod (or other Standard Schema) input and output schemas. Mastra validates step input before execute and output after it (input validation is on by default), which catches wiring mistakes and invalid data early. Inside steps that call LLMs, validate the model’s output with its own schema before returning it, so invalid content never reaches later steps or the DB.</x-simple>
+<x-eg>The lesson step’s output schema requires moduleNo and lessonNo numbers; returning a string fails the step immediately instead of corrupting the publish counts.</x-eg>
+<x-fu q="What about suspend/resume data?">suspendSchema validates what you save when pausing; resumeSchema validates what the user sends back.</x-fu>
+<x-no>“Types are enough; no runtime validation needed.”</x-no>
+<x-ev>Correctness.</x-ev></x-q>
+<x-q n="9.31" tag="must solid"><x-t>How would you handle workflow errors?</x-t><x-say>Retries for transient failures (<code>retries</code> / <code>retryConfig</code>), catch-and-return for optional parallel work, <code>bail()</code> for expected early exits, check <code>result.status</code> after start/resume, record failures on your own tables, and make re-runs resume from the failed step through idempotent steps.</x-say>
+<x-eg>An outline step that gets malformed JSON twice throws → run status failed → the API marks the course failed with “Outline generation failed, please retry”.</x-eg>
+<x-fu q="How do you surface workflow errors to users?">Map run status and error to your own business status and message; never show raw stack traces.</x-fu>
+<x-no>Swallowing errors inside steps and returning empty outputs.</x-no>
+<x-ev>Robustness.</x-ev></x-q>
+<x-q n="9.32" tag="must solid"><x-t>How does suspend/resume work in your implementation?</x-t><x-say>The approval step calls <code>suspend({ outline })</code> when there’s no resumeData; the snapshot goes to Postgres and the API returns 202. The approval endpoint claims the course row for that user, then calls <code>run.resume({ step: 'approve-outline', resumeData })</code>; the step runs again from the top, sees resumeData, and continues or bails.</x-say>
+<x-eg>Sequence: POST /courses → run.start → outline step → approve step suspends → 202 with outline. POST /courses/:id/approval → claim → run.resume({ step: 'approve-outline', resumeData }) → step re-runs with resumeData → lessons generated in the background.</x-eg><x-dm>For DocMind this is planned, not built (Phase 8). Say so honestly and walk through the plan.</x-dm>
+<x-no>Saying the HTTP request waits for the user.</x-no>
+<x-ev>Ownership of your design.</x-ev></x-q>
+<x-q n="9.33" tag="must solid"><x-t>How would you persist workflow state?</x-t><x-say>Configure Mastra storage (e.g. <code>PostgresStore</code> from <code>@mastra/pg</code>, or only the workflows domain with <code>WorkflowsPG</code>), which saves snapshots per run; keep your own business tables for what users see, linked by run id.</x-say>
+<x-eg><code>new Mastra({ storage: new PostgresStore({ id: 'mastra-storage', connectionString: process.env.DATABASE_URL }), workflows: { courseWorkflow } })</code>; or only the workflows domain with <code>WorkflowsPG</code> on an existing pg Pool (DocMind’s plan).</x-eg>
+<x-fu q="Where do you store the link between a run and your user?">In your own table (course row with run_id and user_id) or the run’s resourceId, and check it on every resume/status call.</x-fu>
+<x-no>Keeping run ids only in the browser.</x-no>
+<x-ev>Design.</x-ev></x-q>
+<x-q n="9.34" tag="must solid"><x-t>How would you implement human approval?</x-t><x-say>A step with suspend/resume schemas; the UI shows the suspend payload; an authenticated endpoint checks ownership and claims the pending state once, then resumes with the decision. For tool-level approval in agents, <code>requireApproval</code> + <code>approveToolCall()</code>.</x-say>
+<x-eg>A step with suspendSchema <code>{ outline }</code> and resumeSchema <code>{ approved: boolean, feedback?: string }</code>; the frontend posts the decision; the endpoint checks the owner and claims once.</x-eg>
+<x-fu q="How do you expire approvals?">A scheduled job cancels runs suspended longer than N days and marks the business record expired.</x-fu>
+<x-no>Letting any authenticated user resume any run id.</x-no>
+<x-ev>Design.</x-ev></x-q>
+<x-q n="9.35" tag="must solid"><x-t>What happens when an external API fails during workflow execution?</x-t><x-say>The step throws; if it has retries, it’s retried with delay; if retries run out, the run fails with the snapshot saved; your code marks the business record failed and the user can retry, which skips completed work thanks to idempotent steps. For optional work, catch and continue.</x-say>
+<x-eg>The lesson step calls the LLM; the provider returns 503 for 2 minutes; the step retries twice with delay and then fails; the run fails; a retry endpoint starts a new run with the same course key and only missing lessons are generated.</x-eg>
+<x-fu q="Would you add a fallback model inside the step?">Yes for user-facing latency-sensitive steps; validate the fallback’s output the same way.</x-fu>
+<x-no>“The workflow will wait until the API is back.” (Not without retries/sleep configured.)</x-no>
+<x-ev>Failure handling.</x-ev></x-q>
+<x-q n="9.36" tag="must solid"><x-t>What are the benefits and limitations of using a framework instead of implementing orchestration yourself?</x-t><x-say>Benefits: tested persistence, resume, claims, recovery, retries, typed steps and tracing without writing them. Limitations: a dependency that changes fast, abstractions that can hide behaviour (bail ends as success, cancel doesn’t stop a running step), extra tables and memory, and debugging through someone else’s code.</x-say>
+<x-eg>Hand-rolled: DocMind’s agent loop (~1 file, full control, learned the protocol). Framework: course generation with suspend/resume and recovery, which would need a state table, claims and a recovery job if hand-rolled.</x-eg><x-dm>DocMind hand-wrote its agent loop to learn it, and chose Mastra only for workflows after reading its 1.82 source and docs (dual CJS/ESM build, Node ≥ 22.13, atomic resume claim on Postgres).</x-dm>
+<x-fu q="How do you reduce the risk of depending on a fast-moving framework?">Wrap it behind your own small interface, pin versions, read release notes before upgrading, and keep integration tests.</x-fu>
+<x-no>“Frameworks are always better” or “never use frameworks”.</x-no>
+<x-ev>Balanced judgement.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">9.3</span>Workflow scenarios</h2>
+<x-scn t="Scenario A: course generation" tag="must solid">
+<x-sit>A user asks an AI system to generate a complete course: understand the topic → outline → modules → lessons → quizzes → save.</x-sit>
+<x-sym>Long generation times; occasional half-built courses; duplicate modules after retries; users waiting on a spinner with no progress.</x-sym>
+<x-cause>Generation done in one HTTP request or one big agent run; no per-step persistence; no idempotent writes; no progress reporting.</x-cause>
+<x-inv>Trace a slow/failed generation: which step failed, what was written, whether retries duplicated rows.</x-inv>
+<x-fix>A persisted workflow: outline → approval → lessons (foreach, capped) → quizzes → transactional publish; drafts with unique keys; progress counters; retries per step.</x-fix>
+<x-change><pre data-l="js">// progress the UI can poll (from the drafts table, not from the workflow internals)
+app.get('/courses/:id', requireAuth, async (req, res) =&gt; {
+  const { rows: [c] } = await pool.query(
+    `SELECT c.status, c.outline,
+            (SELECT count(*) FROM lesson_drafts l WHERE l.course_id = c.id)::int AS lessons_done
+     FROM courses c WHERE c.id = $1 AND c.user_id = $2`, [req.params.id, req.user.id]);
+  if (!c) return res.sendStatus(404);
+  const total = c.outline?.modules?.reduce((s, m) =&gt; s + m.lessons.length, 0) ?? 0;
+  res.json({ status: c.status, progress: { done: c.lessons_done, total }, outline: c.outline });
+});</pre></x-change>
+<x-sq q="Would you use an agent or workflow?">A workflow: the steps and order are known, it’s long-running, needs approval and must survive failures. Individual steps call the LLM; an agent could be used inside one step if research is needed.</x-sq>
+<x-sq q="Which steps should be sequential?">Understand → outline → approval → (content) → save. Lessons inside one module can be sequential if each builds on the previous one.</x-sq>
+<x-sq q="Which could run in parallel?">Different modules’ lessons, and quizzes per module once their lessons exist, with a concurrency cap.</x-sq>
+<x-sq q="How would you handle failure in lesson generation?">Step retries with backoff; a failed lesson fails the step after retries; drafts already saved stay; the run can be re-run and skips completed lessons.</x-sq>
+<x-sq q="How would you resume after a crash?">Persisted snapshots + recovery re-drive the run from the last finished step; idempotent lesson writes prevent duplicates.</x-sq>
+<x-sq q="How would you prevent saving an incomplete course?">Drafts table + a final publish step that checks counts and flips status in one transaction; readers only see published courses.</x-sq>
+<x-say>“A workflow with an approval suspend, parallel lesson generation under a concurrency cap, idempotent drafts, and a transactional publish at the end.”</x-say>
+</x-scn>
+<x-scn t="Scenario B: human approval" tag="must solid">
+<x-sit>A workflow generates a course outline but requires the user to approve it before lesson generation.</x-sit>
+<x-sym>Users can’t find what they need to approve; approvals lost after deploys; double clicks start two generations; abandoned approvals pile up.</x-sym>
+<x-cause>Waiting in memory; no persisted pending state; no claim; no expiry; no notification.</x-cause>
+<x-inv>Check how pending approvals are stored and resumed; reproduce a deploy during a pending approval; send two approvals at once.</x-inv>
+<x-fix>Suspend with a payload; persist; show it from your own status endpoint; claim-once approval endpoint checked against the owner; background resume; reminders and expiry.</x-fix>
+<x-change><pre data-l="sql">-- expire stale approvals daily (then cancel their runs in code)
+UPDATE courses SET status = 'expired'
+WHERE status = 'awaiting_approval' AND created_at &lt; now() - interval '7 days'
+RETURNING id, run_id;</pre></x-change>
+<x-sq q="How would you suspend execution?">The approval step calls <code>suspend({ outline })</code> when it has no resumeData.</x-sq>
+<x-sq q="Where would you save the state?">In the workflow storage (Postgres snapshot) plus the outline and status on the course row for the UI.</x-sq>
+<x-sq q="How would the frontend communicate approval?">It shows the outline from <code>GET /courses/:id</code> (status awaiting_approval) and calls <code>POST /courses/:id/approval { approved }</code> with the user’s token.</x-sq>
+<x-sq q="How would you resume the workflow?">Check ownership and claim the waiting state with a conditional update, then <code>run.resume({ step: 'approve-outline', resumeData })</code>, ideally in the background with the client polling.</x-sq>
+<x-sq q="What if the user never approves?">A scheduled job expires runs waiting longer than N days: <code>run.cancel()</code> and status expired; reminders before that; nothing is running meanwhile, so waiting costs only storage.</x-sq>
+<x-vis><x-w w="workflow"></x-w></x-vis>
+<x-say>“Suspend with the outline, persist, show it, resume through an owner-checked, claim-once endpoint, and expire stale waits.”</x-say>
+</x-scn>
+<x-scn t="Scenario C: partial failure (lessons 1–6 ok, 7 fails)" tag="must solid">
+<x-sit>A workflow generates 10 lessons. Lessons 1–6 succeed, lesson 7 fails.</x-sit>
+<x-sym>Lessons 1–6 exist, 7–10 missing; the course stuck in “generating” or marked failed; a manual retry regenerates everything.</x-sym>
+<x-cause>Provider failures on one lesson exceeding retries; no skip-if-exists; no record of completed items.</x-cause>
+<x-inv>Count drafts per course; read the failed run’s error and failing item.</x-inv>
+<x-fix>Idempotent per-lesson writes with unique keys, skip-if-exists before LLM calls, re-run continuing from the failed step, publish only when counts match.</x-fix>
+<x-change><pre data-l="sql">-- which lessons are missing for this course?
+SELECT m.module_no, l.lesson_no
+FROM jsonb_array_elements((SELECT outline-&gt;'modules' FROM courses WHERE id = $1)) WITH ORDINALITY AS m(module, module_no)
+CROSS JOIN LATERAL generate_series(1, jsonb_array_length(m.module-&gt;'lessons')) AS l(lesson_no)
+WHERE NOT EXISTS (SELECT 1 FROM lesson_drafts d WHERE d.course_id = $1 AND d.module_no = m.module_no AND d.lesson_no = l.lesson_no);</pre></x-change>
+<x-sq q="Would you regenerate everything?">No. That wastes LLM spend and may change lessons the user already saw.</x-sq>
+<x-sq q="How would you identify completed steps?">From persisted results: the lesson_drafts rows (course_id, module_no, lesson_no), and the workflow snapshot’s step results.</x-sq>
+<x-sq q="How would you resume from the failed step?">Re-run with the same course: earlier steps detect they’re done and return stored results; the lesson step skips existing drafts and only generates 7–10.</x-sq>
+<x-sq q="How would you avoid duplicate database records?">Primary key on (course_id, module_no, lesson_no) with <code>ON CONFLICT DO NOTHING</code>, and the skip check before calling the LLM.</x-sq>
+<x-say>“State tells me what’s done; idempotent steps skip it; unique keys make duplicates impossible.”</x-say>
+</x-scn>
+<x-scn t="Scenario D: 20 quizzes for 20 modules" tag="must solid">
+<x-sit>You need to generate 20 quizzes for 20 different modules.</x-sit>
+<x-sym>429 bursts when many quizzes start together; DB pool waits; spend spikes; whole batch failing due to one item.</x-sym>
+<x-cause>Unbounded parallelism; no shared rate limiter across workers; parallel block failing on one error.</x-cause>
+<x-inv>Look at 429 rates and in-flight counts per second; check foreach concurrency settings; check whether failures are caught per item.</x-inv>
+<x-fix>Cap concurrency (foreach concurrency 3–5), shared token bucket per provider key, retries with backoff and jitter on 429, catch-and-mark per item, and pace very large batches over time.</x-fix>
+<x-change><pre data-l="js">// shared token bucket: every worker awaits a token before calling the provider
+class TokenBucket {
+  constructor(ratePerMin) { this.capacity = ratePerMin; this.tokens = ratePerMin; this.refillMs = 60000 / ratePerMin; this.last = Date.now(); }
+  async take() {
+    for (;;) {
+      const now = Date.now();
+      this.tokens = Math.min(this.capacity, this.tokens + (now - this.last) / this.refillMs); this.last = now;
+      if (this.tokens &gt;= 1) { this.tokens -= 1; return; }
+      await new Promise((r) =&gt; setTimeout(r, this.refillMs));
+    }
+  }
+}
+const llmBucket = new TokenBucket(60);   // e.g. 60 requests per minute (per process; use Redis for many processes)</pre></x-change>
+<x-sq q="Would you execute them sequentially or in parallel?">In parallel with a cap (e.g. 3–5 at a time): <code>.foreach(writeQuiz, { concurrency: 4 })</code>.</x-sq>
+<x-sq q="What are the benefits of parallel execution?">Total time drops from the sum to roughly (20 / concurrency) × average call time.</x-sq>
+<x-sq q="What could go wrong?">429s from the provider, token-per-minute limits, DB pool exhaustion, higher cost spikes, one failure failing the whole block, logs interleaving.</x-sq>
+<x-sq q="How would you implement concurrency limits?">The framework’s concurrency option, or a pool of N workers pulling from a queue (Phase 11, exercise 2), or a job queue with worker concurrency.</x-sq>
+<x-sq q="How would you handle rate limits from the LLM provider?">Cap concurrency below the limit, retry 429s with backoff + jitter honouring Retry-After, a shared token bucket across workers, and spread work over time for very large batches.</x-sq>
+<x-vis><x-w w="concurrency"></x-w></x-vis>
+<x-say>“Parallel with a concurrency cap tuned to the provider limits, plus backoff on 429 and per-item retries so one failure doesn’t sink the batch.”</x-say>
+</x-scn>
+
+<h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
+<x-quiz id="qz-p09">
+<x-mcq a="2"><x-t>A step inserts a row, then calls suspend(). After resume, the table has two rows. Why?</x-t><x-o>A Mastra bug</x-o><x-o>The resume ran twice</x-o><x-o>On resume, the suspended step’s execute runs again from the top</x-o><x-o>The snapshot was lost</x-o><x-why>Side effects go below the suspend check (or in the next step).</x-why></x-mcq>
+<x-mcq a="0"><x-t>A Mastra run ends with bail({ outcome: 'rejected' }). Its status is…</x-t><x-o>success, with the bail payload as result</x-o><x-o>failed</x-o><x-o>canceled</x-o><x-o>suspended</x-o><x-why>Read result.outcome, not only status.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Two approval clicks arrive at once. What stops a double resume?</x-t><x-o>A longer timeout</x-o><x-o>Disabling the button only</x-o><x-o>Nothing</x-o><x-o>An atomic claim: UPDATE … WHERE status = 'awaiting' RETURNING (and Mastra’s own suspended→running claim)</x-o><x-why>One conditional update wins; the other gets 0 rows → 409.</x-why></x-mcq>
+<x-mcq a="1"><x-t>Default concurrency of <code>.foreach()</code> in Mastra?</x-t><x-o>Unlimited</x-o><x-o>1 (sequential)</x-o><x-o>4</x-o><x-o>10</x-o><x-why>Set it explicitly.</x-why></x-mcq>
+</x-quiz>

@@ -1,0 +1,177 @@
+@Q 6.1
+S: An embedding model reads a text and outputs a point in a high-dimensional space, for example 1,536 numbers. Training arranges the space so that texts used in similar contexts or with similar meaning end up close together, and unrelated texts far apart. You never interpret single numbers; you compare whole vectors with a distance or similarity function. Embeddings exist for text, images, audio and code, and multimodal models put several types in one shared space.
+E: “How do I reset my password?” and “I forgot my login credentials” land near each other; “Quarterly revenue grew 15%” lands far away.
+Q: Is an embedding reversible to the original text?
+A: Not exactly, but research shows a lot of the text can be reconstructed from some embeddings, so treat them as sensitive data, not anonymised.
+N: “Each dimension means a specific concept like ‘sports’.”
+@Q 6.2
+S: Search over text needs a notion of “close in meaning”. Words alone fail on synonyms (car/automobile), paraphrases and different languages, and succeed on accidental shared words. Mapping text to vectors turns meaning-similarity into geometry, which computers can compute quickly and index for millions of items. It also makes text usable by other numeric methods: clustering, classification, deduplication, recommendation.
+E: A support bot finds the “Refund policy” article for “can I get my money back?” although no keyword overlaps.
+Q: What do embeddings struggle with?
+A: Exact identifiers (codes, SKUs), negation and precise numbers, and very long texts squeezed into one vector.
+N: “Because computers can’t store text.”
+@Q 6.3
+S: The text is tokenised and passed through a transformer encoder; every token gets a context-aware vector after the attention layers. A pooling step turns the token vectors into one vector (mean of all tokens, or the vector of a special first token), sometimes followed by a projection and normalisation to length 1. The model was trained contrastively on pairs (query, relevant passage) so that pairs score high and in-batch non-pairs score low, which is what makes distances meaningful for retrieval.
+E: Step through the “How text becomes an embedding” animation in lesson 6.A.
+Q: Why do some models want a prefix like “query:” or a task type?
+A: They were trained with different roles for queries and documents; the hint puts each into the right part of the space.
+N: “It averages word vectors from a dictionary.” (That was older word2vec-style; modern models are contextual.)
+@Q 6.4
+E: 3072 dims × 4 bytes (float32) = 12 KB per vector, before index overhead; 1M chunks ≈ 12 GB. At 768 dims ≈ 3 GB.
+N: “Dimension = number of words the model knows.”
+@Q 6.5
+S: More dimensions give the model more room to encode distinctions, but returns diminish, and quality depends far more on training data and objective than on width. Costs grow linearly: storage, memory for indexes, and compute per comparison; and pgvector indexes the <code>vector</code> type only up to 2,000 dimensions. Many current models are trained so that the first N dimensions are usable on their own (Matryoshka representation learning), letting you choose 256/768/1536 with small quality loss.
+E: Benchmarks often show a good 768-dim model beating a larger, older model on retrieval for a given domain.
+Q: How do you choose?
+A: Run your own retrieval eval (recall@k on your questions) for 2–3 candidate models/dimensions and weigh quality against storage and latency.
+N: “Always pick the biggest.”
+@Q 6.6
+S: Two texts are semantically similar if they mean roughly the same thing or are about the same topic, regardless of surface wording. Note that “similar” depends on how the model was trained: some models score a question and its answer as close (retrieval-trained), others score paraphrases as close (similarity-trained). A question and a document that contradicts it can still be “similar” because they’re about the same thing.
+E: “The meeting is cancelled” and “The meeting is not cancelled” can score very high similarity.
+Q: What does that mean for RAG?
+A: Similar ≠ relevant or correct; reranking and the LLM’s reading of the text still matter.
+N: “Similar embeddings means identical meaning.”
+@Q 6.7
+S: Cosine similarity measures the angle between vectors: 1 means same direction, 0 orthogonal, −1 opposite. Because it divides by both lengths, it ignores magnitude, which for text embeddings usually reflects things like length or frequency rather than meaning. Scores are model-specific: one model’s 0.8 is not another’s.
+E: In DocMind’s first experiment: “The cat sat on the mat” vs “A kitten was resting on the rug” = 0.7628; vs a stock-market sentence = 0.5879.
+Q: Why is 0.59 “unrelated” but not 0?
+A: Embedding spaces aren’t uniformly spread; most texts share some direction (language, style), so unrelated pairs often score well above 0. Compare relative ranks.
+N: “Cosine similarity is a probability.”
+@Q 6.8
+S: The dot product sums element-wise products. Geometrically it’s |a|·|b|·cos θ, so it rewards both alignment and length. For normalised vectors (length 1) it equals cosine similarity and is cheaper (no division). Some models are trained for dot product and produce meaningful lengths; use what the model card recommends. In pgvector, <code>&lt;#&gt;</code> returns the negative inner product so ascending ORDER BY gives the best first.
+E: a = [1, 2], b = [3, 1] → 1·3 + 2·1 = 5.
+Q: When is dot product preferred?
+A: When vectors are normalised (same ranking as cosine, faster), or when the model encodes importance in vector length.
+N: “Dot product and cosine always rank the same.” Only for equal-length vectors.
+@Q 6.9
+S: Euclidean (L2) distance is the straight-line distance: √Σ(aᵢ − bᵢ)². It depends on both direction and magnitude. For unit vectors, |a − b|² = 2 − 2·cos(a, b), so it ranks identically to cosine. pgvector’s <code>&lt;-&gt;</code> operator computes it.
+E: a = [1, 2], b = [3, 1] → √((1−3)² + (2−1)²) = √5 ≈ 2.236.
+Q: When would you use L2?
+A: When the model was trained with it, or for non-normalised features where absolute position matters (some image or tabular embeddings).
+N: “Bigger Euclidean distance = more similar.”
+@Q 6.10
+E: Try the similarity lab: a long “refund FAQ” vector can win on dot product but lose on cosine to a short “refund policy” vector pointing the same way.
+Q: Which would you choose for a new project?
+A: The one the embedding model documents (often cosine, with normalised vectors), and the matching pgvector operator class for the index.
+N: “They’re interchangeable for all models.”
+@Q 6.11
+E: Ingesting with model A and embedding queries with model B is like plotting cities with one map projection and searching with another: coordinates look valid but point to the wrong places.
+Q: What about re-ranking with a different model?
+A: That’s fine: a cross-encoder reranker reads text, not vectors, so it doesn’t need to match the embedding model.
+N: “Same dimension means compatible.”
+@Q 6.12
+S: Each model learns its own coordinate system: even with the same dimension count, dimension 17 in model A has nothing to do with dimension 17 in model B, and the global geometry differs. Only vectors from the same model (and the same version and settings, such as output dimension and normalisation) are comparable. Alignment methods (learning a linear map between spaces from paired examples) exist but lose quality and are rarely worth it versus re-embedding.
+E: Even upgrading “model-v1” to “model-v2” from the same provider typically requires re-embedding.
+Q: How do you guard against mixing models by accident?
+A: Store the model name/version with each vector (or per table/column) and assert it matches the query model in code.
+N: “Providers keep vectors compatible across versions.”
+@Q 6.13
+S: The new model’s query vectors are in a different space from the stored chunk vectors, so similarity scores become meaningless: search returns essentially random chunks while looking fine (no errors). You must re-embed the corpus, possibly change the column dimension and rebuild indexes, and switch query embedding at the same moment as the corpus switch. Plan it as a migration: dual columns, backfill, eval, cutover, cleanup.
+E: Lesson 6.D walks through the safe sequence.
+Q: Can you migrate gradually per document?
+A: Only if search queries each document with its matching model, which complicates ranking across documents; usually you dual-write and cut over once the backfill is done.
+N: “Only new documents need the new model.”
+@Q 6.14
+E: 2M chunks at 100 texts per batch request and a limit of 3,000 requests/min ≈ 7 minutes of API time; at a free-tier 100 requests/min it’s ~3.3 hours, so run it as a background job with progress.
+C js:
+// resumable, idempotent backfill: only rows without the new vector, in batches
+async function backfill({ batch = 100 } = {}) {
+  for (;;) {
+    const { rows } = await pool.query(
+      'SELECT id, content FROM chunks WHERE embedding_v2 IS NULL ORDER BY id LIMIT $1', [batch]);
+    if (!rows.length) break;
+    const vectors = await retryWithBackoff(() => embedV2(rows.map((r) => r.content)), 5);
+    const values = rows.map((r, i) => `(${r.id}, '[${vectors[i].join(',')}]'::vector)`).join(',');   // ids/numbers only
+    await pool.query(`UPDATE chunks c SET embedding_v2 = v.e FROM (VALUES ${values}) AS v(id, e) WHERE c.id = v.id`);
+    await rateLimiter.wait(1);                                  // respect provider limits
+  }
+}
+Q: What if the job crashes halfway?
+A: Rerun it: it selects only rows still missing the new vector, so finished rows are skipped.
+N: “Re-embed in place in one big transaction.”
+@Q 6.15
+S: A vector database stores vectors with ids and metadata, builds approximate nearest-neighbour indexes, and answers “top-k most similar to this vector, with these filters” quickly at scale. Dedicated ones (Pinecone, Qdrant, Weaviate, Milvus) add features like hybrid search, sharding and replication; general databases with extensions (Postgres + pgvector, Elasticsearch/OpenSearch k-NN) add vectors next to existing data.
+E: A product search with 50M items and strict latency targets might use a dedicated vector DB; a SaaS app with 1M chunks and per-user permissions fits well in pgvector.
+Q: What do you give up with a separate vector DB?
+A: Transactions and joins with your relational data; you must sync deletes and permission changes between systems.
+N: “Vector databases understand text.” They only store and compare vectors.
+@Q 6.16
+S: Storing is easy (an array or JSON column), searching is the problem. Without vector-aware operators and indexes, finding the nearest vectors means reading every row into the application and computing distances: O(n·d) per query plus huge data transfer. Vector types add compact storage, distance operators executed inside the database, and ANN indexes that avoid scanning everything.
+E: 1M rows × 1536 floats ≈ 6 GB transferred to the app per query without database-side search: impossible for a web request.
+Q: When is an in-memory scan fine?
+A: For small, static sets (e.g. a few hundred router example phrases, like DocMind’s intent examples).
+N: “You need a vector database to store embeddings at all.”
+@Q 6.17
+S: Yes. pgvector adds types <code>vector(n)</code> (float32), <code>halfvec(n)</code> (float16, half the storage, higher index dimension limit), <code>sparsevec</code> and <code>bit</code>, distance operators, and HNSW/IVFFlat indexes. Managed Postgres providers (Neon, Supabase, RDS, Cloud SQL) support it.
+E: <code>CREATE EXTENSION vector; ALTER TABLE chunks ADD COLUMN embedding vector(1536);</code>
+Q: Why halfvec?
+A: Half the memory and disk with little retrieval loss, and HNSW indexes on halfvec support up to 4,000 dimensions.
+N: “Postgres can only store vectors as arrays.”
+@Q 6.18
+S: pgvector is an open-source extension that teaches Postgres vector types, distance functions (<code>&lt;-&gt;</code> L2, <code>&lt;#&gt;</code> negative inner product, <code>&lt;=&gt;</code> cosine, <code>&lt;+&gt;</code> L1), exact search by default, and ANN indexes. Because it’s inside Postgres, vector search composes with WHERE filters, JOINs, transactions, row-level security and backups.
+E: DocMind’s search joins chunks to documents for owner and status filters in the same query that orders by cosine distance.
+Q: What are pgvector’s scale limits?
+A: Practical up to tens of millions of vectors on a well-sized server with HNSW; beyond that, partitioning or dedicated systems are considered.
+N: “pgvector is a separate database.”
+@Q 6.19
+E: <code>CREATE INDEX ON chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);</code> then <code>SET hnsw.ef_search = 100;</code> per query session for higher recall.
+Q: Which would you pick by default?
+A: HNSW: better speed/recall trade-off, works as data grows, no retraining; IVFFlat when build time or memory are the constraint.
+N: “IVFFlat and HNSW give exact results.”
+@Q 6.20
+S: Exact (brute-force) k-NN compares the query with every vector: perfect recall, linear time. Approximate (ANN) methods trade a little recall for sub-linear time by searching a graph (HNSW), clusters (IVF) or compressed codes (PQ). Recall@k measures how many of the true top-k the ANN returned; you tune parameters (ef_search, probes) to hit a target like 95–99% at acceptable latency.
+E: 10M vectors: exact ≈ seconds per query; HNSW ≈ milliseconds with ~98% recall.
+Q: How do you measure ANN recall?
+A: For a sample of queries, compute exact top-k (no index, e.g. <code>SET enable_indexscan = off</code> or a separate exact query) and compare with the indexed results.
+N: “Approximate means the results are wrong.”
+@Q 6.21
+S: A vector index is a data structure built from the stored vectors that lets the database find near neighbours without comparing against all of them. In pgvector it’s used when the query has <code>ORDER BY embedding &lt;op&gt; $1 LIMIT k</code> with the operator matching the index’s operator class. Building it takes time and memory (HNSW is often built after bulk loads; IVFFlat must be).
+E: <code>EXPLAIN</code> shows <code>Index Scan using chunks_embedding_hnsw</code> when it’s used.
+Q: Why might Postgres not use the vector index?
+A: Wrong operator class for the operator, no LIMIT, a filter the planner thinks is more selective, or a tiny table where a seq scan is cheaper.
+N: “Indexes are only for text and numbers.”
+@Q 6.22
+S: Top-K returns the K highest-scoring items. K is a precision/recall knob: small K keeps prompts short and precise but risks missing the answer; large K improves recall but adds noise and cost. A common pattern: retrieve a larger candidate set (20–50), rerank, and pass the top 3–8 to the LLM. Optionally add a minimum similarity threshold so weak matches are dropped instead of padding the context.
+E: DocMind uses top 3 per search, but the agent can search more than once.
+Q: How do you choose K?
+A: Measure recall@k and answer quality on your eval set for several values; pick the smallest K that hits your target.
+N: “K = 1 is the most accurate.”
+@Q 6.23
+S: Metadata (owner, document, date, language, type) is stored next to each vector and used in WHERE clauses. With exact search, filtering and ranking are combined naturally. With ANN indexes, Postgres may scan the index for the top candidates first and then filter, so selective filters can leave too few results. Remedies: pgvector 0.8+ iterative index scans (keep scanning until enough rows pass), partial indexes or partitions per tenant, B-tree pre-filtering when the filter is very selective, or higher ef_search.
+C sql:
+SET hnsw.iterative_scan = relaxed_order;     -- pgvector 0.8+: keep scanning until LIMIT rows pass the filter
+SET hnsw.ef_search = 100;
+SELECT c.id, c.content FROM chunks c JOIN documents d ON d.id = c.document_id
+WHERE d.user_id = $1 AND d.status = 'ready'
+ORDER BY c.embedding <=> $2 LIMIT 5;
+Q: Pre-filter or post-filter for a user with only 50 chunks?
+A: Pre-filter (or exact search over their rows): their chunks are a tiny subset, so an exact scan of 50 rows is instant and complete.
+N: “Filters are applied before ANN search automatically.”
+@Q 6.24
+S: Cosine distance = 1 − cosine similarity, so it ranges from 0 (same direction) to 2 (opposite). Distances are used because databases sort ascending and index “nearest”; just remember to convert back to similarity (1 − d) when showing scores or applying thresholds.
+E: A chunk with distance 0.18 has similarity 0.82.
+Q: Is cosine distance a true metric?
+A: Not strictly (it violates the triangle inequality), but it works fine for ranking.
+N: Sorting by distance descending.
+@Q 6.25
+S: <code>a &lt;=&gt; b</code> returns the cosine distance. In <code>ORDER BY embedding &lt;=&gt; $1 LIMIT 5</code> the planner can use an HNSW or IVFFlat index built with <code>vector_cosine_ops</code>. The query vector is passed as a string literal like <code>'[0.1,0.2,…]'</code> cast to vector, or through a driver/ORM helper (Drizzle’s <code>cosineDistance</code>).
+E: <code>SELECT content, embedding &lt;=&gt; $1 AS distance FROM chunks ORDER BY distance LIMIT 5;</code>
+Q: What operator for an index built with vector_l2_ops?
+A: <code>&lt;-&gt;</code>; using <code>&lt;=&gt;</code> wouldn’t use that index.
+N: Confusing <code>&lt;=&gt;</code> with the SQL null-safe equality operator from MySQL.
+@Q 6.26
+S: One row per chunk with: a stable id; the document foreign key; position (chunk_index, page); the text (needed for prompts and keyword search); the embedding; metadata used for filtering and citations (heading, language, token count); and the embedding model version. Unique (document_id, chunk_index) makes re-ingestion idempotent. Ownership either lives on the document (join) or is denormalised onto the chunk for faster filtering.
+E: The chunks table in lesson 4.A and the RAG implementation in Phase 7.
+Q: Should chunk text live in the same table as the vector?
+A: Usually yes, for simplicity; very large deployments sometimes separate them to keep the vector table small.
+N: Storing only vectors and losing the text.
+@Q 6.27
+E: The test: user A uploads “a.pdf”, user B asks a question whose best match is in a.pdf; B must get nothing from it.
+Q: Would you denormalise user_id onto chunks?
+A: It speeds up filtering and enables partial indexes per tenant, at the cost of keeping it in sync; DocMind keeps ownership on documents and joins.
+N: Filtering by user in the application after retrieving global top-k.
+@Q 6.28
+E: <code>DELETE FROM documents WHERE id = $1 AND user_id = $2</code> with chunks ON DELETE CASCADE removes the document and all its vectors in one transaction.
+Q: Why does DocMind delete the document row first?
+A: A still-running ingest job checks the row; if it’s gone, the job deletes what it stored, so no orphan chunks appear even if they race.
+N: Deleting chunks without checking that the document belongs to the caller.

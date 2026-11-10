@@ -1,0 +1,269 @@
+@Q 4.1
+S: The relational model (E. F. Codd, 1970) stores facts as rows in tables; each table has a fixed set of typed columns; relationships are expressed by storing keys, not pointers; and SQL lets you combine tables with joins at query time. The database enforces integrity with constraints and gives transactions with ACID guarantees. Because queries are declarative, the planner chooses how to execute them (which index, which join algorithm).
+E: An AI app: users, documents (user_id), chunks (document_id), messages (conversation_id). “All ready documents of user 7 with their chunk counts” is one SQL query, no code loops.
+Q: Name three relational databases and one difference.
+A: PostgreSQL (rich types: JSONB, arrays, extensions like pgvector), MySQL (widely hosted, simpler feature set), SQLite (embedded in one file, no server).
+N: “A relational database is any database with tables.” Constraints, joins and transactions are the point.
+@Q 4.2
+S: Non-relational (NoSQL) databases organise data by access pattern instead of normalised tables: document stores keep nested JSON per record (MongoDB), key-value stores map keys to blobs (Redis, DynamoDB), wide-column stores spread rows across many nodes (Cassandra), graph databases store nodes and edges (Neo4j), and vector databases index embeddings (Qdrant, Pinecone). They often trade joins and multi-record transactions for flexible schemas and horizontal scale.
+E: A MongoDB document for a blog post can embed its comments; reading the post is one lookup, but “all comments by user X across posts” is harder.
+Q: When is a document store a good fit?
+A: When data is read and written as self-contained aggregates (a product with its variants), the schema varies per record, and cross-record joins are rare.
+N: “NoSQL means no schema.” The schema moves into application code.
+@Q 4.3
+E: Users, documents, permissions and billing → SQL (relations, transactions). A cache of LLM responses → Redis. Event logs at huge write rates → a wide-column or log store.
+N: “SQL can’t scale.” Postgres handles very large workloads with indexes, read replicas and partitioning; the decision is about data shape and consistency needs.
+@Q 4.4
+S: A table defines an entity type and its attributes (the schema): column names, types (text, integer, timestamptz, uuid, jsonb, vector) and constraints. Each row is one instance with a value (or NULL) for every column. Rows have no inherent order; ORDER BY is required for a guaranteed order. Good table design: one entity per table, one fact per column.
+E: <code>documents</code>: columns id (uuid), user_id (uuid), filename (text), status (text CHECK in processing/ready/failed), created_at (timestamptz). Each upload is a row.
+Q: Why does row order without ORDER BY change?
+A: The planner may read from different indexes or parallel workers, and updates move rows physically; SQL guarantees no order unless you ask.
+N: “Rows come back in insertion order.”
+@Q 4.5
+S: The primary key is the row’s identity: unique, never NULL, ideally never changes. Postgres creates a unique B-tree index for it automatically. Choices: natural keys (an email) change and leak meaning; surrogate keys (identity integers or UUIDs) are stable. Composite primary keys fit join tables (<code>PRIMARY KEY (conversation_id, document_id)</code>).
+E: <code>id uuid PRIMARY KEY DEFAULT gen_random_uuid()</code> lets the server or client generate ids without a round trip.
+N: Using email as the primary key and then needing to let users change their email.
+@Q 4.6
+S: A foreign key constraint makes the database check, on every insert/update of the child and every delete/update of the parent, that the referenced row exists. ON DELETE behaviour: CASCADE (delete children), SET NULL, RESTRICT/NO ACTION (block). It turns “orphan rows” from a bug you discover months later into an immediate error. Postgres does not automatically index the referencing column; add an index if you join or delete by it.
+C sql:
+CREATE TABLE chunks (
+  id bigserial PRIMARY KEY,
+  document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE
+);
+CREATE INDEX chunks_document_idx ON chunks (document_id);   -- FK columns aren't indexed automatically
+-- DELETE FROM documents WHERE id = $1;  → its chunks are deleted in the same statement
+Q: Why might a team skip foreign keys?
+A: Sharded or very write-heavy systems sometimes enforce relationships in code; for a normal app it’s usually a mistake.
+N: “Foreign keys slow everything down, so skip them.”
+@Q 4.7
+S: A UNIQUE constraint (backed by a unique index) guarantees no two rows have equal values in the listed columns. It’s the only reliable way to prevent duplicates under concurrency: two transactions inserting the same email at the same moment can’t both succeed. NULLs are distinct by default in Postgres (many NULLs allowed), unless declared <code>NULLS NOT DISTINCT</code> (Postgres 15+). Partial unique indexes enforce uniqueness for a subset (<code>WHERE deleted_at IS NULL</code>).
+E: <code>UNIQUE (user_id, sha256)</code> stops the same user uploading the same file twice; insert with <code>ON CONFLICT (user_id, sha256) DO NOTHING RETURNING *</code>.
+Q: How do you report a unique violation to the client?
+A: Catch Postgres error code 23505 (unique_violation) and return 409 Conflict with a friendly message.
+N: Checking “does it exist?” in code before inserting.
+@Q 4.8
+S: Normalisation removes redundancy by splitting data so each fact is stored in exactly one place. That prevents update anomalies (changing a user’s email in one row but not in another copy), insert anomalies (can’t store a product until it has an order) and delete anomalies (deleting the last order deletes the product’s info). The cost is more joins; the benefit is consistency.
+E: Storing <code>owner_email</code> on every document means changing an email requires updating many rows; storing only <code>user_id</code> keeps one source of truth.
+Q: How far should you normalise?
+A: Usually to 3NF, then denormalise deliberately where measured read performance needs it.
+N: “Normalisation means splitting everything into as many tables as possible.”
+@Q 4.9
+S: Put simply: 1NF: each cell holds one value and there are no repeating column groups (tag1, tag2…). 2NF: in a table with a composite key, every non-key column depends on the whole key, not part of it. 3NF: non-key columns depend only on the key, not on other non-key columns (“the key, the whole key, and nothing but the key”).
+Q: Fix the 1NF violation of tags stored as “ai,rag”.
+A: A <code>tags</code> table and a <code>document_tags(document_id, tag_id)</code> join table (or, pragmatically in Postgres, a <code>text[]</code> column with a GIN index if tags are just labels).
+N: Reciting definitions without an example.
+@Q 4.10
+S: Denormalisation adds redundant data on purpose: counters (<code>message_count</code>), copies of frequently joined fields, precomputed aggregates, or materialised views. It speeds up reads and simplifies queries but adds write work and the risk of copies drifting. Keep copies correct with transactions, triggers, or periodic recomputation, and document which field is the source of truth.
+E: Storing <code>filename</code> on each chunk avoids a join in search results, at the cost of updating chunks if a document is renamed.
+Q: What is a materialised view?
+A: A stored query result that you refresh (<code>REFRESH MATERIALIZED VIEW</code>); good for expensive analytics that can be slightly stale.
+N: “Denormalisation is bad design.” It’s a trade-off.
+@Q 4.11
+S: Without an index the database reads every row (sequential scan) to find matches. An index is a separate structure, usually a B-tree, storing the indexed column values in sorted order with pointers to rows (TIDs). Other index types: Hash (equality), GIN (arrays, JSONB, full-text), GiST (geometric, ranges), BRIN (huge naturally ordered tables), and pgvector’s HNSW/IVFFlat for vectors.
+E: <code>CREATE INDEX documents_user_idx ON documents (user_id);</code> makes “this user’s documents” fast.
+Q: Does an index help a query that returns 80% of the table?
+A: Usually not: reading most of the table sequentially is cheaper than jumping through the index, so the planner chooses a seq scan.
+N: “Indexes store copies of whole rows.” (Only the indexed columns, plus INCLUDE columns if specified.)
+@Q 4.12
+S: A B-tree index lets the planner find the first matching key in a few page reads (the tree is shallow), then walk the sorted leaves for ranges, and fetch the matching rows. It can also return rows already sorted (no Sort step for ORDER BY + LIMIT), satisfy queries entirely from the index (index-only scans), and enforce uniqueness. The planner decides using statistics about how many rows will match.
+E: Finding 20 recent documents for one user among 10 million rows: with <code>(user_id, created_at DESC)</code> the database reads ~20 index entries instead of 10 million rows.
+Q: How do you know whether a query used an index?
+A: <code>EXPLAIN ANALYZE</code>: look for Index Scan / Index Only Scan / Bitmap Index Scan nodes and the actual time.
+N: “Adding an index always makes queries faster.”
+@Q 4.13
+S: Each index must be updated on every insert, on updates of indexed columns, and on deletes (vacuum), so write-heavy tables slow down with many indexes. Indexes consume disk and shared memory, compete for cache, and building them on large tables takes time and can block writes unless created <code>CONCURRENTLY</code>. Unused or duplicate indexes are pure overhead.
+E: A chunks table with an HNSW index: bulk inserting 100,000 embeddings is much slower than without it, so large backfills often build the index after loading.
+Q: How do you find unused indexes?
+A: <code>pg_stat_user_indexes.idx_scan</code> near 0 over a representative period.
+N: “Indexes only cost disk space.”
+@Q 4.15
+S: A transaction groups statements between BEGIN and COMMIT so the database applies all or none of them. If any statement fails or you ROLLBACK, earlier changes in the transaction are undone. Other sessions don’t see the uncommitted changes. Postgres runs every single statement in its own implicit transaction if you don’t open one.
+E: Publishing a course: insert modules, insert lessons, set course status = published; if any insert fails, nothing is published.
+Q: What is a savepoint?
+A: A marker inside a transaction you can roll back to without aborting the whole transaction (<code>SAVEPOINT s1; … ROLLBACK TO s1;</code>).
+N: “Each query in my function is automatically in one transaction.” Not unless you use one client and BEGIN/COMMIT.
+@Q 4.16
+S: Atomicity: a transaction’s changes all happen or none do (implemented with the write-ahead log and rollback). Consistency: each transaction moves the database from one valid state to another, respecting constraints. Isolation: concurrent transactions don’t see each other’s intermediate states; the degree depends on the isolation level. Durability: once COMMIT returns, the change survives crashes because the WAL is flushed to disk.
+E: Transfer 100 from A to B: two UPDATEs; atomicity means you never lose 100 mid-way; durability means a power cut after COMMIT doesn’t undo it.
+Q: Which ACID property do many NoSQL stores relax?
+A: Isolation and multi-record atomicity (often “eventual consistency” across nodes), in exchange for availability and scale.
+N: Confusing ACID’s C with “consistency” in distributed systems (CAP).
+@Q 4.17
+E: Read committed: in one transaction, two identical SELECTs can return different results if another transaction committed between them.
+N: “Serializable means transactions run one after another.” They run concurrently; the database aborts ones that would break serial equivalence.
+@Q 4.18
+S: Deadlocks need two or more transactions holding locks and waiting on each other in a cycle. Postgres checks for cycles after <code>deadlock_timeout</code> (1 s by default), aborts one transaction with SQLSTATE 40P01 and lets the other continue. Prevention: lock rows in a consistent order (e.g. by id), keep transactions short, avoid user or network waits inside transactions, and retry the aborted transaction.
+E: Two requests transfer money A→B and B→A at the same time: each locks its first account and waits for the second. Locking both rows ordered by id avoids it.
+C sql:
+BEGIN;
+SELECT id FROM accounts WHERE id IN ($1, $2) ORDER BY id FOR UPDATE;   -- consistent lock order
+UPDATE accounts SET balance = balance - $3 WHERE id = $1;
+UPDATE accounts SET balance = balance + $3 WHERE id = $2;
+COMMIT;
+Q: Is a deadlock a bug in Postgres?
+A: No, it’s a design issue in the application’s locking pattern; the database just breaks the cycle.
+N: “Deadlocks hang forever.”
+@Q 4.19
+S: A connection pool (pg.Pool, PgBouncer, a provider’s pooled endpoint) keeps N open connections. Requests borrow a connection, use it, and return it. When all are busy, requests wait in a queue up to a timeout. Configuration: max size (tune against the server’s <code>max_connections</code> divided by app instances), idle timeout, connection timeout. Server-side poolers in transaction mode let thousands of clients share few backends but break session features (prepared statements, SET, advisory locks across statements).
+E: <code>new pg.Pool({ connectionString, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000 })</code>.
+Q: Why not make the pool size 500?
+A: Postgres uses a process per connection; hundreds of active connections thrash CPU and memory. Throughput usually peaks with a small pool.
+N: “Opening a new connection per query is fine.”
+@Q 4.20
+S: A new Postgres connection costs a TCP handshake, TLS negotiation, authentication, and a new backend process with its own memory; often 20–100 ms over the internet. Doing that per query multiplies latency and can exceed max_connections under load. Reusing connections also keeps prepared statement caches and server memory warm.
+E: Neon or Supabase across regions: a fresh connection can take longer than the query itself.
+Q: What happens in serverless functions?
+A: Each instance may open its own connections, so use the provider’s pooled endpoint or an HTTP/WebSocket driver designed for serverless.
+N: “Connections are free to open.”
+@Q 4.21
+E: One query in DocMind joins chunks to documents, filters by owner and status, and orders by vector distance: something you can’t do in one call if vectors live in a separate system.
+N: “Postgres can’t do vectors, so you need Pinecone.”
+@Q 4.22
+S: Logical order of a SELECT: FROM/JOIN → WHERE (row filter) → GROUP BY → aggregates computed → HAVING (group filter) → SELECT → ORDER BY → LIMIT. That’s why WHERE can’t use <code>count(*)</code> (groups don’t exist yet) and why filtering rows in WHERE instead of HAVING is more efficient when possible.
+E: <code>SELECT user_id, count(*) FROM documents WHERE status = 'ready' GROUP BY user_id HAVING count(*) > 5;</code>
+Q: Can you use a column alias from SELECT in WHERE?
+A: No, SELECT is evaluated after WHERE; repeat the expression or use a subquery/CTE.
+N: “HAVING is just WHERE for joins.”
+@Q 4.23
+S: A join builds rows from pairs of rows that satisfy the ON condition. INNER keeps only matches. LEFT keeps all left rows and fills right columns with NULL when nothing matches. RIGHT is LEFT with the tables swapped (rarely used). FULL keeps unmatched rows from both. The planner executes joins with nested loops, hash joins or merge joins depending on sizes and indexes.
+E: “Documents with their owner’s email”: INNER JOIN. “Every user with their document count, including zero”: LEFT JOIN.
+Q: Why can a LEFT JOIN turn into an INNER JOIN by accident?
+A: A WHERE condition on a right-table column (<code>WHERE d.status = 'ready'</code>) removes the NULL rows; move it into the ON clause.
+N: “RIGHT JOIN returns the right table only.”
+@Q 4.24
+S: Subqueries can be scalar (one value), row lists for IN/EXISTS, or derived tables in FROM. Correlated subqueries reference the outer row and conceptually run per row (the planner often rewrites them into joins). EXISTS stops at the first match and handles NULLs safely; NOT IN with a subquery that can return NULL returns no rows, a classic bug.
+Q: NOT IN vs NOT EXISTS?
+A: Prefer NOT EXISTS: <code>x NOT IN (1, NULL)</code> is never true because comparison with NULL is unknown.
+N: “Subqueries are always slow.”
+@Q 4.25
+S: <code>WITH name AS (SELECT …)</code> defines a named result usable in the following query, like a variable for a query. Benefits: readability (steps top to bottom), reuse of the same intermediate result, and <code>WITH RECURSIVE</code> for trees and graphs. Since Postgres 12, simple CTEs are inlined (optimised like subqueries) unless marked <code>MATERIALIZED</code>. Data-modifying CTEs (<code>WITH deleted AS (DELETE … RETURNING *)</code>) can chain writes in one statement.
+C sql:
+-- RRF hybrid search reads as three named steps
+WITH vec AS (SELECT id, row_number() OVER (ORDER BY embedding <=> $1) r FROM chunks ORDER BY embedding <=> $1 LIMIT 40),
+     kw  AS (SELECT id, row_number() OVER (ORDER BY ts_rank_cd(tsv, q) DESC) r FROM chunks, websearch_to_tsquery($2) q WHERE tsv @@ q LIMIT 40)
+SELECT id, sum(1.0 / (60 + r)) AS score FROM (SELECT * FROM vec UNION ALL SELECT * FROM kw) u GROUP BY id ORDER BY score DESC LIMIT 6;
+Q: Write a recursive CTE for a comment thread.
+A: <code>WITH RECURSIVE t AS (SELECT * FROM comments WHERE id = $1 UNION ALL SELECT c.* FROM comments c JOIN t ON c.parent_id = t.id) SELECT * FROM t;</code>
+N: “CTEs are temporary tables stored on disk.”
+@Q 4.26
+S: Aggregates collapse many rows into one value per group: count(*) counts rows, count(col) counts non-NULLs, sum/avg/min/max ignore NULLs, string_agg/array_agg/json_agg collect values (with ORDER BY inside to control order), and FILTER limits an aggregate to some rows: <code>count(*) FILTER (WHERE status = 'failed')</code>.
+E: One query for a dashboard: <code>SELECT count(*) AS total, count(*) FILTER (WHERE status = 'ready') AS ready, avg(chunk_count) FROM documents WHERE user_id = $1;</code>
+Q: What does avg return on an empty set?
+A: NULL (and count returns 0): use coalesce for display.
+N: “count(column) and count(*) are always the same.”
+@Q 4.27
+S: GROUP BY partitions rows by the listed expressions; each group produces one output row. Every selected column must be grouped or aggregated (Postgres allows other columns of a table when its primary key is grouped). ROLLUP/CUBE/GROUPING SETS produce subtotals.
+E: Token cost per user per day: <code>SELECT user_id, date_trunc('day', created_at) d, sum(input_tokens + output_tokens) FROM llm_calls GROUP BY 1, 2;</code>
+Q: How do you get the top row per group?
+A: <code>DISTINCT ON</code> in Postgres, or row_number() OVER (PARTITION BY …) and filter rn = 1.
+N: Selecting a non-grouped column and expecting “any” value.
+@Q 4.28
+S: The OVER clause defines a window: PARTITION BY splits rows into groups, ORDER BY orders them within the group, and an optional frame (ROWS BETWEEN …) limits which rows count. The function is evaluated per row with access to its window, so rows are not collapsed. Common ones: row_number/rank/dense_rank, lag/lead (previous/next row), running sums, moving averages, ntile.
+Q: rank vs dense_rank vs row_number?
+A: For ties: row_number gives 1,2,3; rank gives 1,1,3; dense_rank gives 1,1,2.
+N: “Window functions are the same as GROUP BY.”
+@Q 4.29
+S: Both append the results of two SELECTs with the same column count and compatible types. UNION then removes duplicate rows, which needs a sort or hash over all rows; UNION ALL doesn’t. Use UNION ALL when duplicates are impossible or wanted (combining vector and keyword candidates before fusing scores), UNION when you need set semantics.
+E: In RRF, a chunk found by both searches must appear twice (once per list) so its two scores add up: that needs UNION ALL.
+Q: INTERSECT and EXCEPT?
+A: Rows present in both queries, and rows in the first but not the second.
+N: “UNION joins tables side by side.”
+@Q 4.30
+E: A plan showing <code>Seq Scan on chunks (rows=1000000) Filter: document_id = …</code> with 900 ms is a missing index on chunks.document_id.
+N: Reading only the estimated cost and ignoring actual rows/time, or running EXPLAIN ANALYZE on a DELETE in production without a transaction.
+@Q 4.31
+E: Storing per-message metadata: <code>{ "model": "flash-lite", "tokens": { "in": 812, "out": 140 }, "sources": [ … ] }</code> in a <code>metadata jsonb</code> column.
+Q: When should a JSONB field become a real column?
+A: When you filter, join or constrain on it frequently, or need types and NOT NULL/foreign keys.
+N: Putting everything in one JSONB column to avoid schema design.
+@Q 4.32
+S: DELETE removes rows matching WHERE, one by one: fires row triggers, respects foreign keys (cascades), returns RETURNING rows, and leaves dead rows for VACUUM. TRUNCATE removes all rows by swapping in empty storage: much faster, resets identity with RESTART IDENTITY, needs CASCADE when referenced by FKs, doesn’t fire row triggers. DROP removes the table definition, its indexes and data. All three are transactional in Postgres (rollback works inside BEGIN).
+E: Clearing a staging table before a nightly import: TRUNCATE. Removing one user’s data: DELETE … WHERE user_id = $1.
+Q: Why might DELETE of millions of rows be slow?
+A: Per-row work, WAL volume, cascades, index updates and locks; delete in batches or partition the table and drop partitions.
+N: “TRUNCATE can’t be rolled back.” (In Postgres it can.)
+@Q 4.33
+E: A documents list endpoint went from 40 ms to 2 s after growth: EXPLAIN showed a seq scan + sort on 2M rows; adding <code>(user_id, created_at DESC)</code> brought it back to 3 ms.
+Q: What is pg_stat_statements?
+A: An extension that records execution counts and total/mean time per normalised query, the fastest way to find which queries cost the most overall.
+N: Adding random indexes before reading the plan.
+@Q 4.34
+S: A migration is one step in the schema’s history: an “up” change (and sometimes a “down” to revert) with an id or timestamp. A migration tool records which steps ran in a table in the database, applies pending ones in order, and refuses to run twice. Data migrations (backfills) are kept separate from schema changes and run in batches.
+E: <code>0004_add_documents_status.sql</code>: <code>ALTER TABLE documents ADD COLUMN status text NOT NULL DEFAULT 'ready';</code>
+Q: Should migrations run automatically on deploy?
+A: Commonly yes, as a release step before the new code starts; destructive or long ones are reviewed and run deliberately.
+N: “A migration is a backup.”
+@Q 4.35
+S: Without migrations, environments drift: local, staging and production end up with different columns, and nobody knows which SQL was run where. Migrations make schema changes code-reviewed, versioned with the code that needs them, repeatable for new developers and test databases, and safe to deploy in order (expand → migrate → contract).
+E: DocMind hand-ran SQL in the Neon editor and kept it as comments in schema.ts; it works for one person but is listed as debt.
+Q: How do you deploy a column rename with zero downtime?
+A: Add the new column, write to both, backfill, switch reads, stop writing the old one, drop it later.
+N: “I’ll just remember what I changed.”
+@Q 4.36
+S: An ORM maps tables to objects and rows to instances, generates SQL from method calls, and often manages relations, migrations and types. Spectrum: query builders (Knex, Kysely, Drizzle’s core API) stay close to SQL; full ORMs (Prisma, TypeORM, Sequelize) add more abstraction (relation loading, lifecycle hooks). Benefits: type safety, less boilerplate, safer parameterisation. Costs: leaky abstractions, hidden N+1 queries, harder tuning.
+E: Drizzle: <code>db.select().from(documents).where(eq(documents.userId, id))</code> produces <code>select … from "documents" where "documents"."user_id" = $1</code>.
+Q: What is the N+1 query problem?
+A: Loading a list (1 query) then each item’s relation in a loop (N queries). Fix with a join or a batched IN query.
+N: “With an ORM you don’t need to know SQL.”
+@Q 4.37
+S: Drizzle keeps you close to SQL (you can predict the query), types every column from your schema file (a typo or wrong type fails at compile time), always parameterises values, lets you compose conditions as values (<code>and(eq(...), ...)</code>), drives migrations from the same schema, and has almost no runtime overhead or code generation step. It still offers a <code>sql</code> template for anything it doesn’t model.
+E: DocMind’s <code>cosineDistance(chunks.embedding, vec)</code> is a typed helper producing <code>embedding <=> $1</code>, used inside an ordinary select with a join and where clause.
+Q: Drizzle vs Prisma?
+A: Prisma has a separate schema language, generated client and powerful relation API but more abstraction; Drizzle is TypeScript-native, SQL-shaped and lighter.
+N: “Drizzle is faster than SQL.” It generates SQL.
+@Q 4.38
+S: You pass Drizzle a driver connection (e.g. a node-postgres Pool). Each builder call composes an AST; awaiting it renders SQL text plus a params array, sends it through the driver, receives rows, and maps column names to your schema’s property names (snake_case to camelCase) and types (timestamps to Date, numeric to string unless mapped). Transactions borrow one connection from the pool for their duration.
+E: <code>.toSQL()</code> on a query shows exactly what will be sent: useful for debugging.
+Q: Does Drizzle manage the connection pool?
+A: No, the driver does; Drizzle uses whatever client you give it.
+N: “Drizzle stores data itself.”
+@Q 4.39
+S: drizzle-kit reads <code>drizzle.config</code> (schema path, output folder, dialect, credentials). <code>generate</code> diffs the schema against the last snapshot and writes SQL migration files; <code>migrate</code> applies them; <code>push</code> syncs the DB directly; <code>pull</code> introspects an existing DB into a schema file (useful for baselining); <code>studio</code> opens a data browser.
+E: Baseline for DocMind: <code>drizzle-kit pull</code> or generate an initial migration and mark it as applied, so the next <code>generate</code> only contains the new change.
+Q: What’s in the drizzle folder?
+A: Numbered SQL files plus a meta folder with JSON snapshots and a journal that tracks order.
+N: “drizzle-kit runs at request time.”
+@Q 4.40
+S: push compares your schema with the live database and runs whatever DDL makes them match, interactively, without leaving a record: great for local prototyping, dangerous for shared or production databases (accidental drops, no review, no reproducibility). generate + migrate produce committed SQL files that are reviewed, applied in order everywhere, and tracked in a migrations table.
+E: Prototype locally with push; once others or production use the DB, switch to migrations.
+Q: Can you mix them?
+A: Only carefully: push on a DB managed by migrations makes the migration history lie about the real schema.
+N: “push is just a faster migrate.”
+@Q 4.41
+E: Rename <code>filename</code> to <code>name</code> in schema.js → generate asks “rename or drop+create?” → choose rename → SQL: <code>ALTER TABLE "documents" RENAME COLUMN "filename" TO "name";</code>
+N: Editing an already-applied migration file instead of writing a new one.
+@Q 4.42
+S: Two separate things: foreign keys declared on columns (<code>.references(() => users.id, { onDelete: 'cascade' })</code>) create real database constraints; <code>relations()</code> declarations tell Drizzle’s relational query API how tables connect (one/many) so it can load nested data with <code>with</code>. You usually want both: constraints for integrity, relations for convenient loading.
+E: <code>db.query.users.findFirst({ where: eq(users.id, id), with: { documents: { where: eq(documents.status, 'ready') } } })</code>.
+Q: Many-to-many in Drizzle?
+A: A join table with two references, and relations from each side to the join table.
+N: “Declaring relations() creates foreign keys.”
+@Q 4.43
+S: Joins in the core API mirror SQL: <code>innerJoin</code>, <code>leftJoin</code>, <code>rightJoin</code>, <code>fullJoin</code> with an ON condition built from operators. Selected columns can be shaped into nested objects. For left joins, the joined table’s fields become nullable in the result type, which forces you to handle missing rows.
+C js:
+const rows = await db
+  .select({ id: documents.id, filename: documents.filename, owner: users.email, chunks: count(chunks.id) })
+  .from(documents)
+  .innerJoin(users, eq(users.id, documents.userId))
+  .leftJoin(chunks, eq(chunks.documentId, documents.id))
+  .where(eq(documents.userId, userId))
+  .groupBy(documents.id, users.email);
+Q: How would you see the generated SQL?
+A: Call <code>.toSQL()</code> on the query or enable Drizzle’s logger.
+N: Loading each relation in a loop (N+1).
+@Q 4.44
+S: <code>db.transaction(async (tx) => { … })</code> checks out one connection, sends BEGIN, runs your callback with <code>tx</code> (a Drizzle instance bound to that connection), COMMITs if it resolves, ROLLBACKs if it throws (or you call <code>tx.rollback()</code>), and releases the connection. Nested <code>tx.transaction()</code> creates savepoints. Isolation level can be set via options.
+E: Ingestion’s “delete old chunks, insert new ones, mark ready” as one transaction so a crash never leaves a document half-indexed.
+Q: What if you use db instead of tx inside the callback?
+A: That statement runs on another connection outside the transaction: it won’t roll back and can deadlock against the transaction’s own locks.
+N: Calling external APIs inside the transaction.
+@Q 4.45
+E: <code>ALTER TABLE users ADD COLUMN plan text NOT NULL;</code> on a table with rows fails: “column contains null values”. <code>ADD COLUMN plan text NOT NULL DEFAULT 'free'</code> succeeds instantly in Postgres 11+ (the default is stored in the catalog, not written to every row).
+Q: What if the right value differs per row?
+A: Add it nullable, deploy code that writes it, backfill in batches with UPDATE … WHERE id BETWEEN, then <code>SET NOT NULL</code> (consider adding a CHECK constraint NOT VALID first and validating it to avoid long locks).
+N: “Just add it and update all rows in the same migration on a huge table.” That can lock the table for a long time.
+@Q 4.46
+E: Hybrid search with RRF (CTEs, window functions, UNION ALL, vector operators) is far clearer in raw SQL through Drizzle’s <code>sql</code> template than in builder calls.
+Q: How do you keep raw SQL safe and typed?
+A: Use the sql template (values become parameters), type the result explicitly, and test it.
+N: “Raw SQL is always unsafe.” Unsafe is string concatenation, not SQL itself.

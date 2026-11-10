@@ -1,0 +1,170 @@
+@Q 14.1
+S: Writing a structured course by hand takes days of outlining, drafting lessons and quizzes. The system turns a topic and a few parameters into a reviewed, structured course: the human controls the plan (outline approval), the machine does the bulk drafting, and quality checks catch obvious problems before publishing. The engineering problem is making a long, multi-step, failure-prone LLM process reliable and affordable.
+E: A trainer enters “Intro to RAG, beginner, 4 modules”; 3 minutes later approves an outline; 6 minutes later has 16 lessons and 4 quizzes in draft.
+Q: Who is the user, and what do they need most?
+A: Educators or teams creating training content; they need control (approval/editing) and trustworthy content more than raw speed.
+N: Describing only “it calls GPT to write a course”.
+@Q 14.2
+S: A validated request (topic, level, module count, audience, language) arrives with an idempotency key; the API upserts a course row keyed by (user, key) so repeats return the same course; it starts a workflow run with the user as the resource owner, stores the run id on the course, and returns 202 when the run suspends for outline approval.
+E: <code>POST /courses</code> with <code>Idempotency-Key: 5f1c…</code> → 202 <code>{ courseId, status: 'awaiting_approval', outline }</code>.
+Q: What if generation of the outline itself is slow?
+A: Start the run in the background and return 202 immediately with status “outlining”; the UI polls until the outline is ready.
+N: Starting generation without any dedupe.
+@Q 14.3
+S: API (auth, validation, endpoints), workflow engine with persistent storage (orchestration, suspend/resume, retries, recovery), LLM client (structured output, timeouts, retries, routing, usage logs), database (courses, lesson drafts, quizzes, events), optional queue for very large jobs, and the frontend (outline review, progress, reader). Observability ties them together with run ids.
+Q: Do you need a separate queue if you use a workflow engine?
+A: Not always; the engine persists and resumes runs. A queue helps when you need to distribute heavy work across separate worker processes.
+N: “Just the LLM and the database.”
+@Q 14.4
+E: The same flow as a single agent prompt would sometimes skip approval, generate lessons out of order, and lose all progress on a crash.
+Q: What would make you reconsider and use an agent?
+A: If each course needed open-ended research with tool choices (web search, reading sources), as a step inside the workflow.
+N: “Because workflows are trendy.”
+@Q 14.5
+S: The LLM writes content in clearly bounded steps: outline from the request, each lesson from its slot in the outline, each quiz from its module’s lessons, optionally a judge for relevance and answer keys. Each call has a schema, a token cap, and validation. Control flow, persistence, numbering, deduplication and publishing are deterministic code.
+Q: Could you use different models per step?
+A: Yes: a stronger model for the outline (planning), a cheaper one for quizzes and checks.
+N: “The LLM manages the workflow.”
+@Q 14.6
+C js:
+const Course = z.object({
+  title: z.string(), audience: z.string(), objectives: z.array(z.string()).min(1),
+  modules: z.array(z.object({
+    title: z.string(), objectives: z.array(z.string()),
+    lessons: z.array(z.object({ title: z.string(), body: z.string().min(400) })).min(2).max(6),
+    quiz: z.object({ questions: z.array(z.object({ question: z.string(), options: z.array(z.string()).length(4), correctIndex: z.number().int().min(0).max(3) })).length(5) }),
+  })).min(1).max(10),
+});
+Q: Why objectives per module?
+A: They guide lesson generation and give a checklist for coverage checks and quiz alignment.
+N: One giant markdown string.
+@Q 14.7
+S: Content is stored incrementally as drafts with natural keys, so retries and resumes are idempotent, then published atomically. The course row holds the request, outline JSONB, status and run id; lesson_drafts and module_quizzes hold generated content keyed by position; publishing flips status in one transaction after verifying completeness. Optionally keep versions of regenerated items.
+Q: Why not write everything at the end?
+A: A crash or failure at lesson 9 would lose all earlier lessons; incremental drafts allow resume.
+N: Keeping generated content only in the workflow snapshot.
+@Q 14.8
+E: Outline: unique module titles, requested module count. Lessons: 400–1,500 words, mentions the lesson’s objective terms, no duplicate paragraphs across lessons. Quizzes: 4 distinct options, key verified by a judge from the lesson text.
+Q: What happens when validation fails repeatedly?
+A: The step fails after its retries; the course is marked failed for that item and the user can regenerate just that lesson or quiz.
+N: Trusting the model’s output because it “looks fine”.
+@Q 14.9
+E: Step through the course workflow animation in lesson 14.A and the simulator below it.
+Q: Where would you put a “quality check” step that can send work back?
+A: After lessons/quizzes: a deterministic check that lists failing items, followed by a loop (dountil) regenerating only those, with a maximum number of rounds.
+N: Describing it as one LLM call.
+@Q 14.10
+S: (1) prepare: validate, dedupe by idempotency key, create/find the course; (2) outline: LLM with schema, saved; (3) approval: suspend until the user approves, rejects or edits; (4) lessons: one item per lesson, parallel with a cap, idempotent drafts; (5) quizzes: one per module from its lessons; (6) checks: duplicates, coverage, quiz keys; (7) publish: verify counts and flip status in one transaction.
+Q: Which step is most expensive?
+A: Lessons: the most calls and output tokens.
+N: Forgetting approval or publish.
+@Q 14.11
+S: Deterministic steps produce the same result for the same input and stored data: validation and dedupe, mapping the outline to work items and numbering, duplicate/coverage checks, and the publish transaction. They’re cheap, testable with unit tests, and never need LLM retries.
+Q: Why make checks deterministic where possible?
+A: They’re reliable, free, and don’t introduce new randomness; use a judge model only for what code can’t check.
+N: “Everything is non-deterministic because it’s AI.”
+@Q 14.12
+S: LLM steps are the ones producing language or judgement: the outline (planning and structure), lessons (writing), quizzes (question writing), and optional judging (relevance, answer verification). Each is wrapped with a schema, retries and limits, and its output is stored so re-runs don’t regenerate it.
+Q: Could the outline be partly deterministic?
+A: Yes: templates for module structure (intro, core, practice, summary) with the LLM filling titles reduces variance.
+N: Saying the save step uses an LLM.
+@Q 14.13
+S: Steps without data dependencies can run concurrently: lessons in different modules, and within a module if each lesson doesn’t need the previous lesson’s text (passing sibling titles is enough for coherence); quizzes per module once that module’s lessons exist. Concurrency is capped to respect provider rate limits.
+Q: What’s the trade-off of generating lessons in parallel?
+A: Speed vs coherence; lessons can repeat each other, mitigated by sibling titles in the prompt and a dedupe check.
+N: “Everything can run in parallel.”
+@Q 14.14
+S: Step outputs feed the next step’s input; .map reshapes outline → lesson items; later steps read the approved outline via getStepResultAsync; large texts are written to the database and passed as ids or re-read by later steps (e.g. quizzes read lessons from lesson_drafts), keeping snapshots small and making steps idempotent.
+Q: Why not pass all lesson bodies through the workflow outputs?
+A: Large snapshots, slower persistence, and duplication of data already stored in your tables.
+N: Passing data through global variables.
+@Q 14.15
+S: The failing step retries according to its policy; transient errors usually pass. If it still fails, the run fails with completed steps’ results and drafts preserved; the course is marked failed with a reason; a retry re-runs the workflow with the same course key, and idempotent steps skip finished work so only the failed part is redone.
+Q: Should one bad lesson fail the whole course?
+A: By default yes (publish requires completeness), but you could mark it and let the user regenerate just that lesson.
+N: Restarting from scratch.
+@Q 14.16
+S: Two layers, chosen deliberately: transport retries in the LLM client (429/5xx/timeouts with backoff and jitter, honouring Retry-After), and step retries for invalid outputs or remaining failures (step retries: 2). Validation errors on input are never retried. Total attempts per item are bounded, logged, and visible in cost dashboards.
+Q: How do you avoid retry multiplication?
+A: Count the layers (client 2 × step 2 = 4 calls max per lesson) and keep each small.
+N: Infinite retries.
+@Q 14.17
+S: Duplicates come from repeated submissions, double approvals, retries and recovery re-runs. Guards: unique (user_id, request_key) on courses with an upsert at the start; atomic approval claim; stable item keys for drafts with ON CONFLICT DO NOTHING; skip-if-exists before LLM calls; and a publish step that checks the course isn’t already published.
+Q: What if the user deliberately wants a second course on the same topic?
+A: A new idempotency key (a new “generate” action) creates a new course; the key represents one click, not one topic.
+N: Deduping by topic text only.
+@Q 14.18
+S: The workflow engine’s storage (Postgres) holds run snapshots after each step and on suspension; the app’s tables hold user-visible state (course status, outline, drafts) linked by run id. This separation lets the API answer status queries without reading framework internals and survive framework changes.
+Q: What if the snapshot and your tables disagree?
+A: Treat your tables as the business truth; steps re-check them (skip-if-exists), so a re-run reconciles them.
+N: Keeping state only in memory.
+@Q 14.19
+S: Suspending for approval puts a cheap checkpoint before the expensive part: the user can catch a wrong scope, level or structure before 30 lesson calls are spent, and stays in control of what’s produced. Other reasons: editing the outline, choosing between alternative outlines, or waiting for a manager’s review.
+Q: Could you skip approval for trusted users?
+A: Yes, as a setting: the approval step returns immediately when auto-approve is on.
+N: “To save server memory.”
+@Q 14.20
+S: The approval step suspends with the outline; the course status becomes awaiting_approval; the user is notified (in-app, email); the UI shows the outline with Approve, Request changes (with feedback) and Cancel; the decision is sent to an authenticated endpoint that validates it against the resume schema.
+Q: Can the user edit the outline before approving?
+A: Yes: send the edited outline as resume data (validated with the Outline schema) and continue with it.
+N: Asking for approval in the chat text and parsing “yes”.
+@Q 14.21
+S: In the workflow storage (Mastra’s snapshot table in Postgres) for orchestration, with the suspend payload; and in the course row (status, outline, run id) for the UI and authorization.
+Q: How long can it stay suspended?
+A: Indefinitely in principle; apply an expiry policy (e.g. 7 days) to clean up.
+N: “In the user’s browser.”
+@Q 14.22
+S: The course status in your own table (awaiting_approval) is returned by the create call and by GET /courses/:id; the UI polls or receives an SSE/websocket event, and notifications point the user to the review screen.
+Q: Why not read Mastra’s run status directly from the frontend?
+A: The frontend shouldn’t access framework internals or other users’ runs; your API exposes a stable, authorised status.
+N: “The frontend keeps the request open.”
+@Q 14.23
+S: Approval endpoint: authenticate, check the course belongs to the user, claim the waiting state (conditional UPDATE), resume the run with { approved: true } in the background, respond 202. The approval step re-runs with resumeData, records the approval time, sets status generating, and the workflow continues with lessons, quizzes, checks and publish; the UI shows progress.
+Q: Why respond before generation finishes?
+A: Generation takes minutes; the UI polls progress instead of holding a request open.
+N: “The user must keep the page open until it finishes.”
+@Q 14.24
+S: Two designs: end the run (bail with outcome rejected, status success with that outcome) and mark the course rejected; or treat rejection with feedback as “regenerate”: loop back to the outline step with the feedback (dountil or a new run), with a cap on rounds. Either way, no lessons are generated for a rejected outline.
+Q: How do you include the feedback?
+A: Add it to the outline prompt as constraints (“make it more hands-on, 5 modules instead of 4”) and keep the previous outline for comparison.
+N: “Generate the lessons anyway.”
+@Q 14.25
+S: Nothing is lost and nothing needs to run while suspended: the state is in Postgres. After the restart, the approval request can arrive and resume the run in the new process. Runs that were actively running (not suspended) are re-driven by recovery at boot, re-executing the interrupted step idempotently.
+Q: What if recovery is turned off?
+A: A sweeper job finds runs stuck in running and restarts or fails them explicitly.
+N: “The user must start over.”
+@Q 14.26
+S: Make approval single-use: the first request’s conditional update moves the course from awaiting_approval to resuming and gets a row back; the second request updates nothing and receives 409. The workflow engine’s own claim (Mastra: suspended → running atomically, WORKFLOW_RESUME_ALREADY_CLAIMED on the loser) is a second guard. The UI also disables the button after click.
+Q: What about an approval from another user?
+A: The update includes user_id = the caller; another user’s request updates nothing → 404/409.
+N: “The second click just runs another generation.”
+@Q 14.27
+S: Relevance is built in and then checked: each lesson prompt includes the course topic, module title and objectives and sibling titles; generation is constrained by a schema; afterwards, a relevance check (embedding similarity between lesson and module objective above a threshold, or a judge rating) flags off-topic lessons for regeneration.
+Q: Which is cheaper, embeddings or a judge?
+A: Embeddings: one cheap call per lesson; use a judge only for flagged or borderline items.
+N: “The model always stays on topic.”
+@Q 14.28
+S: Prevent at the source (outline prompt requires distinct modules, previous titles listed), detect in code (normalised title comparison and embedding similarity between module titles/objectives), and let the human catch remaining overlap at approval. Same idea one level down for lessons.
+Q: What threshold would you use?
+A: Start around 0.9 cosine for titles and tune on examples of true duplicates vs related-but-distinct modules.
+N: Only checking exact title equality.
+@Q 14.29
+S: Schema (5 questions, 4 distinct options, valid index), structural rules (no “all of the above”, options of similar length), grounding (answer present in the module’s lessons), key verification (a judge answers from the lesson text without seeing the key), and option shuffling in code.
+Q: What do you do with a question that fails verification?
+A: Regenerate that question only, with the failure reason in the prompt.
+N: Validating only that JSON parses.
+@Q 14.30
+S: LLM-generated facts can be wrong. Mitigations: ground lessons in trusted sources (RAG over course materials or vetted references) instead of model memory, verify quiz keys against the lesson text with a second model, flag low-confidence or numeric claims for review, keep a human review step before publishing for high-stakes topics, and let learners report errors.
+Q: Can you ever guarantee correctness?
+A: No; you can raise confidence and make errors visible and fixable quickly.
+N: “Temperature 0 makes it correct.”
+@Q 14.31
+S: Combine automatic metrics (objective coverage, readability level, duplication rate, quiz validity and key agreement, length targets), rubric-based judge scores (accuracy, clarity, pedagogy) checked against human ratings, and learner outcomes (completion, quiz performance, ratings, reports). Track by model and prompt version to compare changes.
+Q: How do you calibrate the judge?
+A: Have humans rate a sample, compare with judge scores, adjust the rubric until they agree well enough.
+N: Only asking users if they liked it.
+@Q 14.32
+E: For a 10-module course: approval before lessons (avoid wasted 40+ calls), smaller model for quizzes (~60% cheaper per call), lesson cap 1,200 tokens, cache outlines for popular topics, and skip-if-exists on retries.
+Q: How would you show cost to users?
+A: Estimate before generation (modules × lessons × average tokens × price) and enforce per-user monthly budgets.
+N: “Use the cheapest model everywhere.”

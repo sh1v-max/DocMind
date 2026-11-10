@@ -1,0 +1,631 @@
+<x-obj><ul><li>Solve all 10 exercises from the bank, out loud, in 15–25 minutes each.</li><li>Run your solutions against tests in the page (exercises 1, 2, 3, 5, 6, 7, 10 are runnable here).</li><li>Explain edge cases, complexity and follow-ups without notes.</li></ul></x-obj>
+<x-pre><ul><li>Phases 2–9. Try each exercise before opening the hint, then the hint before the solution.</li><li>The runner executes your code in a Web Worker in this page (browser JavaScript: no Node APIs, no npm packages). Each runnable exercise provides small fakes for the LLM/database.</li></ul></x-pre>
+
+<div class="note"><b>How to behave in live coding:</b> restate the problem, ask 1–2 clarifying questions, say your plan in two sentences, write the simple version first, then handle errors and edge cases, then test by walking through an example. Talk while you type. If stuck, say what you’re trying, not silence.</div>
+
+<h2 class="sec"><span class="k">11.1</span>Exercise 1: Express API</h2>
+<x-ex t="Exercise 1: POST /api/chat" tag="must solid" open>
+<x-prob>Build a <code>POST /api/chat</code> endpoint: accept a message, validate it, call an LLM API, return the response, handle missing input and provider failures with appropriate status codes.</x-prob>
+<x-req><ul><li>Accept a message from the user.</li><li>Validate the input.</li><li>Call an LLM API.</li><li>Return the generated response.</li><li>Handle missing input.</li><li>Handle provider failures.</li><li>Implement appropriate HTTP status codes.</li></ul></x-req>
+<x-exp><code>{ "message": "hi" }</code> → 200 <code>{ "reply": "…" }</code>. Missing/empty/too long → 400 with a reason. Provider timeout/5xx → 502 or 503 with a safe message. Provider 429 → 503 with Retry-After or 429. Invalid JSON body → 400.</x-exp>
+<x-edge>Whitespace-only message; non-string message; 50,000-character message; provider returns empty text; provider hangs; client sends extra fields.</x-edge>
+<x-hint>Separate the HTTP layer from the logic: write <code>handleChat(body, llm)</code> that returns <code>{ status, json }</code>, then a 5-line Express route that calls it. That also makes it testable.</x-hint>
+<x-run>
+<x-starter>
+// llm.generate(message) returns a Promise of a string, or rejects with an Error that may have .status
+async function handleChat(body, llm) {
+  // TODO: validate body.message (string, 1..4000 chars after trim)
+  // TODO: call llm.generate, map failures to status codes
+  return { status: 501, json: { error: 'not implemented' } };
+}
+</x-starter>
+<x-tests>
+const ok = { generate: async (m) => 'echo: ' + m };
+test('200 with a reply', async () => { const r = await handleChat({ message: ' hello ' }, ok); eq(r.status, 200); eq(r.json.reply, 'echo: hello'); });
+test('400 when message missing', async () => { eq((await handleChat({}, ok)).status, 400); });
+test('400 when message is blank', async () => { eq((await handleChat({ message: '   ' }, ok)).status, 400); });
+test('400 when message is not a string', async () => { eq((await handleChat({ message: 42 }, ok)).status, 400); });
+test('400 when message is too long', async () => { eq((await handleChat({ message: 'x'.repeat(4001) }, ok)).status, 400); });
+test('503 on provider 429/503', async () => { const llm = { generate: async () => { const e = new Error('busy'); e.status = 429; throw e; } }; eq((await handleChat({ message: 'hi' }, llm)).status, 503); });
+test('502 on other provider failure, no internals leaked', async () => { const llm = { generate: async () => { throw new Error('secret stack'); } }; const r = await handleChat({ message: 'hi' }, llm); eq(r.status, 502); assert(!JSON.stringify(r.json).includes('secret'), 'leaked the internal error'); });
+test('502 on empty reply', async () => { eq((await handleChat({ message: 'hi' }, { generate: async () => '' })).status, 502); });
+</x-tests>
+<x-ref>
+async function handleChat(body, llm) {
+  const message = typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!message) return { status: 400, json: { error: 'message is required' } };
+  if (message.length > 4000) return { status: 400, json: { error: 'message must be at most 4000 characters' } };
+  try {
+    const reply = await llm.generate(message);
+    if (!reply || !reply.trim()) return { status: 502, json: { error: 'The AI service returned an empty answer. Please retry.' } };
+    return { status: 200, json: { reply } };
+  } catch (err) {
+    console.log('llm failed:', err.message);               // real code: structured log with request id
+    if (err.status === 429 || err.status >= 500 || err.name === 'TimeoutError') {
+      return { status: 503, json: { error: 'The AI service is busy. Please retry in a moment.' } };
+    }
+    return { status: 502, json: { error: 'The AI service failed. Please retry.' } };
+  }
+}
+</x-ref>
+</x-run>
+<x-sol><pre data-l="js">// the Express wiring (Express 5)
+import express from 'express';
+import { z } from 'zod';
+const app = express();
+app.use(express.json({ limit: '32kb' }));
+const llm = {
+  async generate(message) {
+    const { text } = await chat({ messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: message }] });
+    return text;                                             // chat() from Phase 5: timeout + retries inside
+  },
+};
+app.post('/api/chat', requireAuth, chatLimiter, async (req, res) => {
+  const { status, json } = await handleChat(req.body, llm);
+  res.status(status).json(json);
+});
+app.use((err, req, res, next) => {                          // invalid JSON body etc.
+  res.status(err.type === 'entity.parse.failed' ? 400 : 500).json({ error: err.type === 'entity.parse.failed' ? 'Invalid JSON' : 'Internal error' });
+});
+
+// integration test with supertest + a fake llm (node:test)
+// const res = await request(app).post('/api/chat').set('authorization', 'Bearer ' + token).send({ message: 'hi' });
+// assert.equal(res.status, 200);</pre></x-sol>
+<x-expl>Validation first (cheap, no provider cost). Provider errors are mapped: transient → 503 (client may retry), other → 502 (bad gateway: our upstream failed). Internal messages are logged, never returned. The logic is a pure function so it’s testable without HTTP or a real LLM.</x-expl>
+<x-cx>O(n) in message length for validation; the provider call dominates latency.</x-cx>
+<x-mist><ul><li>Returning 500 for a missing message.</li><li>Sending <code>err.message</code> to the client.</li><li>No max length (cost and prompt abuse).</li><li>No timeout on the provider call.</li></ul></x-mist>
+<x-fu q="How would you add authentication?"><code>requireAuth</code> middleware before the route: verify the Bearer JWT, set <code>req.user.id</code>; 401 otherwise.</x-fu>
+<x-fu q="How would you store conversation history?">conversations + messages tables; accept an optional <code>conversationId</code> (verify ownership), load the last N messages for the prompt, save the user message and the reply (with token usage) after generation.</x-fu>
+<x-fu q="How would you implement rate limiting?">Per user (and per IP for anonymous) with express-rate-limit and a Redis store when there are several instances, e.g. 20 requests/min; plus a daily token budget per user.</x-fu>
+<x-fu q="How would you stream the response?">Exercise 9: SSE with <code>text/event-stream</code>, forward provider deltas, abort on client disconnect, save after done.</x-fu>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.2</span>Exercise 2: Promise concurrency</h2>
+<x-ex t="Exercise 2: embed 10 documents, max 3 at a time" tag="must solid" open>
+<x-prob>You have 10 documents that need embedding generation. Implement a function that processes them with a maximum of three concurrent requests.</x-prob>
+<x-req><ul><li>Don’t execute all requests simultaneously.</li><li>Handle individual failures.</li><li>Return successful results.</li><li>Don’t stop the entire process because one document fails.</li></ul></x-req>
+<x-exp>Results in input order, one entry per item: <code>{ status: 'fulfilled', value }</code> or <code>{ status: 'rejected', reason }</code> (same shape as <code>Promise.allSettled</code>). Never more than <code>limit</code> calls in flight.</x-exp>
+<x-edge>Empty list; limit larger than the list; limit 1 (sequential); fn throws synchronously; all fail.</x-edge>
+<x-hint>Start <code>limit</code> “workers”. Each worker loops: take the next index from a shared counter, await fn, store the result at that index, repeat until no items remain. <code>await Promise.all(workers)</code>.</x-hint>
+<x-vis><x-w w="concurrency"></x-w></x-vis>
+<x-run>
+<x-starter>
+async function mapWithConcurrency(items, limit, fn) {
+  // TODO: at most `limit` calls of fn(item, index) at once.
+  // Return [{ status: 'fulfilled', value } | { status: 'rejected', reason }] in input order.
+}
+</x-starter>
+<x-tests>
+test('never more than 3 in flight; failures isolated', async () => {
+  let active = 0, peak = 0;
+  const res = await mapWithConcurrency([1,2,3,4,5,6,7,8,9,10], 3, async (x) => {
+    active++; peak = Math.max(peak, active);
+    await sleep(5 + (x % 3) * 7);
+    active--;
+    if (x === 4) throw new Error('boom');
+    return x * 2;
+  });
+  assert(peak === 3, 'peak in flight was ' + peak);
+  eq(res.length, 10);
+  eq(res[0], { status: 'fulfilled', value: 2 });
+  eq(res[3].status, 'rejected');
+  eq(res.filter((r) => r.status === 'fulfilled').length, 9);
+});
+test('keeps input order', async () => {
+  const res = await mapWithConcurrency([30, 5, 15], 2, async (ms) => { await sleep(ms); return ms; });
+  eq(res.map((r) => r.value), [30, 5, 15]);
+});
+test('empty input', async () => { eq(await mapWithConcurrency([], 3, async (x) => x), []); });
+test('limit bigger than items', async () => { eq((await mapWithConcurrency([1, 2], 10, async (x) => x)).length, 2); });
+test('synchronous throw is captured', async () => { const r = await mapWithConcurrency([1], 1, () => { throw new Error('sync'); }); eq(r[0].status, 'rejected'); });
+</x-tests>
+<x-ref>
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;                                   // shared cursor: safe because JS runs one callback at a time
+  async function worker() {
+    while (next &lt; items.length) {
+      const i = next++;
+      try {
+        results[i] = { status: 'fulfilled', value: await fn(items[i], i) };
+      } catch (reason) {
+        results[i] = { status: 'rejected', reason };
+      }
+    }
+  }
+  const n = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: n }, worker));
+  return results;
+}
+</x-ref>
+</x-run>
+<x-expl><code>next++</code> is safe without locks: the event loop runs one callback at a time and the read-and-increment happens synchronously. Each worker awaits one call at a time, so at most <code>n</code> are in flight. try/catch inside the loop isolates failures. Usage: <code>const r = await mapWithConcurrency(docs, 3, (d) => embed(d.text)); const ok = r.filter(x => x.status === 'fulfilled')</code>.</x-expl>
+<x-cx>Time ≈ (sum of durations) / limit in the best case; O(n) extra space for results.</x-cx>
+<x-mist><ul><li><code>Promise.all(items.map(fn))</code>: all at once.</li><li>Chunking into fixed batches of 3 (<code>for … await Promise.all(batch)</code>): works, but each batch waits for its slowest item, wasting time.</li><li>Letting one rejection reject everything.</li></ul></x-mist>
+<x-fu q="How would you retry failed requests without exceeding provider rate limits?">Wrap fn with retryWithBackoff (exercise 3) for retryable errors only, keep the concurrency cap, honour Retry-After, and add a shared rate limiter (token bucket: e.g. 100 requests/min) that every worker awaits before calling; collect permanent failures for a later re-run.</x-fu>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.3</span>Exercise 3: Retry mechanism</h2>
+<x-ex t="Exercise 3: retryWithBackoff(fn, maxRetries)" tag="must solid" open>
+<x-prob>Write a reusable <code>retryWithBackoff(fn, maxRetries)</code>.</x-prob>
+<x-req><ul><li>Retry failed operations.</li><li>Increase delay after each attempt.</li><li>Support a maximum retry count.</li><li>Avoid retrying non-retryable errors.</li><li>Return the successful result.</li></ul></x-req>
+<x-exp>Calls fn up to <code>maxRetries + 1</code> times. Delays 100, 200, 400… ms (base × 2^n), capped. Non-retryable errors (4xx except 429) throw immediately. After the last failure, throw the last error.</x-exp>
+<x-edge>maxRetries = 0; fn succeeds first time; error without status (network); Retry-After provided.</x-edge>
+<x-hint>A <code>for (let attempt = 0; ; attempt++)</code> loop with try/return and catch → decide → sleep. Inject <code>sleep</code> through options so tests don’t really wait.</x-hint>
+<x-vis><x-w w="retry"></x-w></x-vis>
+<x-run>
+<x-starter>
+function isRetryable(err) {
+  // TODO: 429 and 5xx yes; other statuses no; network errors (no status) yes
+}
+async function retryWithBackoff(fn, maxRetries, { baseMs = 100, maxMs = 10000, jitter = true, sleep: wait = sleep } = {}) {
+  // TODO
+}
+</x-starter>
+<x-tests>
+const failTimes = (n, status) => { let c = 0; const f = async () => { c++; if (c &lt;= n) { const e = new Error('fail ' + c); e.status = status; throw e; } return 'ok'; }; f.calls = () => c; return f; };
+test('succeeds after two 503s, delays grow', async () => {
+  const delays = []; const fn = failTimes(2, 503);
+  eq(await retryWithBackoff(fn, 3, { baseMs: 100, jitter: false, sleep: async (ms) => delays.push(ms) }), 'ok');
+  eq(fn.calls(), 3); eq(delays, [100, 200]);
+});
+test('400 is not retried', async () => {
+  const fn = failTimes(5, 400); let threw = false;
+  try { await retryWithBackoff(fn, 3, { sleep: async () => {} }); } catch (e) { threw = e.status === 400; }
+  assert(threw, 'should throw the 400'); eq(fn.calls(), 1);
+});
+test('gives up after maxRetries and throws the last error', async () => {
+  const fn = failTimes(10, 503); let msg = '';
+  try { await retryWithBackoff(fn, 2, { jitter: false, sleep: async () => {} }); } catch (e) { msg = e.message; }
+  eq(fn.calls(), 3); eq(msg, 'fail 3');
+});
+test('429 is retried', async () => { const fn = failTimes(1, 429); eq(await retryWithBackoff(fn, 1, { sleep: async () => {} }), 'ok'); });
+test('network error (no status) is retried', async () => { let c = 0; const fn = async () => { if (c++ === 0) throw new Error('ECONNRESET'); return 1; }; eq(await retryWithBackoff(fn, 1, { sleep: async () => {} }), 1); });
+test('delay is capped', async () => { const d = []; await retryWithBackoff(failTimes(4, 500), 4, { baseMs: 1000, maxMs: 3000, jitter: false, sleep: async (ms) => d.push(ms) }); eq(d, [1000, 2000, 3000, 3000]); });
+test('jitter stays within 0..cap', async () => { const d = []; await retryWithBackoff(failTimes(3, 500), 3, { baseMs: 100, sleep: async (ms) => d.push(ms) }); assert(d.every((ms, i) => ms >= 0 &amp;&amp; ms &lt;= 100 * 2 ** i), JSON.stringify(d)); });
+</x-tests>
+<x-ref>
+function isRetryable(err) {
+  if (typeof err?.status === 'number') return err.status === 429 || err.status >= 500;
+  return true;                                     // no HTTP status: timeout / connection reset → transient
+}
+async function retryWithBackoff(fn, maxRetries, { baseMs = 100, maxMs = 10000, jitter = true, sleep: wait = sleep } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn(attempt);
+    } catch (err) {
+      if (attempt >= maxRetries || !isRetryable(err)) throw err;
+      const cap = Math.min(maxMs, baseMs * 2 ** attempt);
+      const delay = err.retryAfterMs ?? (jitter ? Math.round(Math.random() * cap) : cap);
+      console.log(`attempt ${attempt + 1} failed (${err.status ?? err.message}); retrying in ${delay} ms`);
+      await wait(delay);
+    }
+  }
+}
+</x-ref>
+</x-run>
+<x-expl>The loop tries, and on failure decides: give up (out of retries, or not retryable) or wait and loop. Exponential growth gives the provider room; the cap bounds the worst case; injectable sleep keeps tests fast.</x-expl>
+<x-cx>At most maxRetries + 1 calls; worst-case waiting ≈ sum of caps.</x-cx>
+<x-mist><ul><li>Retrying 400/401 (wastes calls, delays the real error).</li><li>Off-by-one: maxRetries = 3 should mean 4 attempts total.</li><li>Swallowing the final error.</li></ul></x-mist>
+<x-fu q="How would you add jitter?">Full jitter: wait a random time between 0 and the exponential cap (<code>Math.random() * cap</code>), as in the reference. It spreads out clients that failed at the same moment so they don’t retry in lockstep (thundering herd). “Equal jitter” keeps half the cap fixed plus a random half.</x-fu>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.4</span>Exercise 4: SQL</h2>
+<x-ex t="Exercise 4: six queries on users and documents" tag="must basic" open>
+<x-prob><p>Given:</p><div class="two"><table><thead><tr><th>users.id</th><th>name</th></tr></thead><tbody><tr><td>1</td><td>Alex</td></tr><tr><td>2</td><td>John</td></tr></tbody></table><table><thead><tr><th>documents.id</th><th>user_id</th><th>title</th></tr></thead><tbody><tr><td>1</td><td>1</td><td>AI Basics</td></tr><tr><td>2</td><td>1</td><td>RAG Guide</td></tr><tr><td>3</td><td>2</td><td>Node.js Guide</td></tr></tbody></table></div>
+<p>Write SQL to: 1) retrieve all documents; 2) documents belonging to Alex; 3) count documents per user; 4) users who haven’t uploaded documents; 5) the latest five documents; 6) the user with the most documents.</p></x-prob>
+<x-hint>4 needs LEFT JOIN … IS NULL or NOT EXISTS. 5 needs a timestamp (or use id as a proxy and say so). 6: ORDER BY count DESC LIMIT 1, and mention ties.</x-hint>
+<x-sol><pre data-l="sql">-- 1. all documents
+SELECT id, user_id, title FROM documents;
+
+-- 2. Alex's documents (join on the relationship, filter by name; in an app you'd filter by user id)
+SELECT d.id, d.title FROM documents d JOIN users u ON u.id = d.user_id WHERE u.name = 'Alex';
+-- → (1, AI Basics), (2, RAG Guide)
+
+-- 3. count per user, including users with zero
+SELECT u.id, u.name, count(d.id) AS document_count
+FROM users u LEFT JOIN documents d ON d.user_id = u.id
+GROUP BY u.id, u.name ORDER BY document_count DESC;
+-- → Alex 2, John 1
+
+-- 4. users with no documents
+SELECT u.id, u.name FROM users u
+WHERE NOT EXISTS (SELECT 1 FROM documents d WHERE d.user_id = u.id);
+-- → (empty with this data; add user 3 'Mira' to see a row)
+
+-- 5. latest five (needs created_at; the table shown has none)
+SELECT id, title, created_at FROM documents ORDER BY created_at DESC, id DESC LIMIT 5;
+-- without created_at: ORDER BY id DESC LIMIT 5 (only valid if ids increase with time)
+
+-- 6. user with the most documents (all users in case of a tie)
+WITH counts AS (SELECT user_id, count(*) AS n FROM documents GROUP BY user_id)
+SELECT u.id, u.name, c.n FROM counts c JOIN users u ON u.id = c.user_id
+WHERE c.n = (SELECT max(n) FROM counts);
+-- → Alex 2   (simple version: ... ORDER BY count(*) DESC LIMIT 1)</pre></x-sol>
+<x-expl>3 uses LEFT JOIN and <code>count(d.id)</code> so zero-document users show 0. 4: NOT EXISTS is clear and handles NULLs safely (NOT IN breaks if the subquery returns a NULL). 5: point out the missing timestamp instead of guessing. 6: mention ties; the CTE version returns all tied users.</x-expl>
+<x-mist><ul><li><code>count(*)</code> with LEFT JOIN (counts 1 for users with none).</li><li><code>WHERE id NOT IN (SELECT user_id FROM documents)</code> when user_id can be NULL.</li><li>Ordering by title for “latest”.</li></ul></x-mist>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.5</span>Exercise 5: Tool calling</h2>
+<x-ex t="Exercise 5: a tool execution system" tag="must solid" open>
+<x-prob>Tools: <code>getWeather(city)</code>, <code>searchDocuments(query)</code>, <code>getUserProfile(userId)</code>. Receive an LLM tool-call response, identify the tool, validate its arguments, execute it, return the result, handle unknown tools and execution failures.</x-prob>
+<x-req><ol><li>Receive an LLM tool-call response.</li><li>Identify the requested tool.</li><li>Validate its arguments.</li><li>Execute the corresponding function.</li><li>Return the tool result.</li><li>Handle unknown tools.</li><li>Handle execution failures.</li></ol></x-req>
+<x-exp><code>executeToolCall({ id, name, arguments: '{"city":"Pune"}' }, ctx)</code> → <code>{ toolCallId, ok: true, result }</code> or <code>{ toolCallId, ok: false, error }</code>. Never throws.</x-exp>
+<x-edge>Arguments not valid JSON; missing or extra fields; wrong types; very long strings; a tool that throws or hangs; a user asking for someone else’s profile; names like <code>"__proto__"</code> or <code>"toString"</code>.</x-edge>
+<x-hint>A registry object created with <code>Object.create(null)</code> (or check <code>Object.hasOwn</code>) mapping names to <code>{ params, run }</code>. Write a tiny validator for <code>{ field: { type, required, maxLength } }</code>. Wrap run in try/catch and a timeout.</x-hint>
+<x-run>
+<x-starter>
+const tools = {
+  getWeather: { params: { city: { type: 'string', required: true, maxLength: 100 } }, run: async ({ city }) => ({ city, tempC: 31 }) },
+  searchDocuments: { params: { query: { type: 'string', required: true, maxLength: 500 } }, run: async ({ query }, ctx) => ctx.search(ctx.userId, query) },
+  getUserProfile: { params: { userId: { type: 'string', required: true } }, run: async ({ userId }, ctx) => ctx.profiles[userId] },
+};
+async function executeToolCall(call, ctx) {
+  // TODO
+}
+</x-starter>
+<x-tests>
+const ctx = { userId: 'u1', role: 'user', profiles: { u1: { name: 'Asha' }, u2: { name: 'Ravi' } }, search: async (uid, q) => ({ owner: uid, hits: [q] }) };
+test('runs a valid call', async () => { const r = await executeToolCall({ id: 'c1', name: 'getWeather', arguments: '{"city":"Pune"}' }, ctx); eq(r, { toolCallId: 'c1', ok: true, result: { city: 'Pune', tempC: 31 } }); });
+test('unknown tool', async () => { const r = await executeToolCall({ id: 'c2', name: 'deleteAll', arguments: '{}' }, ctx); eq(r.ok, false); });
+test('prototype names are not tools', async () => { eq((await executeToolCall({ id: 'c3', name: 'toString', arguments: '{}' }, ctx)).ok, false); eq((await executeToolCall({ id: 'c3b', name: '__proto__', arguments: '{}' }, ctx)).ok, false); });
+test('invalid JSON', async () => { eq((await executeToolCall({ id: 'c4', name: 'getWeather', arguments: '{city:' }, ctx)).ok, false); });
+test('missing required arg', async () => { eq((await executeToolCall({ id: 'c5', name: 'getWeather', arguments: '{}' }, ctx)).ok, false); });
+test('wrong type', async () => { eq((await executeToolCall({ id: 'c6', name: 'getWeather', arguments: '{"city":42}' }, ctx)).ok, false); });
+test('extra field rejected', async () => { eq((await executeToolCall({ id: 'c7', name: 'getWeather', arguments: '{"city":"Pune","admin":true}' }, ctx)).ok, false); });
+test('too long', async () => { eq((await executeToolCall({ id: 'c8', name: 'getWeather', arguments: JSON.stringify({ city: 'x'.repeat(101) }) }, ctx)).ok, false); });
+test('execution failure becomes data', async () => { const c2 = { ...ctx, search: async () => { throw new Error('db down'); } }; const r = await executeToolCall({ id: 'c9', name: 'searchDocuments', arguments: '{"query":"rag"}' }, c2); eq(r.ok, false); assert(!r.error.includes('db down'), 'leaked internal error'); });
+test('search is scoped to ctx.userId', async () => { const r = await executeToolCall({ id: 'c10', name: 'searchDocuments', arguments: '{"query":"rag"}' }, ctx); eq(r.result.owner, 'u1'); });
+test('cannot read another user profile', async () => { eq((await executeToolCall({ id: 'c11', name: 'getUserProfile', arguments: '{"userId":"u2"}' }, ctx)).ok, false); });
+test('own profile is fine', async () => { eq((await executeToolCall({ id: 'c12', name: 'getUserProfile', arguments: '{"userId":"u1"}' }, ctx)).result, { name: 'Asha' }); });
+</x-tests>
+<x-ref>
+const tools = {
+  getWeather: { params: { city: { type: 'string', required: true, maxLength: 100 } }, run: async ({ city }) => ({ city, tempC: 31 }) },
+  searchDocuments: { params: { query: { type: 'string', required: true, maxLength: 500 } }, run: async ({ query }, ctx) => ctx.search(ctx.userId, query) },
+  getUserProfile: {
+    params: { userId: { type: 'string', required: true } },
+    authorize: (args, ctx) => args.userId === ctx.userId || ctx.role === 'admin',   // ownership rule in code
+    run: async ({ userId }, ctx) => ctx.profiles[userId],
+  },
+};
+
+function validate(params, args) {
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return 'arguments must be an object';
+  for (const key of Object.keys(args)) if (!Object.hasOwn(params, key)) return `unexpected argument "${key}"`;
+  for (const [key, rule] of Object.entries(params)) {
+    const v = args[key];
+    if (v === undefined) { if (rule.required) return `"${key}" is required`; continue; }
+    if (typeof v !== rule.type) return `"${key}" must be a ${rule.type}`;
+    if (rule.maxLength &amp;&amp; v.length > rule.maxLength) return `"${key}" is too long`;
+    if (rule.type === 'string' &amp;&amp; !v.trim()) return `"${key}" must not be empty`;
+  }
+  return null;
+}
+
+const timeout = (ms) => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+
+async function executeToolCall(call, ctx) {
+  const fail = (error) => ({ toolCallId: call.id, ok: false, error });
+  if (!Object.hasOwn(tools, call.name)) return fail(`Unknown tool "${call.name}"`);
+  const tool = tools[call.name];
+  let args;
+  try { args = JSON.parse(call.arguments ?? '{}'); } catch { return fail('arguments are not valid JSON'); }
+  const problem = validate(tool.params, args);
+  if (problem) return fail(problem);
+  if (tool.authorize &amp;&amp; !tool.authorize(args, ctx)) return fail('not allowed');
+  try {
+    const result = await Promise.race([tool.run(args, ctx), timeout(5000)]);
+    return { toolCallId: call.id, ok: true, result };
+  } catch (err) {
+    console.log(`tool ${call.name} failed: ${err.message}`);     // internal detail stays in logs
+    return fail('The tool failed. Try again later.');
+  }
+}
+</x-ref>
+</x-run>
+<x-expl>Order matters: lookup (own properties only) → parse → validate (types, required, unknown keys, lengths) → authorize (in code, using ctx from the session) → execute with a timeout → result or safe error. Returning data instead of throwing keeps the agent loop alive and lets the model react.</x-expl>
+<x-cx>O(size of arguments) for parse + validation.</x-cx>
+<x-mist><ul><li><code>tools[call.name]</code> without an own-property check (prototype keys).</li><li>Trusting <code>userId</code> from the model.</li><li>Throwing on bad input instead of returning an error result.</li></ul></x-mist>
+<x-fu q="How would you prevent a user from invoking tools they aren’t authorized to use?">Only send the model the tools this user’s role allows (so it can’t even ask), and still check permissions in <code>executeToolCall</code> (role/ownership from the session), plus approval for sensitive tools and audit logs.</x-fu>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.6</span>Exercise 6: RAG retrieval</h2>
+<x-ex t="Exercise 6: cosine top-5 with metadata filtering" tag="must solid" open>
+<x-prob>Input: a user query embedding and a collection of document chunks with embeddings. Calculate cosine similarity, rank chunks, return the top five, handle empty collections, apply metadata filtering.</x-prob>
+<x-req><ol><li>Calculate cosine similarity.</li><li>Rank chunks.</li><li>Return the top five.</li><li>Handle empty collections.</li><li>Apply metadata filtering.</li></ol></x-req>
+<x-exp><code>topK(query, chunks, { k = 5, filter })</code> → <code>[{ id, score }]</code> sorted by score descending. <code>filter</code> is an object of metadata equality checks, e.g. <code>{ userId: 'u1' }</code>.</x-exp>
+<x-edge>Empty collection; fewer than k after filtering; zero vectors (division by zero); mismatched dimensions; ties.</x-edge>
+<x-hint>Filter first (cheaper, and the filter is a permission). Compute scores. Sort descending, slice k. Skip vectors with zero length or a different dimension.</x-hint>
+<x-run>
+<x-starter>
+function cosine(a, b) {
+  // TODO
+}
+function topK(query, chunks, { k = 5, filter = {} } = {}) {
+  // TODO
+}
+</x-starter>
+<x-tests>
+const chunks = [
+  { id: 'a', embedding: [1, 0], metadata: { userId: 'u1' } },
+  { id: 'b', embedding: [0.9, 0.1], metadata: { userId: 'u1' } },
+  { id: 'c', embedding: [0, 1], metadata: { userId: 'u1' } },
+  { id: 'd', embedding: [1, 0.01], metadata: { userId: 'u2' } },
+  { id: 'z', embedding: [0, 0], metadata: { userId: 'u1' } },
+  { id: 'w', embedding: [1, 0, 0], metadata: { userId: 'u1' } },
+];
+test('cosine basics', () => { eq(Math.round(cosine([1, 0], [1, 0]) * 1000), 1000); eq(Math.round(cosine([1, 0], [0, 1]) * 1000), 0); });
+test('ranks by similarity', () => { eq(topK([1, 0], chunks, { filter: { userId: 'u1' } }).map((r) => r.id), ['a', 'b', 'c']); });
+test('filter excludes other users', () => { assert(!topK([1, 0], chunks, { filter: { userId: 'u1' } }).some((r) => r.id === 'd'), 'leaked u2 chunk'); });
+test('k limits results', () => { eq(topK([1, 0], chunks, { k: 1, filter: { userId: 'u1' } }).length, 1); });
+test('empty collection', () => { eq(topK([1, 0], []), []); });
+test('zero vector and wrong dimension skipped', () => { const ids = topK([1, 0], chunks, { k: 10 }).map((r) => r.id); assert(!ids.includes('z') &amp;&amp; !ids.includes('w'), JSON.stringify(ids)); });
+test('scores are numbers sorted desc', () => { const r = topK([1, 0], chunks, { k: 10 }); assert(r.every((x, i) => i === 0 || r[i - 1].score >= x.score)); });
+</x-tests>
+<x-ref>
+function cosine(a, b) {
+  if (a.length !== b.length) return null;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i &lt; a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  if (na === 0 || nb === 0) return null;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+function topK(query, chunks, { k = 5, filter = {} } = {}) {
+  if (!Array.isArray(chunks) || chunks.length === 0) return [];
+  const matches = (c) => Object.entries(filter).every(([key, v]) => c.metadata?.[key] === v);
+  const scored = [];
+  for (const c of chunks) {
+    if (!matches(c)) continue;                         // filter first: it's a permission check
+    const score = cosine(query, c.embedding);
+    if (score !== null) scored.push({ id: c.id, score });
+  }
+  scored.sort((x, y) => y.score - x.score || String(x.id).localeCompare(String(y.id)));  // stable tie-break
+  return scored.slice(0, k);
+}
+</x-ref>
+</x-run>
+<x-cx>O(n·d) to score n chunks of dimension d, O(n log n) to sort (O(n log k) with a size-k heap). That linear scan is exactly what ANN indexes (HNSW) avoid at scale.</x-cx>
+<x-mist><ul><li>Filtering after taking the top 5 (returns fewer results or leaks).</li><li>Sorting ascending.</li><li>Dividing by zero for empty vectors.</li></ul></x-mist>
+<x-fu q="How would you improve retrieval?">Hybrid search with keywords, query rewriting, better chunking, a reranker, a relevance threshold, and measuring recall@k on a labelled set.</x-fu>
+<x-fu q="Would you use a vector database?">Yes beyond small collections: pgvector or a vector DB with an ANN index, metadata filtering and persistence instead of an in-memory scan.</x-fu>
+<x-fu q="Where would reranking fit?">After this first-stage retrieval: take the top 30–50, rerank with a cross-encoder, keep 5.</x-fu>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.7</span>Exercise 7: Debugging</h2>
+<x-ex t="Exercise 7: find and fix five bugs" tag="must solid" open>
+<x-prob>The code below has: missing <code>await</code> statements, incorrect error handling, incorrect SQL parameters, unhandled Promise rejections, and a missing authorization check. Identify and correct them. Run the tests to see the failures, then fix.</x-prob>
+<x-hint>Read each line asking: is this a promise? is it awaited? whose data is this? what happens on error? Do the $1/$2 placeholders match the array order?</x-hint>
+<x-run>
+<x-starter>
+// db.query(sql, params) returns a Promise of { rows, rowCount }
+async function getDocument(req, res) {
+  const result = db.query('SELECT * FROM documents WHERE id = $1 AND user_id = $2', [req.user.id, req.params.id]);
+  if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(result.rows[0]);
+}
+
+async function deleteDocument(req, res, next) {
+  try {
+    db.query('DELETE FROM documents WHERE id = $1', [req.params.id]);
+    res.status(204).end();
+  } catch (err) {
+    console.log(err);
+  }
+}
+
+function recordAudit(event) {
+  db.query('INSERT INTO audit (event) VALUES ($1)', [event]);
+}
+</x-starter>
+<x-tests>
+const rows = () => [{ id: 'd1', user_id: 'u1', title: 'A' }, { id: 'd2', user_id: 'u2', title: 'B' }];
+let table = rows(); let failNext = false;
+const db = {
+  async query(sql, params) {
+    await sleep(1);
+    if (failNext) { failNext = false; throw new Error('connection lost'); }
+    if (sql.startsWith('SELECT')) { const r = table.filter((d) => d.id === params[0] &amp;&amp; d.user_id === params[1]); return { rows: r, rowCount: r.length }; }
+    if (sql.startsWith('DELETE')) { const before = table.length; table = table.filter((d) => !(d.id === params[0] &amp;&amp; (params.length &lt; 2 || d.user_id === params[1]))); return { rows: [], rowCount: before - table.length }; }
+    if (sql.startsWith('INSERT')) { if (params[0] === 'fail') throw new Error('audit failed'); return { rows: [], rowCount: 1 }; }
+  },
+};
+const mkRes = () => ({ statusCode: 200, body: undefined, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; }, end() { this.ended = true; return this; } });
+test('owner can read their document', async () => { table = rows(); const res = mkRes(); await getDocument({ user: { id: 'u1' }, params: { id: 'd1' } }, res); eq(res.statusCode, 200); eq(res.body?.id, 'd1'); });
+test("someone else's document is 404", async () => { table = rows(); const res = mkRes(); await getDocument({ user: { id: 'u1' }, params: { id: 'd2' } }, res); eq(res.statusCode, 404); });
+test('non-owner cannot delete', async () => { table = rows(); const res = mkRes(); await deleteDocument({ user: { id: 'u1' }, params: { id: 'd2' } }, res, () => {}); assert(table.some((d) => d.id === 'd2'), 'd2 was deleted by another user'); eq(res.statusCode, 404); });
+test('owner delete finishes before responding', async () => { table = rows(); const res = mkRes(); await deleteDocument({ user: { id: 'u1' }, params: { id: 'd1' } }, res, () => {}); assert(!table.some((d) => d.id === 'd1'), 'not deleted yet when 204 was sent'); eq(res.statusCode, 204); });
+test('db error reaches the error handler', async () => { table = rows(); failNext = true; let passed = null; await deleteDocument({ user: { id: 'u1' }, params: { id: 'd1' } }, mkRes(), (e) => { passed = e; }); assert(passed instanceof Error, 'next(err) was not called'); });
+test('audit failures are returned to the caller', async () => { const p = recordAudit('fail'); assert(p instanceof Promise, 'recordAudit must return the promise'); let caught = false; await p.catch(() => { caught = true; }); assert(caught); });
+</x-tests>
+<x-ref>
+async function getDocument(req, res) {
+  // bug 1: missing await · bug 2: params were [userId, id] but SQL expects $1 = id, $2 = user_id
+  const result = await db.query('SELECT * FROM documents WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+  if (!result.rows.length) return res.status(404).json({ error: 'Not found' });
+  res.json(result.rows[0]);
+}
+
+async function deleteDocument(req, res, next) {
+  try {
+    // bug 3: missing await (errors escaped the try, 204 sent before the delete)
+    // bug 4: missing authorization: anyone could delete any id
+    const result = await db.query('DELETE FROM documents WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+    res.status(204).end();
+  } catch (err) {
+    next(err);                       // bug 5: was swallowed; the request would hang with no response
+  }
+}
+
+function recordAudit(event) {
+  // bug 6: the promise was dropped → unhandled rejection crashes Node on failure. Return it;
+  // callers await it, or explicitly .catch() if it's fire-and-forget.
+  return db.query('INSERT INTO audit (event) VALUES ($1)', [event]);
+}
+</x-ref>
+</x-run>
+<x-expl>Missing await is the root of three symptoms: <code>result.rows</code> is undefined (TypeError), the 204 goes out before the delete, and errors escape the try/catch as unhandled rejections. The swapped parameters make every lookup miss. The delete must be owner-scoped in the SQL, with 404 for “not yours or not found”. Errors go to <code>next(err)</code> so the central handler responds.</x-expl>
+<x-mist><ul><li>Fixing the authorization check by first SELECTing and then DELETEing separately (a race; also two queries).</li><li>Adding <code>process.on('unhandledRejection', () => {})</code> to “fix” crashes.</li></ul></x-mist>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.8</span>Exercise 8: Data validation</h2>
+<x-ex t="Exercise 8: validate a create-course request with Zod" tag="must basic" open>
+<x-prob>Build an endpoint that accepts <code>{ "title": "Introduction to RAG", "description": "A course about retrieval augmented generation", "modules": 5 }</code>. Validate using Zod; title not empty; modules a positive integer; return useful validation errors; reject unexpected fields where appropriate.</x-prob>
+<x-hint><code>z.strictObject</code> rejects unknown keys; <code>.trim().min(1)</code> rejects blank titles; <code>z.number().int().positive()</code>; <code>z.flattenError(error)</code> for a client-friendly shape.</x-hint>
+<x-sol><pre data-l="js">import express from 'express';
+import { z } from 'zod';
+
+const CreateCourse = z.strictObject({
+  title: z.string().trim().min(1, 'title must not be empty').max(120),
+  description: z.string().trim().max(2000).optional(),
+  modules: z.number().int('modules must be a whole number').positive('modules must be at least 1').max(20),
+});
+
+const app = express();
+app.use(express.json());
+app.post('/courses', requireAuth, (req, res) => {
+  const parsed = CreateCourse.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid request', ...z.flattenError(parsed.error) });
+  const course = createCourse(req.user.id, parsed.data);    // only validated, trimmed data goes further
+  res.status(201).json(course);
+});</pre>
+<p><b>Real output</b> (run with Zod 4.6.5):</p>
+<pre data-l="text">{ title: 'Introduction to RAG', description: '…', modules: 5 }
+→ 201, data: {"title":"Introduction to RAG","description":"A course about retrieval augmented generation","modules":5}
+
+{ title: '   ', modules: 0 }
+→ 400 {"formErrors":[],"fieldErrors":{"title":["title must not be empty"],"modules":["modules must be at least 1"]}}
+
+{ title: 'RAG', modules: 2.5, level: 'hard' }
+→ 400 {"formErrors":["Unrecognized key: \"level\""],"fieldErrors":{"modules":["modules must be a whole number"]}}
+
+{ title: 'RAG', modules: '5' }
+→ 400 {"formErrors":[],"fieldErrors":{"modules":["Invalid input: expected number, received string"]}}</pre></x-sol>
+<x-expl>All errors are reported at once (not just the first), per field, with messages a frontend can show. Unknown keys go to <code>formErrors</code>. A JSON body sends numbers as numbers, so <code>"5"</code> is rejected; for query strings you’d use <code>z.coerce.number()</code>.</x-expl>
+<x-mist><ul><li><code>z.object</code> (silently strips unknown keys) when the spec says reject them.</li><li>Validating with <code>parse()</code> inside a try without mapping to 400 (becomes a 500).</li><li>Using the raw <code>req.body</code> after validating.</li></ul></x-mist>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.9</span>Exercise 9: Streaming</h2>
+<x-ex t="Exercise 9: stream an LLM response" tag="must solid" open>
+<x-prob>Build a basic backend endpoint that streams an LLM response to the client.</x-prob>
+<x-sol><p>Server: the SSE relay in Phase 5 (“Streaming LLM output to the client”). Client:</p>
+<pre data-l="js">// browser: read the SSE stream with fetch (EventSource can't send an Authorization header or a POST body)
+async function streamChat(messages, onText, signal) {
+  const res = await fetch('/chat/stream', { method: 'POST', signal,
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ messages }) });
+  if (!res.ok) throw new Error((await res.json()).error);    // errors before the stream starts are plain JSON
+  const reader = res.body.getReader(); const decoder = new TextDecoder(); let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error('Connection lost');               // ended without a done event
+    buf += decoder.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) !== -1) {
+      const raw = buf.slice(0, i); buf = buf.slice(i + 2);
+      const event = raw.match(/^event: (.*)$/m)?.[1] ?? 'message';
+      const data = JSON.parse(raw.match(/^data: (.*)$/m)?.[1] ?? '{}');
+      if (event === 'done') return;
+      if (event === 'error') throw new Error(data.error);
+      if (event === 'message') onText(data.text);
+    }
+  }
+}</pre></x-sol>
+<x-fu q="What is Server-Sent Events?">A standard for a server to push a stream of text events over one long HTTP response (<code>Content-Type: text/event-stream</code>), each event as <code>event:</code>/<code>data:</code> lines ending with a blank line. One direction (server → client), plain HTTP, works through most proxies, automatic reconnection in EventSource.</x-fu>
+<x-fu q="How does streaming differ from WebSockets?">WebSockets are a separate bidirectional protocol (upgrade handshake, frames) for real-time two-way traffic (multiplayer, collaborative editing). SSE is one-way over HTTP, simpler, enough for token streaming, and easier with auth headers via fetch.</x-fu>
+<x-fu q="How do you handle client disconnection?">Listen to <code>res.on('close')</code> (or <code>req.on('close')</code>), abort the upstream fetch with an AbortController so you stop paying for tokens, and decide whether to save the partial answer.</x-fu>
+<x-fu q="How do you clean up an ongoing generation?">Abort the provider request, release resources (DB clients, timers), end the response, mark the message as interrupted, and make sure no later code writes to a closed response.</x-fu>
+<x-mist><ul><li>Splitting on single newlines; not using <code>{ stream: true }</code> in TextDecoder.</li><li>Treating a stream that just ends as success.</li><li>Sending JSON errors after headers were sent (status is already 200: send an <code>event: error</code>).</li></ul></x-mist>
+</x-ex>
+
+<h2 class="sec"><span class="k">11.10</span>Exercise 10: Workflow implementation</h2>
+<x-ex t="Exercise 10: a simplified course-generation workflow" tag="must solid" open>
+<x-prob>Steps: 1) generate outline, 2) generate modules, 3) generate lessons, 4) save course. Pass data between steps, handle failures, retry selected operations, prevent duplicate saves, record execution status.</x-prob>
+<x-req><ul><li>Pass data between steps.</li><li>Handle failures.</li><li>Retry selected operations.</li><li>Prevent duplicate saves.</li><li>Record execution status.</li></ul></x-req>
+<x-hint>A run record <code>{ status, results: { stepId: output } }</code> saved after every step. On start, load it: skip steps that already have results. Each step has <code>retries</code>. The save step upserts by an idempotency key.</x-hint>
+<x-run>
+<x-starter>
+// steps: [{ id, retries, run: async (input, ctx) => output }]  — each step gets the previous step's output
+// store: { get(runId), set(runId, record) }  — persistence (async)
+async function runWorkflow({ runId, steps, input, store, ctx }) {
+  // TODO: load record; if success return its result; run remaining steps with retries;
+  // save { status, results, error } after each step; return { status, result }
+}
+</x-starter>
+<x-tests>
+const mkStore = () => { const m = new Map(); return { m, get: async (id) => structuredClone(m.get(id)), set: async (id, r) => { m.set(id, structuredClone(r)); } }; };
+const mkSteps = (calls, opts = {}) => [
+  { id: 'outline', retries: 1, run: async (input) => { calls.outline = (calls.outline ?? 0) + 1; if (opts.outlineFailsOnce &amp;&amp; calls.outline === 1) throw new Error('503'); return { topic: input.topic, modules: ['M1', 'M2'] }; } },
+  { id: 'modules', retries: 0, run: async (o) => { calls.modules = (calls.modules ?? 0) + 1; return { topic: o.topic, modules: o.modules.map((t) => ({ title: t })) }; } },
+  { id: 'lessons', retries: 1, run: async (m) => { calls.lessons = (calls.lessons ?? 0) + 1; if (opts.lessonsAlwaysFail) throw new Error('lesson 7 failed'); return { topic: m.topic, lessons: m.modules.map((x) => x.title + ' L1') }; } },
+  { id: 'save', retries: 2, run: async (l, ctx) => { calls.save = (calls.save ?? 0) + 1; return ctx.saveCourse(ctx.key, l); } },
+];
+const mkDb = () => { const courses = new Map(); return { courses, saveCourse: async (key, c) => { if (!courses.has(key)) courses.set(key, { id: 'c' + (courses.size + 1), ...c }); return courses.get(key); } }; };
+test('happy path passes data and records success', async () => {
+  const store = mkStore(), db = mkDb(), calls = {};
+  const r = await runWorkflow({ runId: 'r1', steps: mkSteps(calls), input: { topic: 'RAG' }, store, ctx: { key: 'u1:rag', saveCourse: db.saveCourse } });
+  eq(r.status, 'success'); eq(r.result.lessons, ['M1 L1', 'M2 L1']); eq((await store.get('r1')).status, 'success'); eq(db.courses.size, 1);
+});
+test('retries a flaky step', async () => {
+  const calls = {}; const r = await runWorkflow({ runId: 'r2', steps: mkSteps(calls, { outlineFailsOnce: true }), input: { topic: 'RAG' }, store: mkStore(), ctx: { key: 'k', saveCourse: mkDb().saveCourse } });
+  eq(r.status, 'success'); eq(calls.outline, 2);
+});
+test('failure is recorded and a re-run resumes from the failed step', async () => {
+  const store = mkStore(), db = mkDb(), calls = {};
+  const r1 = await runWorkflow({ runId: 'r3', steps: mkSteps(calls, { lessonsAlwaysFail: true }), input: { topic: 'RAG' }, store, ctx: { key: 'k3', saveCourse: db.saveCourse } });
+  eq(r1.status, 'failed'); eq(calls.lessons, 2); const rec = await store.get('r3'); eq(rec.status, 'failed'); assert(rec.results.outline &amp;&amp; rec.results.modules, 'completed steps not saved');
+  const r2 = await runWorkflow({ runId: 'r3', steps: mkSteps(calls), input: { topic: 'RAG' }, store, ctx: { key: 'k3', saveCourse: db.saveCourse } });
+  eq(r2.status, 'success'); eq(calls.outline, 1); eq(calls.modules, 1); eq(db.courses.size, 1);
+});
+test('a finished run is not executed again (no duplicate save)', async () => {
+  const store = mkStore(), db = mkDb(), calls = {};
+  const ctx = { key: 'k4', saveCourse: db.saveCourse };
+  await runWorkflow({ runId: 'r4', steps: mkSteps(calls), input: { topic: 'RAG' }, store, ctx });
+  const again = await runWorkflow({ runId: 'r4', steps: mkSteps(calls), input: { topic: 'RAG' }, store, ctx });
+  eq(again.status, 'success'); eq(calls.save, 1); eq(db.courses.size, 1);
+});
+test('two runs with the same idempotency key save one course', async () => {
+  const db = mkDb(); const ctx = { key: 'same', saveCourse: db.saveCourse };
+  await Promise.all([runWorkflow({ runId: 'a', steps: mkSteps({}), input: { topic: 'X' }, store: mkStore(), ctx }), runWorkflow({ runId: 'b', steps: mkSteps({}), input: { topic: 'X' }, store: mkStore(), ctx })]);
+  eq(db.courses.size, 1);
+});
+</x-tests>
+<x-ref>
+async function runWorkflow({ runId, steps, input, store, ctx }) {
+  const record = (await store.get(runId)) ?? { status: 'pending', input, results: {}, error: null };
+  if (record.status === 'success') return { status: 'success', result: record.result };   // idempotent: never re-run
+  record.status = 'running'; record.error = null;
+  await store.set(runId, record);
+
+  let data = record.input;
+  for (const step of steps) {
+    if (step.id in record.results) { data = record.results[step.id]; continue; }          // completed earlier: skip
+    let lastErr;
+    for (let attempt = 0; attempt &lt;= (step.retries ?? 0); attempt++) {
+      try {
+        data = await step.run(data, ctx);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        console.log(`${runId}/${step.id} attempt ${attempt + 1} failed: ${err.message}`);
+      }
+    }
+    if (lastErr) {
+      record.status = 'failed'; record.error = { step: step.id, message: lastErr.message };
+      await store.set(runId, record);
+      return { status: 'failed', error: record.error };
+    }
+    record.results[step.id] = data;                                                        // persist after each step
+    await store.set(runId, record);
+  }
+  record.status = 'success'; record.result = data;
+  await store.set(runId, record);
+  return { status: 'success', result: data };
+}
+</x-ref>
+</x-run>
+<x-expl>Three layers prevent duplicates: a finished run returns its stored result; completed steps are skipped on re-run; and the save step itself is keyed by an idempotency key, so even two different runs for the same request create one course (in a real DB that’s a UNIQUE constraint + <code>ON CONFLICT</code>). Status is persisted after each step, which is what a framework like Mastra does with snapshots.</x-expl>
+<x-cx>O(steps × (retries + 1)) step executions in the worst case.</x-cx>
+<x-mist><ul><li>Saving status only at the end (a crash loses everything).</li><li>Retrying non-idempotent steps.</li><li>Relying only on the run id for dedupe (two runs for the same request still duplicate).</li></ul></x-mist>
+</x-ex>

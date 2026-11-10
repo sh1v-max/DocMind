@@ -1,0 +1,20 @@
+@Q 4.14
+S: A composite index on (a, b, c) is sorted by a, then by b within each a, then by c. It can serve queries that filter on a; on a and b; on a, b and c; equality on leading columns plus a range or ORDER BY on the next one. It can’t efficiently serve a filter on b or c alone (the “leftmost prefix” rule). Column order matters: put equality-filtered, selective columns first, then the range/sort column.
+E: <code>CREATE INDEX ON messages (conversation_id, id)</code> serves “messages of this conversation in order” with no sort.
+Q: One composite index or two single-column indexes?
+A: For queries that filter on both columns together, a composite index is usually better; Postgres can combine single indexes with bitmap scans, but less efficiently.
+N: “Column order in a composite index doesn’t matter.”
+@Q 4.17
+S: Isolation defines which effects of concurrent, uncommitted or recently committed transactions a transaction can see. Postgres uses MVCC: each transaction sees a snapshot of committed data; writers don’t block readers. Read committed takes a new snapshot per statement; repeatable read uses one snapshot for the whole transaction (and errors on conflicting updates); serializable additionally detects dangerous read/write patterns and aborts one transaction (SQLSTATE 40001), which the app must retry.
+@Q 4.21
+S: Postgres is a safe default for AI apps because the data around the AI is relational (users, permissions, documents, conversations, usage, billing) and needs transactions; JSONB handles flexible metadata (model settings, sources, token usage); pgvector stores embeddings with ANN indexes; full-text search enables hybrid retrieval in the same database; and managed hosting is everywhere. One system means joins between vectors and ownership in one query and fewer things to keep in sync.
+@Q 4.30
+S: EXPLAIN shows the planner’s chosen plan with estimated costs and row counts; ANALYZE actually executes the query and adds real row counts, loops and timings per node; BUFFERS shows how many pages came from cache vs disk. Read it bottom-up (innermost nodes run first), compare estimated vs actual rows (big mismatches mean bad statistics), and look for the node where most time is spent.
+@Q 4.31
+S: JSON stores the exact input text (preserving whitespace, key order, duplicate keys) and re-parses it on every access. JSONB stores a decomposed binary format: slower to insert, much faster to query, supports containment (<code>@&gt;</code>), existence (<code>?</code>) and path operators, and GIN indexes. Use JSONB for semi-structured data you query; keep core, frequently filtered fields as real columns.
+@Q 4.41
+S: <code>drizzle-kit generate</code> loads your current schema file and the latest snapshot JSON, computes the difference (new tables, columns, indexes, constraints, renames it can’t decide alone, which it asks about), writes a new SQL migration file and a new snapshot, and updates the journal. Nothing touches the database yet. <code>migrate</code> later runs unapplied migrations in order and records each in the migrations table, so it never runs twice.
+@Q 4.45
+S: Adding a NOT NULL column has two problems. Data: existing rows would violate the constraint, so the ALTER fails unless a DEFAULT supplies a value (Postgres 11+ adds a constant default instantly without rewriting the table). Code: during a rolling deploy, old code still running doesn’t write the new column; without a default its inserts fail. The safe pattern is expand/contract: add nullable or with default, deploy writers, backfill in batches, then enforce NOT NULL.
+@Q 4.46
+S: ORMs cover the common 90%; raw SQL is better for: complex analytics (window functions, CTEs, recursive queries), database-specific features (vector operators, full-text ranking, ON CONFLICT with complex updates, LATERAL joins), bulk operations, hand-tuned hot paths after EXPLAIN, and migrations. Keep raw SQL parameterized, typed at the boundary, tested, and inside repositories.

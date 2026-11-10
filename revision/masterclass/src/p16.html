@@ -1,0 +1,76 @@
+<x-obj><ul><li>Think aloud through four complete builds, in the order an interviewer expects, with real code you have already seen in earlier phases.</li></ul></x-obj>
+<x-pre><ul><li>Phases 3–9. Each step links to where the full code lives. Practise saying each walkthrough in 10–15 minutes.</li></ul></x-pre>
+<div class="note"><b>Think-aloud pattern:</b> “First I’ll clarify… The data looks like… The request flow is… The failure cases are… I’d test it by…”. The bank says the interviewer wants the <b>data flow</b>, not just boxes.</div>
+
+<x-ex t="Walkthrough 1: build a mini RAG application" tag="must solid" open>
+<x-prob>Build a simple application that allows users to upload text documents and ask questions about them.</x-prob>
+<x-sq q="1. Database schema"><pre data-l="sql">users(id uuid PK, email UNIQUE, password_hash)
+documents(id uuid PK, user_id FK → users ON DELETE CASCADE, filename, status CHECK (processing|ready|failed), sha256, created_at, UNIQUE(user_id, sha256))
+chunks(id bigserial PK, document_id FK → documents ON DELETE CASCADE, chunk_index, content, embedding vector(1536), UNIQUE(document_id, chunk_index))
+-- + tsv tsvector GENERATED column + GIN index for keyword search</pre></x-sq>
+<x-sq q="2. Document upload API"><code>POST /documents</code> (auth) with multer, 1 MB limit, accept <code>text/plain</code> and <code>text/markdown</code>; hash bytes; insert row (on conflict → return existing); enqueue ingest; 202 <code>{ id, status }</code>. Code: Phase 3 file uploads.</x-sq>
+<x-sq q="3. Text extraction">Decode UTF-8 (<code>new TextDecoder('utf-8', { fatal: true })</code> → 400 on invalid bytes), strip a BOM, normalise line endings, reject empty text.</x-sq>
+<x-sq q="4. Chunking">Heading/paragraph-aware, ~300 words, ~50 overlap, keep heading as metadata (<code>chunkMarkdownish</code> in Phase 7).</x-sq>
+<x-sq q="5. Embedding generation">Batches of 64 through the embeddings API with timeout + retry, heading prepended for context.</x-sq>
+<x-sq q="6. Embedding storage">One transaction: delete the document’s chunks, insert all, set status ready (idempotent re-runs).</x-sq>
+<x-sq q="7. Query embedding generation">Rewrite the question with history into a standalone query, embed with the same model.</x-sq>
+<x-sq q="8. Similarity search">Hybrid: vector top 40 (<code>&lt;=&gt;</code>) + full-text top 40, fused with RRF, filtered by <code>d.user_id</code> and <code>status = 'ready'</code> (<code>retrieve()</code> in Phase 7).</x-sq>
+<x-sq q="9. Context construction">Top 6, deduplicated, wrapped in <code>&lt;source id file&gt;</code> tags, token budget.</x-sq>
+<x-sq q="10. LLM response generation">System rules: only from sources, cite [n], fixed not-found sentence, sources are data; temperature 0.2; stream via SSE; save the message with sources and usage.</x-sq>
+<x-sq q="11. Error handling">400 bad file, 409 not ready, 429 rate limited, 503 provider busy (after retries), failed ingestion recorded with a reason; central error handler; no stack traces to clients.</x-sq>
+<x-sq q="12. User authorization">Every query scoped by user id from the JWT, including vector search; someone else’s document → 404.</x-sq>
+<x-fu q="How would you extend it to support PDF, DOCX and multiple documents?">An extractor per type behind one interface: pdf-parse/pdfjs for PDF (OCR or a vision model for scans), mammoth for DOCX, detected by magic bytes not just extension. Multiple documents: a conversation ↔ documents join table, search filtered by that set, per-document quotas in results to keep coverage fair, citations with filename.</x-fu>
+</x-ex>
+
+<x-ex t="Walkthrough 2: build an AI agent with tools" tag="must solid" open>
+<x-prob>Build an agent that can search documents and retrieve user information.</x-prob>
+<x-sq q="1. Define the tools"><code>searchDocuments({ query })</code> and <code>getMyProfile()</code> (the current user only: no userId argument).</x-sq>
+<x-sq q="2. Define tool schemas">Zod: <code>z.strictObject({ query: z.string().trim().min(1).max(500) })</code> and <code>z.strictObject({})</code>, converted with <code>z.toJSONSchema</code> for the provider; descriptions say when to use each.</x-sq>
+<x-sq q="3. Configure the LLM">System instruction (scope, grounding, tool results are data), temperature 0.2, tools attached, step limit 4, timeout per call.</x-sq>
+<x-sq q="4. Process the tool-call response">Read <code>tool_calls</code>; keep the assistant turn unchanged in the conversation.</x-sq>
+<x-sq q="5. Execute tools">Fixed name → tool map, parse JSON args, validate, authorize with ctx from the session, run with a timeout (<code>execute()</code> in Phase 8).</x-sq>
+<x-sq q="6. Return results to the LLM">One tool message per call id, JSON, size-capped.</x-sq>
+<x-sq q="7. Generate the final answer">Call the model again; stop when it answers without tool calls; stream to the user with sources.</x-sq>
+<x-sq q="8. Handle failures">Unknown tool / bad args / thrown errors → <code>{ error }</code> results; provider errors retried then surfaced cleanly.</x-sq>
+<x-sq q="9. Add authorization">userId only from ctx; tools only see this user’s rows; only the tools this user’s role may use are sent to the model.</x-sq>
+<x-sq q="10. Prevent infinite loops">Max steps, final call without tools, duplicate-call detection, token budget.</x-sq>
+<x-vis><x-w w="agent"></x-w></x-vis>
+<x-fu q="How would you add a third tool that requires user approval?">Mark it <code>requiresApproval</code>; when called, pause: store the validated call + conversation in a pending-approvals row owned by the user, return <code>needs_approval</code> to the UI; on approve, claim the row atomically, run exactly that call, append its result and continue the loop; on decline, append “declined” (Phase 8 code). In Mastra: <code>requireApproval: true</code> + <code>approveToolCall()</code>.</x-fu>
+</x-ex>
+
+<x-ex t="Walkthrough 3: build a resumable workflow" tag="must solid" open>
+<x-prob>A user requests a 10-module course.</x-prob>
+<x-sq q="1. Define the workflow"><code>createWorkflow({ id: 'course-generation', inputSchema, outputSchema })</code>: prepare → outline → approve → lessons → quizzes → publish (Phase 9).</x-sq>
+<x-sq q="2. Define each step">One <code>createStep</code> per stage with id, schemas and execute; LLM steps call the shared client with Zod schemas.</x-sq>
+<x-sq q="3. Define step inputs and outputs">prepare: request → { courseId, topic, modules, outline?, approved }; outline: + outline; approve: same (suspend { outline }, resume { approved }); lessons: one item per lesson → { moduleNo, lessonNo }; publish: { courseId, expected counts } → { outcome, courseId }.</x-sq>
+<x-sq q="4. Decide which steps are sequential">prepare → outline → approve → … → publish; lessons that build on each other within a module.</x-sq>
+<x-sq q="5. Decide which steps can run in parallel">Lessons across modules and quizzes per module: <code>.foreach(step, { concurrency: 3 })</code>.</x-sq>
+<x-sq q="6. Implement error handling">Steps throw on invalid output; <code>bail()</code> for expected exits (duplicate, rejected); route checks <code>result.status</code>; failures recorded on the course row.</x-sq>
+<x-sq q="7. Implement retry logic"><code>retries: 2</code> on LLM steps; transport retries in the client for 429/5xx; none on deterministic checks.</x-sq>
+<x-sq q="8. Persist execution state">Mastra <code>PostgresStore</code> snapshots + app tables (course status, lesson_drafts, module_quizzes).</x-sq>
+<x-sq q="9. Suspend execution for approval"><code>if (!resumeData) return await suspend({ courseId, outline })</code>, nothing with side effects above it.</x-sq>
+<x-sq q="10. Resume execution after approval">Owner-checked, claim-once endpoint → <code>createRun({ runId })</code> → <code>run.resume({ step: 'approve-outline', resumeData })</code> in the background; client polls status.</x-sq>
+<x-sq q="11. Handle server restarts">Suspended runs wait safely in Postgres; running runs are re-driven by Mastra recovery at boot (default <code>workflows: 'auto'</code>); steps are idempotent so the interrupted one can repeat.</x-sq>
+<x-sq q="12. Prevent duplicate writes">Unique (user_id, request_key) on courses; primary keys on drafts with <code>ON CONFLICT DO NOTHING</code>; skip-if-exists before LLM calls; transactional publish.</x-sq>
+<x-vis><x-w w="workflow"></x-w></x-vis>
+<x-fu q="What if module generation fails after seven modules have been successfully saved?">The step fails after its retries; the run fails with the snapshot saved; modules 1–7 stay as drafts. The user (or an automatic retry job) re-runs with the same course key: prepare finds the course, outline and approval are skipped because they’re recorded, the generation step skips the 7 existing modules and only produces 8–10, then quizzes and publish run. No duplicates (primary keys), no wasted spend on 1–7, and the course was never visible half-built.</x-fu>
+</x-ex>
+
+<x-ex t="Walkthrough 4: design an AI backend from scratch" tag="must solid" open>
+<x-prob>Build a backend for a SaaS application where users can upload documents, chat with them, generate summaries and create quizzes. Design authentication, database schema, file storage, document processing, background jobs, vector search, RAG, agent architecture, workflow orchestration, API endpoints, error handling, logging and monitoring, and security and user isolation. Explain the data flow, not just the boxes.</x-prob>
+<x-sq q="Authentication">Email/password (bcrypt) + optional OAuth; short-lived access JWT + rotating refresh token in an httpOnly cookie; org/workspace membership table for multi-tenancy; roles (owner, member).</x-sq>
+<x-sq q="Database schema">workspaces, users, memberships; documents (workspace_id, owner_id, storage_key, sha256, status, progress, summary); chunks (vector + tsv + page + heading); conversations + messages (metadata JSONB); quizzes + questions; llm_calls (usage); jobs/audit tables.</x-sq>
+<x-sq q="File storage">Private object storage, presigned PUT from the browser, server-side size/type checks on completion, keys namespaced by workspace.</x-sq>
+<x-sq q="Document processing">Extract → clean → chunk → embed → store, per page range; write a document summary at the end (map-reduce over sections) so “summarise this” doesn’t depend on top-k retrieval.</x-sq>
+<x-sq q="Background jobs">BullMQ/SQS with stable job ids, retries + backoff, idempotent jobs, dead-letter queue, separate autoscaled worker service, progress on the document row.</x-sq>
+<x-sq q="Vector search">pgvector with HNSW (halfvec or reduced dimensions if needed), filtered by workspace and document set (iterative scans or partitions), plus full-text for hybrid.</x-sq>
+<x-sq q="RAG">Query rewrite → hybrid retrieve → rerank → labelled context → grounded generation with citations → SSE; eval set in CI.</x-sq>
+<x-sq q="Agent architecture">A router (cheap classifier) chooses: smalltalk, document Q&amp;A agent (searchDocuments, listDocuments, getSummary), or a workflow trigger (quiz). Tools scoped by session; max steps; approval for destructive tools.</x-sq>
+<x-sq q="Workflow orchestration">Quiz and course generation as Mastra workflows with suspend/resume for review; ingestion as a queue pipeline (or a workflow if it needs approvals).</x-sq>
+<x-sq q="API endpoints"><code>/auth/*</code>, <code>/documents</code> (upload-url, finish, list, get, delete), <code>/conversations</code> and <code>/conversations/:id/messages</code> (SSE), <code>/documents/:id/summary</code>, <code>/quizzes</code> (create → 202, get, regenerate question), <code>/usage</code>.</x-sq>
+<x-sq q="Error handling">Typed errors → central handler; 4xx with field errors; provider failures → retries, fallback model, circuit breaker, clear 503; in-stream error events for SSE.</x-sq>
+<x-sq q="Logging and monitoring">Structured JSON logs with request/trace ids; OpenTelemetry traces across API, workers and LLM calls; metrics: latency per stage, error rates, queue depth, token cost per workspace; alerts on spikes.</x-sq>
+<x-sq q="Security and user isolation">Workspace id on every row and every query (repository functions require it), RLS as backstop, default-deny routing, validation everywhere, rate limits per user and workspace, secrets in a manager, PII redaction before LLM calls, no raw HTML rendering, audit log for deletes.</x-sq>
+<x-sq q="Data flow (say this out loud)">Upload: browser gets a presigned URL → PUT to storage → <code>/finish</code> → row processing → job → worker extracts/chunks/embeds/summarises → status ready → UI updates. Chat: message → auth → conversation + document set checked → router → agent → tools search only the workspace’s chunks → stream answer + sources → save message + usage. Quiz: request → workflow → sample chunks → generate + validate → (optional review suspend) → publish → UI.</x-sq>
+<x-vis><x-w w="flow" f="sd_docchat"></x-w></x-vis>
+</x-ex>

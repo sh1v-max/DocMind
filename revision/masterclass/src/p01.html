@@ -1,0 +1,246 @@
+<x-obj><ul><li>Give a 90-second introduction that ends on DocMind, not on your degree.</li><li>Explain a two-year gap honestly, with evidence, without apologising.</li><li>Answer “weakness”, “why you” and “why AI backend” with real examples.</li><li>Handle uncomfortable follow-ups without getting defensive.</li></ul></x-obj>
+<x-pre><ul><li>Nothing technical. Have your project list open: DocMind, TaskForge, Cinegraph, BiteSwift, BookVerse, portfolio.</li><li>Know your real numbers (GitHub streak, DSA days, DocMind phases built). Never round them up.</li></ul></x-pre>
+
+<h2 class="sec"><span class="k">1.0</span>How the first five minutes work</h2>
+<div class="prose">
+<p>The first block of a 90-minute interview (0–5 min) looks like small talk. It isn’t. The interviewer is deciding three things: <b>can you communicate clearly</b>, <b>are you honest about where you are</b>, and <b>what should I dig into for the next 85 minutes</b>. Whatever you mention in your introduction becomes the map for the rest of the interview. Mention DocMind’s agent loop and you will be asked about it; mention “I know Kubernetes” and you will be asked about that too.</p>
+</div>
+<div class="note"><b>What the interviewer is evaluating in this part (from the bank):</b> honesty, communication, ownership, consistency, motivation, and the ability to explain the employment gap without making excuses.</div>
+
+<x-lesson t="Introducing yourself: the 90-second story" tag="must">
+<x-def>A self-introduction is a short spoken summary that answers “who are you, what can you do, and why are you here”. Think of it as the README of you: what it is, what it does, how to run it, where it’s going.</x-def>
+<x-why>Without a planned introduction, people either recite their CV in date order (boring, and it buries the strongest part at the end) or ramble. A structured one lets you choose what the interviewer asks next.</x-why>
+<x-in><p>Use four beats, about 20 seconds each:</p><ol><li><b>Present:</b> what you are now. “I’m a backend-focused developer building AI applications in Node.js.”</li><li><b>Past (short):</b> how you got here. Degree, then two years of structured self-learning with shipped projects.</li><li><b>Proof:</b> one project in some depth, with one technical decision and one number.</li><li><b>Future:</b> why this role, connected to what you just proved.</li></ol></x-in>
+<x-an>A good trailer shows the best scene and stops. It doesn’t play the whole film from minute one.</x-an>
+<x-real>Every interview, every recruiter call, every networking message. The 30-second version opens LinkedIn DMs; the 90-second version opens interviews.</x-real>
+<x-impl><p><b>A version built from your real facts (edit the words, keep the shape):</b></p>
+<div class="part say"><div class="pl">Sample · about 90 seconds</div>“I’m Shiv. I’m a backend developer working mostly in Node.js and Express, and for the last few months I’ve focused on AI backends. I finished my B.Tech in computer science from LPU in 2024. Since then I’ve been learning full time in a structured way: I’ve shipped several full-stack projects, kept a GitHub streak of over 300 days, and practised DSA for over 100 days.<br><br>The project that best shows where I am now is DocMind. You upload a PDF and chat with it. Uploads go through a BullMQ queue so the API answers in about two seconds while a worker embeds the chunks into Postgres with pgvector. Chat goes through an intent router and then a small agent loop I wrote myself on the Gemini REST API, with two tools, searchDocuments and listDocuments, and every query is scoped to the user from the JWT. Answers stream over server-sent events.<br><br>I’m applying for this role because that’s exactly the work I enjoy: making LLM features reliable, with queues, validation, and proper user isolation around them. I’d like to do it with a team that reviews my code.”</div>
+<p>Notice what it does: it gives the interviewer five things to pick from (BullMQ, pgvector, router, agent loop, user isolation), and you can defend every one of them.</p></x-impl>
+<x-walk><p><b>How the interviewer uses it:</b></p><ol><li>They hear “agent loop I wrote myself” → likely question: “Why not use a framework?”</li><li>They hear “scoped to the user from the JWT” → “What happens if I change the document id in the request?”</li><li>They hear “about two seconds” → they now trust you know your numbers.</li></ol></x-walk>
+<x-mist><ul><li>Starting with school marks and hobbies.</li><li>Listing 15 technologies. Each one is an invitation to be quizzed.</li><li>Memorised delivery that sounds read. Learn the four beats, not the sentences.</li><li>Claiming “production experience” for personal projects. Say “deployed and live”, which is true and still strong.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Explaining an employment gap without making excuses" tag="must">
+<x-def>A gap answer explains what you did between graduation and now, why, and what evidence shows it was productive.</x-def>
+<x-why>A two-year gap makes interviewers wonder: was this person stuck, unmotivated, or unable to pass interviews? Silence or vagueness confirms the worry. A specific, honest answer replaces it with evidence.</x-why>
+<x-in><p>Formula: <b>fact → choice → evidence → what changed → now</b>.</p><ul><li><b>Fact:</b> “I graduated in 2024 and I haven’t had a full-time developer job yet.” Say it plainly; don’t make them dig.</li><li><b>Choice:</b> what you decided to do with the time.</li><li><b>Evidence:</b> things they can check: GitHub history, live projects, commit messages, write-ups.</li><li><b>What changed:</b> what you can do now that you couldn’t then.</li><li><b>Now:</b> why you want a team, not more solo work.</li></ul></x-in>
+<x-an>A gap in a CV is like a long gap in a Git history. A messy history with real commits is fine; an empty one raises questions. Show the commits.</x-an>
+<x-impl><div class="part say"><div class="pl">Strong answer</div>“I graduated in 2024. I applied to some roles then but my skills weren’t strong enough yet, so I decided to learn properly instead of taking anything. I set a structure: build real projects end to end, deploy them, and keep a daily habit. My GitHub has a 300-plus day streak, and the projects are live. This year I moved into AI backends with DocMind, where I built the queue, the vector search, auth and an agent loop step by step and wrote down what broke. What I’m missing is working in a team, with code review and real users, and that’s why I’m applying now.”</div>
+<div class="part no"><div class="pl">Weak answers</div>“The market was bad.” (blames the world) · “I was preparing for government exams and also learning” (unclear focus, unless true, then say it plainly) · “I was freelancing” (if you can’t name a client, don’t say it) · a long story that never reaches “now”.</div></x-impl>
+<x-mist><ul><li>Apologising repeatedly. One honest sentence is enough.</li><li>Overclaiming: calling side projects “industry experience”.</li><li>Inventing freelance work. It falls apart on the first follow-up.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Projects, strengths and weaknesses: the evidence rule" tag="must">
+<x-def>Every claim you make about yourself should come with a piece of evidence: a project, a decision, a bug, a number.</x-def>
+<x-why>“I’m a fast learner” is said by everyone and believed by no one. “I learned MySQL and Rails in one day for a walk-in interview and could answer their joins questions” is believed.</x-why>
+<x-in><p>Use STAR for stories (Situation, Task, Action, Result), but keep the Action technical and the Result measurable. For weaknesses: name a real one, show what you do about it, and show progress.</p></x-in>
+<x-impl><table><thead><tr><th>Claim</th><th>Evidence from your own work</th></tr></thead><tbody>
+<tr><td>I debug systematically</td><td>DocMind rate limiter: measured the proxy hop count on Render with the RateLimit-Policy header instead of guessing; 1 and 2 were wrong, 3 was right.</td></tr>
+<tr><td>I care about security</td><td>Every repository function takes a required userId, so forgetting it is a compile error. Someone else’s document returns 404, not 403.</td></tr>
+<tr><td>I measure before I optimise</td><td>Measured BullMQ’s idle Redis usage: defaults would use ~204% of the Upstash free limit; tuned settings ~33%.</td></tr>
+<tr><td>I learn fast under pressure</td><td>Learned MySQL and Ruby on Rails basics in one session before a walk-in interview.</td></tr>
+</tbody></table></x-impl>
+<x-mist><ul><li>Weakness = disguised strength (“I work too hard”). Interviewers have heard it a thousand times.</li><li>A weakness that disqualifies you for the role (“I don’t like debugging”).</li></ul></x-mist>
+</x-lesson>
+
+<h2 class="sec"><span class="k">1.1</span>Personal introduction</h2>
+
+<x-q n="1.1" tag="must basic"><x-t>Tell me about yourself.</x-t>
+<x-say>Use the four beats: present role, short past, one project in depth with a number, why this role. Keep it under 90 seconds and end on the project you most want to be asked about.</x-say>
+<x-simple><p>This is not a request for your life story. It is “give me the summary and a hook”. Use the sample in the lesson above. Practise it out loud until you can say it in your own words with a different opening each time.</p></x-simple>
+<x-fu q="You mentioned an agent loop. Walk me through one request.">Message arrives → embedded once → router decides it’s a document question → the agent sends the conversation and two tool schemas to Gemini → Gemini answers with a function call to searchDocuments with a query it wrote → my code validates the args with Zod, runs a pgvector search scoped to the user, sends the chunks back → Gemini writes the answer, streamed over SSE. Max three model calls; the last one has no tools so it must answer.</x-fu>
+<x-no>Reading your CV aloud in date order. Starting with “So basically I am from…”. Ending with “that’s it”.</x-no>
+<x-ev>Clarity, structure, and whether you can choose what matters.</x-ev>
+</x-q>
+
+<x-q n="1.2" tag="must basic"><x-t>Walk me through your development journey.</x-t>
+<x-say>Three stages with a lesson each: college basics; full-stack projects after graduation (TaskForge, Cinegraph, BiteSwift); then AI backends with DocMind. Each stage ends with what you could do that you couldn’t before.</x-say>
+<x-simple><p>Make it a progression, not a list. Example: “In college I learned the basics and built small apps. After 2024 I built full-stack projects and learned to deploy, test and secure them (TaskForge has JWT, Zod, Swagger and CI). Then I added AI: Cinegraph calls Gemini through a Cloudflare Worker so the key never reaches the browser. This year I went deep into the backend side of AI with DocMind: embeddings, pgvector, RAG, streaming, queues and agents, one step at a time.”</p></x-simple>
+<x-fu q="What was the hardest jump?">Going from “call an API and show the text” to “make it reliable”: queues, retries, idempotent jobs, rate limits, structured output with validation. The model call is the easy 10%.</x-fu>
+<x-no>“I learned HTML, then CSS, then JavaScript…” (too granular).</x-no>
+<x-ev>Whether your growth has direction and whether you reflect on it.</x-ev>
+</x-q>
+
+<x-q n="1.3" tag="should basic"><x-t>Why did you choose software development?</x-t>
+<x-say>Give a short, true reason and connect it to something you still enjoy today, such as making a system work end to end and seeing real people use it.</x-say>
+<x-simple><p>The interviewer wants genuine motivation, not passion speeches. Example: “I like that you can build something, deploy it, and other people can use it the same day. What keeps me here is debugging: finding out why something actually fails, like a stream that showed nothing because Gemini ends lines with \r\n.”</p></x-simple>
+
+<x-fu q="What would you be doing if not software?">Answer briefly and truthfully, then bring it back: “Probably something analytical, but building things people use is what kept me coming back, even through two years of learning on my own.”</x-fu>
+<x-no>“Because IT has good salary.” (Maybe true, but it doesn’t predict you’ll stick with hard problems.)</x-no>
+<x-ev>Motivation that will survive boring weeks.</x-ev>
+</x-q>
+
+<x-q n="1.4" tag="must basic"><x-t>Why are you interested in AI backend development?</x-t>
+<x-say>Because the hard part of AI products is the backend around the model: retrieval, validation, queues, cost, security. That’s where my backend skills matter, and DocMind showed me I enjoy exactly that.</x-say>
+<x-simple><p>Show you understand what the job really is. An AI backend developer mostly writes normal backend code: APIs, databases, jobs, auth. The new parts are LLM calls (unreliable, slow, priced per token), embeddings and vector search, structured output, agents and workflows. Mention one specific thing you found interesting, e.g. “the model only proposes a tool call; my code decides whether to run it”.</p></x-simple>
+<x-fu q="Isn’t AI going to replace backend developers?">It changes what we write. Someone still has to design the data model, enforce permissions, handle failures and costs, and verify generated code. That’s the part I want to be good at.</x-fu>
+<x-no>“AI is the future” with nothing specific after it.</x-no>
+<x-ev>Whether you know what the work actually involves.</x-ev>
+</x-q>
+
+<x-q n="1.5" tag="should basic"><x-t>What made you transition from traditional backend development towards AI?</x-t>
+<x-say>I already built REST APIs with auth and databases. Adding Gemini to Cinegraph showed me how much backend work an AI feature needs, so I built DocMind to learn that work properly.</x-say>
+<x-simple><p>A transition story should show continuity: AI backends reuse everything you already know (Express, validation, Postgres, JWT) and add new problems. Say what was new: embeddings, retrieval quality, streaming, non-deterministic outputs that must be validated, per-token cost and rate limits.</p></x-simple>
+
+<x-fu q="What was the first AI feature you built, and what surprised you?">Cinegraph’s recommendations through Gemini behind a Cloudflare Worker. The surprise was how much of the work was around the call: hiding the key, handling slow or malformed replies, and keeping costs down.</x-fu>
+<x-no>Pretending you abandoned backend work. You didn’t: AI backend is backend.</x-no>
+<x-ev>Coherent career logic.</x-ev>
+</x-q>
+
+<x-q n="1.6" tag="must basic"><x-t>What technologies are you most comfortable working with?</x-t>
+<x-say>Node.js, Express, JavaScript/TypeScript, PostgreSQL with Drizzle and pgvector, MongoDB, Zod, JWT auth, React on the frontend. For AI: Gemini’s REST API, embeddings, RAG, SSE streaming, BullMQ.</x-say>
+<x-simple><p>Group them by confidence, and be ready to be tested on every item. A good structure: “strong” (use daily), “working knowledge” (built one thing with it), “learning”. Honest labels are a strength: an interviewer who finds one exaggeration will doubt everything else.</p></x-simple>
+<x-fu q="You said TypeScript is working knowledge. What does that mean?">DocMind’s backend is strict TypeScript and I use types to catch mistakes (a required userId parameter turned 15 call sites into compile errors). I’m less fluent with advanced generics and declaration files.</x-fu>
+<x-no>A list of 25 tools with equal weight.</x-no>
+<x-ev>Self-awareness and honesty.</x-ev>
+</x-q>
+
+<x-q n="1.7" tag="must solid"><x-t>What is the most technically challenging project you’ve built?</x-t>
+<x-say>DocMind. The challenge wasn’t calling an LLM, it was making uploads, retrieval and chat reliable and isolated per user: a queue with idempotent jobs, pgvector search scoped by owner, and an agent loop that can’t run forever.</x-say>
+<x-simple><p>Pick one hard problem and tell it as a story. Good candidates from DocMind:</p><ul><li><b>Background ingestion:</b> moving embedding out of the request into BullMQ; making the job idempotent (delete chunks, re-insert all) so a retry never duplicates; handling “user deleted the document while the job ran”.</li><li><b>Agent loop:</b> Gemini requires every model turn to be sent back with its thoughtSignature byte for byte; leaving it out gave a 400.</li><li><b>Rate limiting behind proxies:</b> measuring the right trust-proxy hop count on Render.</li></ul></x-simple>
+<x-fu q="What would you do differently?">Add automated tests from day one (there are none yet), use real migrations instead of hand-run SQL, and add timeouts + retries on every Gemini call.</x-fu>
+<x-no>Choosing a project you can’t explain line by line.</x-no>
+<x-ev>Depth, ownership and honest reflection.</x-ev>
+</x-q>
+
+<x-q n="1.8" tag="must basic"><x-t>Which project best represents your current technical abilities?</x-t>
+<x-say>DocMind, because it covers the whole backend: auth, Postgres, vector search, queues, streaming, structured output and agents, all deployed and live.</x-say>
+<x-simple><p>Give the scope in one breath, then offer a tour: “Happy to walk you through the architecture or any one piece.” Mention that it’s live (Render + Vercel) and that the commit history shows each step.</p></x-simple>
+
+<x-fu q="What part of that project would you rewrite today?">Add tests first, chunk with overlap, and put timeouts and retries on every model call. Naming a concrete rewrite shows you have grown since writing it.</x-fu>
+<x-no>Picking a project you can’t explain end to end, or one that was mostly a tutorial.</x-no>
+<x-ev>Whether your best work matches the role.</x-ev>
+</x-q>
+
+<x-q n="1.9" tag="should solid"><x-t>What have you learned recently that genuinely changed how you approach development?</x-t>
+<x-say>That the model is an untrusted client. Its output, tool arguments and JSON all go through the same validation as a user request. That changed how I design every AI feature.</x-say>
+<x-simple><p>Other true options from DocMind: “measure, don’t guess” (trust-proxy hops, Redis command counts); “make background jobs idempotent first, then add retries”; “authorization belongs in the query, not in the UI”. Pick one and give the concrete moment you learned it.</p></x-simple>
+
+<x-fu q="How did that change a specific piece of your code?">Tool arguments in DocMind go through Zod exactly like a request body, and the user id is never a tool argument: it comes from the session.</x-fu>
+<x-no>A buzzword (“AI is changing everything”) with no concrete change in how you work.</x-no>
+<x-ev>Reflection and the ability to learn from your own mistakes.</x-ev>
+</x-q>
+
+<x-q n="1.10" tag="should basic"><x-t>Where do you see yourself in the next two years?</x-t>
+<x-say>Being a dependable engineer on an AI product team: owning features end to end (API, data, LLM integration, monitoring), and getting good at evaluation and production reliability.</x-say>
+<x-simple><p>Show ambition that fits the role and the company. Avoid “I want to start my own company” or “I want to be a manager”. Mentioning specific skills (evaluation, observability, system design) shows you know the path.</p></x-simple>
+
+<x-fu q="What are you doing now to get there?">Name the current steps: this course, building workflows (Phase 8 of DocMind), adding tests, and practising system design.</x-fu>
+<x-no>“I want to be a manager / start my own company in two years” for a junior role.</x-no>
+<x-ev>Fit and whether you’ll stay.</x-ev>
+</x-q>
+
+<h2 class="sec"><span class="k">1.2</span>Employment gap questions</h2>
+
+<x-q n="1.11" tag="must basic"><x-t>You graduated in 2024. What have you been doing since graduation?</x-t>
+<x-say>Structured, full-time self-learning with shipped projects: full-stack apps first, then AI backends with DocMind. My GitHub history shows it day by day.</x-say>
+<x-simple><p>Use the gap formula from the lesson. Give one or two things they can check (a live link, the commit history). Don’t over-explain.</p></x-simple>
+<x-fu q="Why not take any job and learn on the side?">Fair question. I applied, but I wasn’t ready for the roles I wanted, and I chose to close the gap properly. Now I want the team environment I can’t get on my own.</x-fu>
+<x-no>Vague answers like “learning various technologies”.</x-no>
+<x-ev>Honesty and whether the time was productive.</x-ev>
+</x-q>
+
+<x-q n="1.12" tag="must solid"><x-t>Why haven’t you secured a developer position yet?</x-t>
+<x-say>Earlier my skills weren’t strong enough for the roles I wanted, and I didn’t interview well. I’ve worked on both: real projects, and practising explaining them. I’m in a much better position now.</x-say>
+<x-simple><p>This question tests whether you blame others. Take ownership of what was in your control. You can mention the market briefly as context, never as the main reason.</p></x-simple>
+
+<x-fu q="What did you change after your last rejections?">I practised explaining my projects out loud and built one project deeply instead of many shallow ones. Be concrete about the feedback you got, if any.</x-fu>
+<x-no>“Companies don’t hire freshers.” “The market is bad.” “HR rejected me for my CGPA.”</x-no>
+<x-ev>Ownership versus excuses.</x-ev>
+</x-q>
+
+<x-q n="1.13" tag="must basic"><x-t>Have you been working on personal projects throughout this period?</x-t>
+<x-say>Yes: TaskForge, Cinegraph, BiteSwift, BookVerse, my portfolio, and DocMind. All deployed. The GitHub streak is over 300 days.</x-say>
+<x-simple><p>Name them, and offer the one most relevant to the role. If asked about quality, be honest about caveats (for example, if a project lacks tests, say so before they find it).</p></x-simple>
+
+<x-fu q="Which one should I look at first?">DocMind: it’s live, it has the most backend depth, and the plan files show how each step was built and tested.</x-fu>
+<x-no>Listing projects you didn’t finish or can’t demo.</x-no>
+<x-ev>Consistency.</x-ev>
+</x-q>
+
+<x-q n="1.14" tag="should solid"><x-t>How do you ensure that your learning translates into actual development skills?</x-t>
+<x-say>For every concept I build the smallest working version, deploy it, break it on purpose, and write down what I learned. DocMind was built that way, phase by phase.</x-say>
+<x-simple><p>Show a loop: learn → build → test against reality → write notes. Evidence: DocMind’s plan files with results logs; learning scripts that measure things (e.g. Redis command usage of an idle worker); notes per topic.</p></x-simple>
+
+<x-fu q="Give me an example of something you learned that didn’t work the first time.">The rate limiter behind Render’s proxies: the first two settings were wrong, and only measuring the partition key fixed it.</x-fu>
+<x-no>“I watch tutorials and take notes” with no building or testing step.</x-no>
+<x-ev>Whether you can tell tutorials from skill.</x-ev>
+</x-q>
+
+<x-q n="1.15" tag="should basic"><x-t>Have you contributed to any open-source projects?</x-t>
+<x-say>Not yet in a meaningful way, honestly. My public work is my own repositories. Contributing is something I want to do, starting with documentation and small bug fixes in libraries I use.</x-say>
+<x-simple><p>If the answer is no, say no. Then show you understand how: read CONTRIBUTING.md, start with good-first-issue labels, reproduce the bug, small PR with a test. If you have any PR or issue you opened, mention it.</p></x-simple>
+
+<x-fu q="Pick an open-source library you use. How would you start contributing?">Read its CONTRIBUTING guide, reproduce an open issue labelled good first issue, write a failing test, fix it in a small PR, and respond to review.</x-fu>
+<x-no>Calling your own public repo “open-source contribution”.</x-no>
+<x-ev>Honesty.</x-ev>
+</x-q>
+
+<x-q n="1.16" tag="should basic"><x-t>Have you worked with other developers?</x-t>
+<x-say>Mostly in college team projects. My recent work is solo, which is the main thing I want to change: I want code reviews and shared ownership.</x-say>
+<x-simple><p>Show you already use team habits alone: Git branches and PRs (DocMind’s auth went through a PR), written plans before building, clear commit messages, docs other people could follow.</p></x-simple>
+
+<x-fu q="How would you handle a teammate whose code breaks yours?">Reproduce it, talk to them directly with the evidence, agree on a fix and add a test so it doesn’t happen again. No blame in public channels.</x-fu>
+<x-no>Claiming team experience you don’t have, or saying you prefer working alone.</x-no>
+<x-ev>Collaboration readiness.</x-ev>
+</x-q>
+
+<x-q n="1.17" tag="should basic"><x-t>How do you approach deadlines when working independently?</x-t>
+<x-say>I break work into small steps that each end with something running, estimate them, and cut scope before I cut quality. I set myself a real deadline for DocMind and planned phases around it.</x-say>
+<x-simple><p>Concrete habits: a written plan with steps; a “done” definition per step (works locally, tested, deployed); tracking what’s left; telling stakeholders early when something slips.</p></x-simple>
+
+<x-fu q="Tell me about a deadline you missed.">Give a real one, say when you noticed, what you cut or communicated, and what you changed in your planning afterwards.</x-fu>
+<x-no>“I never miss deadlines.”</x-no>
+<x-ev>Planning and reliability.</x-ev>
+</x-q>
+
+<x-q n="1.18" tag="must solid"><x-t>What would you say is the biggest weakness in your technical abilities right now?</x-t>
+<x-say>Automated testing. DocMind has none yet; I test by hand against the real stack. I’m fixing that next with unit tests for the services and integration tests for the routes.</x-say>
+<x-simple><p>A good weakness is real, relevant but not disqualifying, and has a plan. Other honest options: no production on-call experience; limited experience with cloud infrastructure (AWS, Docker beyond basics); no experience working in a large codebase.</p></x-simple>
+
+<x-fu q="How will you know the weakness is fixed?">Measurable: a test suite running in CI for DocMind’s services and routes, and the habit of writing a test with each bug fix.</x-fu>
+<x-no>“I’m a perfectionist.” “I don’t have weaknesses.”</x-no>
+<x-ev>Self-awareness.</x-ev>
+</x-q>
+
+<x-q n="1.19" tag="must solid"><x-t>Why should we hire you over someone with six months of professional experience?</x-t>
+<x-say>They have team experience I don’t. I bring depth in exactly this stack: I built and deployed a full AI backend myself and can explain every decision in it. I learn fast and I’m cheaper to grow than to hire senior.</x-say>
+<x-simple><p>Don’t attack the other candidate. Acknowledge their advantage, then show your specific edge with evidence, and invite them to test it: “Ask me anything about DocMind.”</p></x-simple>
+
+<x-fu q="What will you do in your first 90 days?">Learn the codebase and the deploy process, ship small fixes in the first weeks, own a small feature end to end by month three, and ask for feedback regularly.</x-fu>
+<x-no>Criticising the other candidate, or claiming you’re “better than people with experience”.</x-no>
+<x-ev>Confidence without arrogance.</x-ev>
+</x-q>
+
+<x-q n="1.20" tag="should basic"><x-t>Are you comfortable joining as a fresher despite having spent two years developing independently?</x-t>
+<x-say>Yes. I haven’t worked in a team on a production system, and that’s what I want to learn. I’d rather join at the right level and grow fast than be over-titled.</x-say>
+<x-simple><p>They are checking expectations (salary, title, ego). Be clear and calm.</p></x-simple>
+
+<x-fu q="What salary are you expecting?">Give a researched range for fresher AI backend roles in your city and say you’re flexible for the right learning opportunity.</x-fu>
+<x-no>Hesitating, or implying you deserve a senior title because you studied for two years.</x-no>
+<x-ev>Realistic expectations.</x-ev>
+</x-q>
+
+<h2 class="sec"><span class="k">1.3</span>Sample conversation: strong vs weak</h2>
+<div class="two">
+<div class="box"><h4>Weak</h4><p><b>Q:</b> What have you been doing since 2024?</p><p><b>A:</b> Actually market was very bad, so I was learning many things like React, Node, AI, DSA. Also I made some projects.</p><p><b>Q:</b> Which projects?</p><p><b>A:</b> Many projects, like a chat with PDF using LangChain and Pinecone…</p><p><b>Q:</b> How does Pinecone index the vectors?</p><p><b>A:</b> …</p><p class="counter">Blames the market, vague, names tools that weren’t used, collapses at the first follow-up.</p></div>
+<div class="box"><h4>Strong</h4><p><b>Q:</b> What have you been doing since 2024?</p><p><b>A:</b> Learning full time with a structure. I shipped a few full-stack apps, then this year built DocMind, an AI document chat backend.</p><p><b>Q:</b> What’s in it?</p><p><b>A:</b> Postgres with pgvector, a BullMQ queue for embedding, JWT auth with per-user scoping, and an agent loop with two tools. It’s live.</p><p><b>Q:</b> Why pgvector and not a vector database?</p><p><b>A:</b> I already needed Postgres for users and chats, so vectors in the same database meant one system and joins for ownership. At my scale that’s plenty; at many millions of vectors I’d look at an index or a dedicated store.</p><p class="counter">Specific, honest, every claim survives a follow-up.</p></div>
+</div>
+
+<h2 class="sec"><span class="k">1.4</span>Handling uncomfortable questions</h2>
+<div class="prose">
+<ul>
+<li><b>“Your CGPA is low.”</b> Agree briefly, don’t argue: “It’s 7.01. My projects are a better measure of what I can do now. Happy to go through one.”</li>
+<li><b>“This looks like a tutorial project.”</b> Show the parts no tutorial has: “The idempotent job, the guest-to-user upgrade that keeps files, the measured trust-proxy setting.”</li>
+<li><b>“Did AI write this code?”</b> “I used AI assistants, like most developers. I reviewed every change and I can explain any line. Pick a file.” Then be able to.</li>
+<li><b>A question you can’t answer.</b> “I don’t know that one. Here’s how I’d reason about it…” Guessing confidently is worse than saying you don’t know.</li>
+</ul>
+</div>
+
+<h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
+<x-quiz id="qz-p01">
+<x-mcq a="1"><x-t>Which introduction structure gives the interviewer the best hooks?</x-t><x-o>School → college → hobbies → projects</x-o><x-o>Present role → short past → one project in depth → why this role</x-o><x-o>A list of every technology you know</x-o><x-o>Your weaknesses first, to seem humble</x-o><x-why>The four-beat structure puts your strongest proof in the middle and hands them specific topics to ask about.</x-why></x-mcq>
+<x-mcq a="2"><x-t>Best response to “Why haven’t you got a job yet?”</x-t><x-o>The market is bad for freshers.</x-o><x-o>HR filters by CGPA.</x-o><x-o>My skills weren’t strong enough for the roles I wanted, so I built them deliberately; here’s the evidence.</x-o><x-o>I was busy with other things.</x-o><x-why>Ownership plus evidence. Blaming external factors is the classic red flag.</x-why></x-mcq>
+<x-mcq a="0"><x-t>An interviewer asks about a tool you listed but barely used. What went wrong earlier?</x-t><x-o>You listed it without a confidence label</x-o><x-o>You didn’t memorise its documentation</x-o><x-o>Nothing, this is normal</x-o><x-o>You should have listed more tools</x-o><x-why>Everything you mention is fair game. Label tools as strong / working knowledge / learning.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Which weakness answer is strongest?</x-t><x-o>I work too hard.</x-o><x-o>I have no weaknesses in backend.</x-o><x-o>I don’t like debugging.</x-o><x-o>No automated tests in my main project yet; here’s my plan and what I’ve started.</x-o><x-why>Real, relevant, not disqualifying, with a plan.</x-why></x-mcq>
+</x-quiz>

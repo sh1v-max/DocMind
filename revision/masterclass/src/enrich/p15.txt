@@ -1,0 +1,190 @@
+@Q 15.1
+S: LangChain offers abstractions and integrations for every stage of an LLM app: chat model wrappers for many providers, prompt templates, output parsers, document loaders and text splitters, embedding and vector store integrations, retrievers, tools and agents, and a composition syntax (LCEL) to pipe components. It’s popular for prototyping RAG quickly; critics point to deep abstractions that can make debugging and customisation harder.
+E: A RAG prototype: PDF loader → RecursiveCharacterTextSplitter → embeddings → vector store retriever → prompt → chat model, in a few dozen lines.
+Q: Would you use it in production?
+A: Possibly for its integrations; many teams keep core logic in their own code and use only selected pieces.
+N: “LangChain is a model.”
+@Q 15.2
+S: LangGraph models an application as a state machine graph: a typed state object, nodes (functions or agents) that read and update the state, and edges (including conditional and cyclic edges) that decide the next node. A checkpointer persists state after each step, enabling resume, time travel, and human-in-the-loop via interrupts. It’s used for complex agents (loops with tool calls, multi-agent supervisors) where control flow must be explicit.
+E: An agent graph: “call_model” → conditional edge (tool calls? → “tools” → back to “call_model” : END).
+Q: How is a LangGraph interrupt similar to Mastra suspend?
+A: Both pause execution at a point, persist state, and resume later with human input.
+N: “LangGraph is a graph database.”
+@Q 15.3
+E: LangChain: “retrieve then answer” chain. LangGraph: “route → maybe search (loop) → maybe ask human → answer” with persisted state.
+N: “LangGraph replaces LangChain entirely.”
+@Q 15.4
+E: In Node/TypeScript: Mastra workflows ≈ LangGraph’s graphs with persistence; Mastra agents/tools ≈ LangChain’s agents and tools; both have tracing and evals.
+N: “They’re completely different categories.”
+@Q 15.5
+S: Orchestration frameworks coordinate the moving parts of LLM applications: they define steps or graphs, pass state between them, call models and tools, handle loops and branching, persist progress, retry failures, pause for humans, and record traces. Examples: Mastra, LangGraph, LlamaIndex workflows, Temporal or Inngest used with LLM steps.
+E: A support pipeline: classify → retrieve → draft → check policy → (human review) → send, run by the framework with retries and traces.
+Q: Is a job queue an orchestration framework?
+A: Not by itself; queues execute independent jobs. Orchestration adds multi-step state and control flow on top.
+N: “Orchestration means Kubernetes.”
+@Q 15.7
+S: Multi-agent systems split work among specialised agents (researcher, writer, critic; or per-domain agents) coordinated by a supervisor agent that delegates (agents as tools), by a workflow, or by peer messaging. Benefits: smaller focused prompts and tool sets, parallelism, separation of permissions. Costs: more calls, coordination failures, harder debugging.
+E: Mastra supports supervisor agents with sub-agents exposed as tools; LangGraph and A2A support other patterns.
+Q: When is multi-agent justified?
+A: When tasks need clearly different tool sets or permissions, or when a single agent’s prompt becomes too large to manage; measure that it helps.
+N: “More agents = better results.”
+@Q 15.8
+S: Each handoff loses context or introduces misinterpretation; errors compound; agents can loop delegating to each other; costs and latency multiply; it’s harder to know which agent caused a bad outcome; and permission boundaries blur if one agent can make another act. Mitigations: structured messages between agents, clear contracts, step and budget limits, tracing across agents, and least-privilege tools per agent.
+E: A researcher agent summarises sources loosely; the writer agent treats the summary as fact and adds a wrong figure; no one checks.
+Q: How do you debug a multi-agent failure?
+A: A single trace across all agents with each message and tool call, so you can see where the information went wrong.
+N: “Agents communicate perfectly in natural language.”
+@Q 15.9
+E: An IDE assistant connects to a GitHub MCP server (tools: search issues, create PR), a Postgres MCP server (resource: schema; tool: run read-only query) and a docs MCP server, without custom code for each.
+C js:
+// a minimal MCP server (TypeScript SDK 1.32, stdio transport)
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+const server = new McpServer({ name: 'docmind-search', version: '1.0.0' });
+server.registerTool('search_documents', {
+  title: 'Search documents',
+  description: "Search the configured user's documents for passages relevant to a query.",
+  inputSchema: { query: z.string().min(1).max(500) },              // a Zod raw shape
+}, async ({ query }) => {
+  const hits = await retrieve({ userId: process.env.DOCMIND_USER_ID, query, k: 5 });
+  return { content: [{ type: 'text', text: hits.map((h) => `${h.filename}: ${h.content}`).join('\n---\n') }] };
+});
+await server.connect(new StdioServerTransport());
+Q: Who decides when the tool is called?
+A: The host application’s model, through its MCP client; the server only exposes and executes.
+N: “MCP is a model.”
+@Q 15.10
+S: Before MCP, each AI app (IDE assistant, desktop chat, agent framework) needed custom integrations for each system (GitHub, Slack, databases, internal APIs): N apps × M systems connectors. MCP standardises discovery and invocation, so a system exposes one server and any compliant client can list and call its tools, read its resources and use its prompts. It also standardises transport, capability negotiation and some security patterns (OAuth for remote servers).
+E: A company exposes its internal ticket system as an MCP server once; developers use it from their IDE assistant, chat app and custom agents.
+Q: What security concerns does MCP bring?
+A: Servers can expose powerful tools; tool descriptions and results can contain prompt injection; you must authenticate servers, scope permissions, and review third-party servers like any dependency.
+N: “It makes models smarter.”
+@Q 15.11
+E: Claude Desktop or an IDE (host) runs an MCP client per server; a local stdio server reads files; a remote Streamable HTTP server talks to a SaaS API with OAuth.
+Q: What transports exist?
+A: stdio for local processes, and Streamable HTTP for remote servers (with optional SSE streaming).
+N: “The client is the LLM.”
+@Q 15.12
+E: Tool: <code>create_issue({ title, body })</code>. Resource: <code>file:///repo/README.md</code> or <code>postgres://schema</code>. Prompt: “review-pull-request” template with a PR number argument.
+Q: Which of the three can change data?
+A: Tools (they act); resources are read-only by design; prompts are templates.
+N: “They’re all the same as tools.”
+@Q 15.13
+S: A2A defines how independent agents interoperate: each publishes an agent card (name, description, skills, endpoint, auth requirements) for discovery; a client agent sends messages that create tasks; the remote agent processes them (possibly long-running), sends status updates and streams results, and returns artifacts (outputs). It runs over HTTP with JSON-RPC and SSE, and is framework-neutral.
+E: A travel agent delegates “book a hotel in Pune for 12–14 Nov” to a hotel-booking agent from another company, receives status updates and a booking artifact.
+Q: How does A2A handle long tasks?
+A: Tasks have states and can stream updates or notify via push, instead of blocking one request.
+N: “A2A is how agents call tools.”
+@Q 15.14
+S: Organisations build agents with different frameworks and vendors; without a standard, connecting them means custom APIs for each pair. A2A gives a common way to discover capabilities, delegate tasks, exchange messages and results, and handle long-running work and auth, while each agent keeps its internals private.
+E: A procurement agent working with a supplier’s quoting agent.
+Q: What trust issues arise?
+A: Authenticating agents, authorising what they may request, and treating their outputs as untrusted input.
+N: “It lets agents share memory.”
+@Q 15.15
+E: MCP: your agent calls a “search_documents” tool on a server and decides what to do with the result. A2A: your agent asks another agent “research competitors and send a report”, and that agent chooses its own tools and steps.
+N: “They’re competitors doing the same thing.”
+@Q 15.16
+S: AG-UI standardises the stream between an agent backend and a frontend: typed events for run lifecycle, text message start/content/end, tool call start/arguments/end and results, state snapshots and deltas, custom events, and errors. The frontend can render progress, show tool calls, sync shared state, and send user input back, independent of which agent framework is behind it.
+E: A chat UI showing “Searching documents…” while a tool call runs, then streaming the answer, works the same against a Mastra, LangGraph or custom backend that speaks AG-UI.
+Q: How does DocMind compare?
+A: It has a small custom version (meta, status, sources, action, text, done, error events over SSE).
+N: “AG-UI is a UI component library.”
+@Q 15.17
+E: Event sequence for one turn: RUN_STARTED → TEXT_MESSAGE_START → TOOL_CALL_START(searchDocuments) → TOOL_CALL_ARGS → TOOL_CALL_END → TEXT_MESSAGE_CONTENT×n → TEXT_MESSAGE_END → RUN_FINISHED.
+Q: Why standardise this?
+A: So UI components and agent backends can be mixed and matched without bespoke protocols.
+N: “It replaces HTTP.”
+@Q 15.18
+E: A support assistant: the web widget speaks AG-UI to the assistant backend; the backend uses MCP servers for the ticketing system and knowledge base; for refunds it delegates to the billing team’s agent over A2A.
+Q: Which one would a fresher most likely touch first?
+A: MCP: building or using MCP servers for tools is the most common today.
+N: Mixing up which connection each protocol covers.
+@Q 15.19
+S: Prompt chaining breaks a complex task into sequential, focused LLM calls: each prompt does one job, its output is validated and passed to the next. Benefits: simpler prompts, easier debugging (inspect each stage), validation between steps, the option to use different models per step. Costs: more calls and latency.
+E: Extract key facts (JSON) → draft summary from facts → check summary against facts → polish tone.
+Q: How is it different from an agent?
+A: The sequence is fixed by code; an agent decides the steps itself.
+N: “Chaining means passing the whole conversation to each call.”
+@Q 15.20
+S: Context compression reduces tokens while preserving needed information: summarise older history, extract only relevant sentences from retrieved chunks (an LLM or extractive model), drop duplicates, shorten tool results, or use provider prompt caching for repeated prefixes. It lowers cost and latency and can improve accuracy by removing noise, but over-compression can drop the fact you needed.
+E: 6 chunks × 500 tokens → extract 2–3 relevant sentences each → 600 tokens of context.
+Q: How do you check compression didn’t hurt?
+A: Compare answer correctness/faithfulness on the eval set with and without it.
+N: “Compression means gzip.”
+@Q 15.21
+C js:
+async function cachedAnswer(scopeKey, question, generate) {
+  const qvec = await embed(question);
+  const { rows } = await pool.query(
+    `SELECT answer, 1 - (embedding <=> $2::vector) AS sim FROM answer_cache
+     WHERE scope_key = $1 AND expires_at > now() ORDER BY embedding <=> $2::vector LIMIT 1`, [scopeKey, toVec(qvec)]);
+  if (rows[0]?.sim >= 0.97) return { answer: rows[0].answer, cached: true };   // strict threshold
+  const answer = await generate(question);
+  await pool.query(`INSERT INTO answer_cache (scope_key, question, embedding, answer, expires_at)
+                    VALUES ($1, $2, $3::vector, $4, now() + interval '1 day')`, [scopeKey, question, toVec(qvec), answer]);
+  return { answer, cached: false };
+}
+// scopeKey = tenant + document set version, so changed documents never return stale answers
+@Q 15.22
+S: Guardrails are policy checks wrapped around model calls. Input guardrails: length limits, PII detection/redaction, abuse and jailbreak classifiers, topic allow-lists. Output guardrails: schema validation, toxicity/safety filters, grounding/faithfulness checks, secret and PII leakage checks, link and HTML sanitisation, business rules (no prices not in the catalogue). They can block, rewrite, ask for clarification, or escalate.
+E: A support bot blocks answers that promise refunds above policy, and escalates instead.
+Q: Should guardrails use LLMs?
+A: Use deterministic checks first (cheap, reliable), and model-based classifiers for fuzzy policies.
+N: “Guardrails are the system prompt.”
+@Q 15.23
+S: Model routing picks a model per request based on task type, estimated difficulty, required capabilities (vision, long context, tools), latency target or user tier. It can be rule-based (task → model), classifier-based (a small model rates difficulty), or cascade (try cheap model, escalate if confidence or validation fails).
+E: Classification and query rewriting → small model; complex multi-document answers → large model.
+Q: How do you validate a routing policy?
+A: Eval quality and cost per route; check that cheap-routed requests don’t lose meaningful quality.
+N: Confusing it with intent routing (which path to take).
+@Q 15.24
+S: Fallback routing defines alternatives when the chosen model fails: same provider’s other model, another provider, or a degraded non-LLM response, triggered by errors, timeouts or circuit breakers. It keeps features available during outages; outputs must be validated the same way and logged with the model that served them.
+E: See <code>generateWithFallback</code> in Phase 5 Q33.
+Q: Why can’t embeddings use simple fallback?
+A: Vectors from another model are incompatible with the stored index.
+N: Retrying the same failing model forever.
+@Q 15.25
+S: An eval framework runs a versioned dataset through your system and scores outputs with metrics: deterministic (exact match, JSON validity, latency, cost), reference-based (similarity to expected answers), and model-graded (LLM judges for faithfulness, relevance, rubric quality). It compares versions (prompt, model, retrieval settings), catches regressions in CI, and tracks trends. Examples include RAGAS-style metrics, promptfoo, DeepEval, and framework-built-in scorers (Mastra has scorers).
+E: A PR changes the system prompt; CI runs 80 questions and blocks the merge because faithfulness dropped from 0.94 to 0.88.
+Q: What makes a good eval set?
+A: Realistic, diverse, including edge cases and unanswerable questions, versioned, and growing from production failures.
+N: “Evals are unit tests with exact string matching.”
+@Q 15.26
+E: A trace for one chat request: auth 3 ms → rewrite (flash-lite, 220 in / 15 out tokens, 640 ms) → retrieve 48 ms → generate (1,800 in / 210 out, 2.4 s, finish stop) → save 12 ms; tagged with user, prompt version and model.
+Q: What AI-specific signals would you track?
+A: Tokens and cost per request/user, model and prompt version, finish reasons, tool-call counts and errors, retrieval scores, eval scores, user feedback.
+N: “Logging errors is enough.”
+@Q 15.27
+E: Log: “searchDocuments failed: timeout”. Trace: request r_1 → agent step 2 → searchDocuments span 5,002 ms (timeout) → model step 3 span 1.1 s; you see where and in what order.
+C js:
+import { trace } from '@opentelemetry/api';
+const tracer = trace.getTracer('docmind');
+async function tracedTool(name, args, fn) {
+  return tracer.startActiveSpan(`tool ${name}`, async (span) => {
+    span.setAttribute('tool.name', name);
+    try { return await fn(args); }
+    catch (e) { span.recordException(e); throw e; }
+    finally { span.end(); }
+  });
+}
+N: “Tracing is just logging with timestamps.”
+@Q 15.28
+S: Treat each agent run as a trace with a span per model step (model, tokens, latency, finish reason, number of tool calls) and per tool call (name, argument summary, duration, outcome, result size). Aggregate metrics: steps per run, loop-limit hits, tool error rates, cost per run, time to first token. Sample full transcripts (redacted) for review and turn failures into eval cases.
+E: A dashboard showing runs hitting the step limit rising from 1% to 8% after a prompt change.
+Q: Which single metric catches many agent problems?
+A: Steps per run (and its tail): loops, confusion and tool failures all inflate it.
+N: Only monitoring HTTP status codes.
+@Q 15.29
+S: Propagate a run/trace id through every agent and sub-agent call; log usage from each model response with agent name, user, feature and model; sum per run and per user; price it with a model price table; enforce budgets per run and per user per day.
+E: A supervisor run: supervisor 3 calls (4K tokens), researcher 5 calls (18K), writer 2 calls (6K) → 28K tokens for one request.
+Q: Where do you enforce the budget?
+A: In the loop of each agent (check accumulated tokens before the next call) and at the request level.
+N: Estimating from the invoice.
+@Q 15.30
+S: Measure from the server receiving the request to the last byte sent (and for streams, time to first byte/token), with percentiles (p50, p95, p99) per endpoint, plus a breakdown by stage via trace spans. Also measure from the client (real user monitoring), since network and rendering add time. Track per model and per route to find where to optimise.
+E: p95 total 4.2 s = 0.3 s retrieval + 0.9 s TTFT + 3.0 s generation; shortening answers or streaming improves perceived latency most.
+Q: Why percentiles instead of averages?
+A: Averages hide the slow tail that frustrates users; p95/p99 show it.
+N: Measuring only average latency.

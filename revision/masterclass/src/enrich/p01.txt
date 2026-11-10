@@ -1,0 +1,51 @@
+@Q 1.3
+Q: What would you be doing if not software?
+A: Answer briefly and truthfully, then bring it back: “Probably something analytical, but building things people use is what kept me coming back, even through two years of learning on my own.”
+@Q 1.5
+Q: What was the first AI feature you built, and what surprised you?
+A: Cinegraph’s recommendations through Gemini behind a Cloudflare Worker. The surprise was how much of the work was around the call: hiding the key, handling slow or malformed replies, and keeping costs down.
+@Q 1.8
+Q: What part of that project would you rewrite today?
+A: Add tests first, chunk with overlap, and put timeouts and retries on every model call. Naming a concrete rewrite shows you have grown since writing it.
+N: Picking a project you can’t explain end to end, or one that was mostly a tutorial.
+@Q 1.9
+Q: How did that change a specific piece of your code?
+A: Tool arguments in DocMind go through Zod exactly like a request body, and the user id is never a tool argument: it comes from the session.
+N: A buzzword (“AI is changing everything”) with no concrete change in how you work.
+@Q 1.10
+Q: What are you doing now to get there?
+A: Name the current steps: this course, building workflows (Phase 8 of DocMind), adding tests, and practising system design.
+N: “I want to be a manager / start my own company in two years” for a junior role.
+@Q 1.12
+Q: What did you change after your last rejections?
+A: I practised explaining my projects out loud and built one project deeply instead of many shallow ones. Be concrete about the feedback you got, if any.
+@Q 1.13
+Q: Which one should I look at first?
+A: DocMind: it’s live, it has the most backend depth, and the plan files show how each step was built and tested.
+N: Listing projects you didn’t finish or can’t demo.
+@Q 1.14
+Q: Give me an example of something you learned that didn’t work the first time.
+A: The rate limiter behind Render’s proxies: the first two settings were wrong, and only measuring the partition key fixed it.
+N: “I watch tutorials and take notes” with no building or testing step.
+@Q 1.15
+Q: Pick an open-source library you use. How would you start contributing?
+A: Read its CONTRIBUTING guide, reproduce an open issue labelled good first issue, write a failing test, fix it in a small PR, and respond to review.
+@Q 1.16
+Q: How would you handle a teammate whose code breaks yours?
+A: Reproduce it, talk to them directly with the evidence, agree on a fix and add a test so it doesn’t happen again. No blame in public channels.
+N: Claiming team experience you don’t have, or saying you prefer working alone.
+@Q 1.17
+Q: Tell me about a deadline you missed.
+A: Give a real one, say when you noticed, what you cut or communicated, and what you changed in your planning afterwards.
+N: “I never miss deadlines.”
+@Q 1.18
+Q: How will you know the weakness is fixed?
+A: Measurable: a test suite running in CI for DocMind’s services and routes, and the habit of writing a test with each bug fix.
+@Q 1.19
+Q: What will you do in your first 90 days?
+A: Learn the codebase and the deploy process, ship small fixes in the first weeks, own a small feature end to end by month three, and ask for feedback regularly.
+N: Criticising the other candidate, or claiming you’re “better than people with experience”.
+@Q 1.20
+Q: What salary are you expecting?
+A: Give a researched range for fresher AI backend roles in your city and say you’re flexible for the right learning opportunity.
+N: Hesitating, or implying you deserve a senior title because you studied for two years.

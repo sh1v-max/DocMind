@@ -1,0 +1,25 @@
+@Q 3.3
+N: “Non-blocking means multi-threaded.”
+@Q 3.14
+S: Uploads arrive as multipart/form-data: the body contains parts separated by a boundary, each with headers and bytes. A streaming parser (busboy, which multer uses) reads parts as they arrive, enforces limits (file size, number of files, field sizes) while reading, and either buffers the file in memory or writes it to disk/storage. After parsing: verify the real type (magic bytes), compute a hash, store the object, record metadata, and process asynchronously. Direct-to-storage uploads with presigned URLs skip your server entirely for large files.
+@Q 3.18
+N: “Middleware only runs before routes.” (Error handlers and 404 handlers are middleware after routes.)
+@Q 3.22
+S: Express keeps one ordered list of layers per app/router; each request walks it top to bottom and stops at the first layer that sends a response. Order therefore encodes dependencies (parse before validate, authenticate before authorize, routes before 404, everything before the error handler) and policy (public routes before a global auth middleware, CORS before anything that can reject). Getting the order wrong silently changes behaviour without any error.
+@Q 3.26
+Q: Why are all query values strings?
+A: The query string is text; Express parses it into strings/arrays/objects but doesn’t convert types, so you validate and coerce (z.coerce.number()).
+@Q 3.32
+S: Structure by responsibility and by feature. Layers: routes (HTTP), services (business rules), repositories (data access), plus middleware, schemas, config, workers and a composition root. Group by feature (documents, chat, auth) when the app grows so related code lives together. Keep app creation separate from listening so tests can import the app. Rules that prevent decay: no SQL outside repositories, no req/res in services, dependencies injected or imported one way only, and new features get their own files instead of growing a central one.
+@Q 3.42
+S: The choice is about which attacks you’re more exposed to and what your deployment allows. localStorage/sessionStorage: easy, works cross-site with Bearer headers, immune to CSRF, but readable by any script (XSS steals it). httpOnly cookies: not readable by scripts, sent automatically (so CSRF must be handled with SameSite and/or tokens), and awkward across different sites (third-party cookies are blocked by many browsers). In memory only: lost on refresh, so combined with a refresh-token cookie. Native apps use secure OS storage.
+@Q 3.44
+S: RBAC assigns users roles (admin, editor, viewer), roles grant permissions (document:delete, billing:read), and checks ask “does this user have permission X?”. Store roles in a table (user_roles), load them at login (into the token for short-lived tokens) or per request, check permissions in middleware for route-level rules and in services/queries for resource-level rules (owner or role). Prefer checking permissions over role names so roles can change without code changes.
+@Q 3.48
+S: bcrypt (based on the Blowfish cipher’s expensive key setup) generates a random 128-bit salt, runs 2^cost iterations of key expansion, and outputs a string containing the version, cost, salt and hash, so verifying needs only the string. Increasing cost by 1 doubles the work, which lets you keep up with faster hardware. Limits: only the first 72 bytes of the password are used, and it isn’t memory-hard (Argon2id resists GPU attacks better).
+@Q 3.50
+S: With a parameterized query, the driver sends the SQL text with placeholders ($1, $2) and the values separately (the extended query protocol in Postgres). The server parses and plans the statement before seeing the values, so the values can only ever be data of the declared type; quote characters inside them are just characters. String concatenation, by contrast, lets the value change the parse tree.
+@Q 3.62
+N: Caching user-specific data under a global key, or caching with no invalidation and no TTL.
+@Q 3.66
+S: HTTP requests have limited lifetimes (proxy and load-balancer timeouts, client patience, deploys that kill in-flight requests) and they tie up resources while open. Long operations inside them fail unpredictably and can’t be retried safely by the client because the outcome is unknown. A background job decouples acceptance (fast, returns an id) from execution (durable, retried, observable, scalable separately), and the client tracks progress.

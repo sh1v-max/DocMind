@@ -1,0 +1,140 @@
+<x-obj><ul><li>Apply one debugging method to any production problem, out loud.</li><li>Answer all 10 production scenarios from the bank with causes, investigation, fix and what to say.</li><li>Diagnose broken snippets before reading the answer.</li></ul></x-obj>
+<x-pre><ul><li>Phases 3–9.</li></ul></x-pre>
+
+<h2 class="sec"><span class="k">12.A</span>The method</h2>
+<x-lesson t="A repeatable debugging methodology" tag="must">
+<x-def>A fixed sequence you follow for every incident, so you don’t guess-and-patch under pressure.</x-def>
+<x-in><ol><li><b>Reproduce</b> the issue (or find a request that shows it). Note exact input, user, time, environment.</li><li><b>Collect evidence:</b> logs by request id, error messages and cause chains, metrics (latency, error rate, saturation), recent deploys/config changes, traces.</li><li><b>Identify the failing component:</b> client, API, DB, queue, worker, LLM provider, network. Narrow by timing each stage.</li><li><b>Form hypotheses</b> ranked by likelihood × ease of checking.</li><li><b>Test hypotheses</b> one at a time with a measurement, not a feeling. Change one thing.</li><li><b>Fix the root cause</b>, not the symptom (raising a timeout is rarely the fix).</li><li><b>Add a regression test</b> (and an alert if it could recur silently).</li><li><b>Monitor</b> the result after deploy; write down what happened.</li></ol></x-in>
+<x-dm><p>Real examples from DocMind’s logs: a stream that showed nothing (Gemini’s <code>\r\n</code> line endings split across reads → normalise on the whole buffer); the rate limiter keying on proxies (measured the <code>RateLimit-Policy</code> partition key against <code>sha256(client IP)</code> for hop counts 1, 2, 3); production sharing the laptop’s queue (found because there were 0 keys under the <code>docmind:</code> prefix); a DNS resolver refusing the Neon hostname on a hotspot (not a code bug).</p></x-dm>
+<x-mist><ul><li>Changing several things at once.</li><li>“Works on my machine” without comparing environments.</li><li>Declaring victory without a test or a metric.</li></ul></x-mist>
+</x-lesson>
+
+<h2 class="sec"><span class="k">12.B</span>Diagnose these snippets first</h2>
+<x-ex t="Snippet 1: the leaking pool" tag="must solid">
+<x-prob><pre data-l="js">async function transfer(from, to, amount) {
+  const client = await pool.connect();
+  await client.query('BEGIN');
+  await client.query('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [amount, from]);
+  if (amount > 1000) throw new Error('limit');
+  await client.query('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [amount, to]);
+  await client.query('COMMIT');
+  client.release();
+}</pre>What breaks under load?</x-prob>
+<x-sol>Any throw (the limit check or a failed query) skips ROLLBACK and <code>release()</code>: the transaction stays open holding a row lock and the client never returns to the pool. After <code>max</code> such errors, every request waits forever for a connection. Fix: <code>try { … COMMIT } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }</code>, and validate the limit before BEGIN.</x-sol>
+</x-ex>
+<x-ex t="Snippet 2: the silent stream" tag="must solid">
+<x-prob><pre data-l="js">for await (const chunk of res.body) {
+  for (const line of chunk.toString().split('\n')) {
+    if (line.startsWith('data: ')) send(JSON.parse(line.slice(6)).text);
+  }
+}</pre>Sometimes the stream crashes with a JSON error, or characters like “é” turn into garbage. Why?</x-prob>
+<x-sol>Network chunks don’t align with events or characters. A <code>data:</code> line split across two chunks → <code>JSON.parse</code> of half a line throws; a multi-byte UTF-8 character split across chunks → <code>toString()</code> per chunk produces replacement characters. Fix: one <code>TextDecoder</code> with <code>{ stream: true }</code>, accumulate into a buffer, split on the blank line between events (after normalising <code>\r\n</code>), keep the trailing partial event for the next chunk.</x-sol>
+</x-ex>
+<x-ex t="Snippet 3: the agent that never stops" tag="must solid">
+<x-prob><pre data-l="js">while (true) {
+  const msg = await callModel({ messages, tools });
+  messages.push(msg);
+  if (!msg.tool_calls) break;
+  for (const c of msg.tool_calls) messages.push(await runTool(c));
+}</pre></x-prob>
+<x-sol>No step limit, no final no-tools call, no repeated-call detection, and <code>runTool</code> errors throw out of the loop. One confused model can loop until the token budget is gone. Fix: <code>for (let step = 1; step &lt;= MAX; step++)</code>, drop tools on the last step, block identical repeated calls, catch tool errors into results, log steps and usage.</x-sol>
+</x-ex>
+
+<h2 class="sec"><span class="k">12.C</span>Production scenarios</h2>
+<x-scn t="Scenario 1: API is slow (500 ms → 5 s)" tag="must solid">
+<x-sit>Your backend API normally responds in 500 milliseconds. Suddenly, it takes five seconds.</x-sit>
+<x-sq q="What would you inspect first?">What changed (deploy, config, traffic, data volume), which endpoints are slow (all → shared dependency; one → its code path), and the latency breakdown per stage for one slow request.</x-sq>
+<x-sq q="How would you investigate database latency?">Query timing logs, <code>pg_stat_statements</code> for the slowest/most frequent queries, <code>EXPLAIN (ANALYZE, BUFFERS)</code> on them, lock waits (<code>pg_stat_activity</code>, <code>pg_locks</code>), pool wait time vs query time, missing indexes after data growth.</x-sq>
+<x-sq q="How would you identify external API delays?">Time every outbound call (LLM, embeddings, payments) with status and retry count; compare to their status pages; check whether retries are hiding failures.</x-sq>
+<x-sq q="What is request tracing?">Following one request across components with a shared trace id: each component records spans (start, end, attributes), so you see a waterfall of where the 5 seconds went (OpenTelemetry is the standard).</x-sq>
+<x-sq q="What metrics would you collect?">p50/p95/p99 latency per endpoint and per dependency, request rate, error rate, saturation (CPU, event-loop lag, DB pool in-use/waiting, queue depth), LLM tokens and time to first token.</x-sq>
+<x-say>“I’d find which stage got slower using traces and per-dependency timings, check what changed, then dig into that dependency: slow queries with EXPLAIN, pool waits, or provider latency and hidden retries.”</x-say>
+</x-scn>
+<x-scn t="Scenario 2: database connection exhaustion" tag="must solid">
+<x-sit>Your application starts returning database connection errors.</x-sit>
+<x-sq q="What could cause this?">Leaked clients (no release on an error path), long transactions (an LLM call inside a transaction), traffic spike beyond pool size, too many app instances × pool size above the server’s <code>max_connections</code>, slow queries holding connections, idle-in-transaction sessions.</x-sq>
+<x-sq q="What is connection pooling?">A fixed set of reusable DB connections lent to requests; requests queue when all are busy.</x-sq>
+<x-sq q="How would you identify leaked connections?">Pool metrics (totalCount, idleCount, waitingCount) climbing and never returning; <code>pg_stat_activity</code> showing many <code>idle in transaction</code> sessions from the app; code review for <code>pool.connect()</code> without <code>finally { release() }</code>; set <code>idle_in_transaction_session_timeout</code>.</x-sq>
+<x-sq q="How would you recover?">Short term: restart instances to free connections, kill stuck sessions, add a server-side pooler (PgBouncer / provider pooled endpoint). Root cause: fix the leak, move slow work out of transactions, size pools against max_connections, add connection and statement timeouts and alerts.</x-sq>
+<x-say>“Usually a leak or long transactions. I’d confirm with pool metrics and pg_stat_activity, fix the release/transaction code, and add timeouts and a pooler so it fails fast next time.”</x-say>
+</x-scn>
+<x-scn t="Scenario 3: duplicate document processing" tag="must solid">
+<x-sit>A user uploads the same document three times accidentally.</x-sit>
+<x-sq q="How would you detect duplicates?">Hash the file bytes (SHA-256) at upload and look for an existing document with the same hash for that user.</x-sq>
+<x-sq q="Would you use file hashes?">Yes for exact duplicates (cheap, reliable). Near-duplicates (re-exported PDF) need text or embedding similarity, usually only worth it later.</x-sq>
+<x-sq q="How would you prevent duplicate ingestion?">A unique constraint on <code>(user_id, sha256)</code>; on conflict return the existing document (200) instead of creating a new one; the job id = document id so it can’t be queued twice.</x-sq>
+<x-sq q="How would you handle concurrent uploads?">Let the unique constraint decide: three concurrent inserts → one wins, two get a conflict and return the winner’s row. Check-then-insert in code would race. Also disable the upload button while uploading.</x-sq>
+<x-dm>DocMind has <code>jobId = documentId</code> (one job per document) but no file hashing, so three uploads make three documents (and count toward the 5/10 cap).</x-dm>
+<x-say>“Hash the bytes, put a unique constraint on owner + hash, return the existing document on conflict, and keep jobs keyed by document id.”</x-say>
+</x-scn>
+<x-scn t="Scenario 4: LLM provider outage" tag="must solid">
+<x-sit>Your LLM provider becomes unavailable.</x-sit>
+<x-sq q="Should the entire application stop working?">No. Login, documents, history and anything non-LLM should keep working; AI features degrade with a clear message.</x-sq>
+<x-sq q="How would you implement provider fallback?">A provider-neutral interface with an ordered fallback list per task; on timeout/5xx/429 after retries, try the next model or provider; validate its output the same way; log which provider answered.</x-sq>
+<x-sq q="What is a circuit breaker?">A wrapper that counts failures; after a threshold it “opens” and fails fast (or goes to fallback) without calling the provider for a cool-down period, then lets a few test calls through (“half-open”) and closes if they succeed. It stops you from piling timeouts onto a dead service.</x-sq>
+<x-sq q="How would you communicate the failure to the user?">Honest, specific UI: “The AI service is temporarily unavailable. Your documents are safe; please try again in a few minutes.” Queue non-urgent work (ingestion) to retry later; show status.</x-sq>
+<x-dm>DocMind’s design already isolates this partly: chat failures don’t affect uploads/listing, and a Redis outage only blocks uploads (503). No provider fallback or circuit breaker yet; Gemini 503 “high demand” was hit for real.</x-dm>
+<x-say>“Degrade gracefully: circuit breaker + fallback model behind one interface, clear messages, queued work retried later, and the rest of the app unaffected.”</x-say>
+</x-scn>
+<x-scn t="Scenario 5: hallucinated answers" tag="must solid">
+<x-sit>Your RAG application generates answers that aren’t present in the source documents.</x-sit>
+<x-sq q="What could cause this?">Retrieval missed the right chunk (so the model filled the gap), weak grounding instructions, too much loosely related context, high temperature, the model’s prior knowledge overriding the context, or a question with no answer in the documents.</x-sq>
+<x-sq q="How would you improve retrieval?">Query rewriting, hybrid search, reranking, better chunking, metadata filters; measure recall@k on a labelled set.</x-sq>
+<x-sq q="How would you improve grounding?">Strict system rules (answer only from sources, cite each claim, fixed not-found sentence), labelled sources, lower temperature, fewer but better chunks, citation verification.</x-sq>
+<x-sq q="How would you handle insufficient context?">Relevance threshold → don’t answer, say it’s not in the documents and suggest next steps.</x-sq>
+<x-sq q="How would you evaluate hallucination frequency?">Faithfulness scoring (claims supported by context) on an eval set including unanswerable questions, plus sampled production review and user reports.</x-sq>
+<x-say>“First check whether retrieval found the right evidence. Then tighten grounding with citations and a not-found path, and track faithfulness on an eval set so it’s a number, not an impression.”</x-say>
+</x-scn>
+<x-scn t="Scenario 6: agent loop" tag="must solid">
+<x-sit>Your agent repeatedly invokes the same tool without reaching a conclusion.</x-sit>
+<x-sq q="Why might this happen?">Unhelpful tool results (empty, error, or too large and truncated), a vague tool description, the model not seeing earlier results (history trimmed), a task the tools can’t accomplish, or an error that tells it to retry.</x-sq>
+<x-sq q="How would you limit iterations?">A max step count in code; the last step without tools; per-request token and time budgets.</x-sq>
+<x-sq q="How would you detect repeated tool calls?">Keep a set of (tool name + normalised args) per run; on a repeat, return an error result (“you already ran this; use the earlier result or answer”) instead of executing.</x-sq>
+<x-sq q="How would you terminate execution safely?">Make one final call without tools so the model summarises what it has, or return a clear fallback message; log the run for review.</x-sq>
+<x-vis><x-w w="agent"></x-w></x-vis>
+<x-say>“Bound it in code: step limit, final tools-off call, duplicate-call detection, and then fix why the tool results didn’t let it finish.”</x-say>
+</x-scn>
+<x-scn t="Scenario 7: workflow crash at 60%" tag="must solid">
+<x-sit>Your course-generation workflow crashes after completing 60% of the work.</x-sit>
+<x-sq q="How would you identify completed steps?">From the persisted run snapshot (step statuses and outputs) and from the business tables (lesson drafts already saved).</x-sq>
+<x-sq q="How would you persist execution state?">Workflow storage writes a snapshot after each step (Mastra + Postgres), plus your own drafts table keyed by (course, module, lesson).</x-sq>
+<x-sq q="How would you resume execution?">Recovery on boot re-drives running runs from the last snapshot (Mastra default), or re-run the workflow with the same course key; idempotent steps skip finished work.</x-sq>
+<x-sq q="How would you prevent duplicate records?">Unique keys + <code>ON CONFLICT DO NOTHING</code>, “skip if exists” checks before LLM calls, and a final transactional publish.</x-sq>
+<x-sq q="Would you restart the entire workflow?">No: wasted cost and different content for parts the user may have seen. Resume from the first unfinished step.</x-sq>
+<x-vis><x-w w="workflow"></x-w></x-vis>
+<x-say>“State tells me what’s done; resume from the first unfinished step; idempotent writes make the half-finished step safe to repeat.”</x-say>
+</x-scn>
+<x-scn t="Scenario 8: changing a document id exposes another user’s document" tag="must solid">
+<x-sit>A user discovers they can access another user’s document by changing a document ID in an API request.</x-sit>
+<x-sq q="What vulnerability is this?">Broken object-level authorization, also called IDOR (insecure direct object reference): the top item on the OWASP API Security Top 10.</x-sq>
+<x-sq q="Why isn’t authentication alone sufficient?">Authentication proves who the user is; it doesn’t check whether this particular object belongs to them. Any logged-in user can try any id.</x-sq>
+<x-sq q="Where would you enforce authorization?">In the data access layer for every query: <code>WHERE id = $1 AND user_id = $2</code> with the user from the token (including vector search and tools), returning 404 for “not yours”.</x-sq>
+<x-sq q="How would you prevent similar problems?">Make userId a required parameter of every repository function, default-deny routing, tests that try cross-user access for every endpoint, optional Postgres row-level security, and code review checklists.</x-sq>
+<x-dm>This exact risk was DocMind’s reason for the auth phase: before it, anyone with a documentId could chat with it. Now every repository read/delete takes a required userId (forgetting it is a compile error), and the live check confirmed two guests can’t see, chat with, quiz or delete each other’s documents.</x-dm>
+<x-say>“That’s IDOR. The fix is ownership in every query, enforced structurally, plus cross-user tests.”</x-say>
+</x-scn>
+<x-scn t="Scenario 9: LLM cost explosion (3×)" tag="must solid">
+<x-sit>Your application suddenly consumes three times its usual token budget.</x-sit>
+<x-sq q="How would you investigate?">Break usage down by feature, endpoint, model, user and day from your usage logs; compare tokens per request and requests per user before/after; check recent deploys and prompt changes.</x-sq>
+<x-sq q="Could conversation history be responsible?">Yes: unbounded history (or counting messages, not tokens) makes every turn more expensive as chats grow.</x-sq>
+<x-sq q="Could repeated agent calls be responsible?">Yes: loops, more steps per request after a prompt change, retries stacking at several layers, or tool results bloating context.</x-sq>
+<x-sq q="How would you introduce token budgets?">Per request (max input + output tokens, max steps), per user per day (deny or downgrade the model when exceeded), and per feature; alert at thresholds.</x-sq>
+<x-sq q="How would you track cost per user?">Log usage with user id per call into a table, multiply by model prices, aggregate daily; show it on a dashboard and enforce limits from it.</x-sq>
+<x-say>“Find the driver in usage logs (feature, user, tokens per call, calls per request), then cap it: history budgets, step limits, retry discipline, and per-user budgets with alerts.”</x-say>
+</x-scn>
+<x-scn t="Scenario 10: poor retrieval despite correct embeddings" tag="must solid">
+<x-sit>The embedding generation process appears correct, but search results are poor.</x-sit>
+<x-sq q="What else could be responsible?">Bad extraction (garbled text, missing tables), chunking (too big/small, split answers), the query (raw follow-ups, typos, exact codes), filters excluding documents, wrong distance operator or sort order, an ANN index with low recall or post-filtering, a model mismatch between query and corpus, stale or failed documents.</x-sq>
+<x-sq q="How would you inspect query embeddings?">Log the exact text embedded; check model name and dimension; compare its similarity with known-good chunks; try the same query without filters and with exact search (no index).</x-sq>
+<x-sq q="Would you inspect chunk boundaries?">Yes: read the chunks that should match. Often the answer is split or buried in a 2,000-token chunk.</x-sq>
+<x-sq q="Could metadata filters be excluding relevant records?">Yes: wrong user/tenant id, status not ready, a date filter, or ANN post-filtering returning too few rows.</x-sq>
+<x-sq q="Would hybrid search or reranking help?">Hybrid for exact terms and names; reranking when the right chunk is in the top 50 but not the top 5. Measure before and after.</x-sq>
+<x-say>“Embeddings are one link. I’d check extraction, chunks, the exact query, filters and the index, find where the right chunk drops out, then fix that link.”</x-say>
+</x-scn>
+
+<h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
+<x-quiz id="qz-p12">
+<x-mcq a="2"><x-t>First step of the debugging method?</x-t><x-o>Fix the most likely cause</x-o><x-o>Raise timeouts</x-o><x-o>Reproduce and collect evidence</x-o><x-o>Restart the server</x-o><x-why>Evidence before hypotheses.</x-why></x-mcq>
+<x-mcq a="0"><x-t>A circuit breaker…</x-t><x-o>fails fast after repeated failures, then probes recovery</x-o><x-o>retries forever</x-o><x-o>limits users</x-o><x-o>encrypts traffic</x-o><x-why>Protects you and the failing service.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Many sessions are “idle in transaction”. Likely cause?</x-t><x-o>Missing index</x-o><x-o>Too few users</x-o><x-o>Wrong JWT secret</x-o><x-o>Code that opened a transaction and never committed/rolled back/released</x-o><x-why>Classic leak.</x-why></x-mcq>
+</x-quiz>

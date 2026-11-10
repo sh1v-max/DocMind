@@ -1,0 +1,30 @@
+@Q 5.8
+S: Tokenizers are trained once on a large corpus. Byte-pair encoding (BPE) starts from bytes or characters and repeatedly merges the most frequent adjacent pair into a new token until the vocabulary reaches its target size (e.g. 100K). At runtime the text is split by applying the learned merges greedily, then each piece is mapped to its integer id. Spaces usually attach to the following word (“ Paris”), so “Paris” at the start of a line and “ Paris” mid-sentence can be different tokens. Different models use different tokenizers, so token counts differ between providers.
+E: Try the token counter toy above: common words stay whole, “pgvector” splits into pieces.
+N: “Tokenization splits on spaces.”
+@Q 5.10
+S: The provider either rejects the request (context length exceeded) or, in some products, silently truncates. Your app must manage context explicitly: count tokens, keep a budget per section (system, tools, retrieved context, history, answer), drop or summarise the oldest turns, and keep critical facts in a running summary or structured memory. Retrieval over past messages can bring back old details only when relevant.
+@Q 5.12
+S: Providers charge per million tokens, with separate input and output prices that depend on the model (larger models cost more), sometimes discounted cached input tokens, batch APIs at a discount, and extra charges for images/audio or tools. Embeddings are priced per input token only. Your cost per request = input tokens × input price + output tokens × output price, summed over every call the request makes (rewrite, classifier, agent steps, retries).
+N: “It’s priced per request.”
+@Q 5.24
+N: “Multimodal means the model can browse the web.”
+@Q 5.28
+Q: What timeout would you use for a streaming chat call?
+A: Two: a first-token timeout (e.g. 15–20 s) and an idle timeout between chunks (e.g. 30 s), rather than one total timeout that would cut long answers.
+@Q 5.29
+N: Retrying immediately in a loop, which extends the rate limit.
+@Q 5.33
+S: Fallback is a degradation strategy: when the primary model is unavailable or keeps failing, try an alternative that can do the same job acceptably (smaller model, another provider, cached answer, or a non-LLM path). It must be configured per task, combined with a circuit breaker so you stop hammering a dead provider, and validated: the fallback’s outputs go through the same schemas and evals, and logs record which model served each request.
+@Q 5.34
+S: Costs = calls × tokens × price. Reduce calls (route without an LLM when possible, cache, avoid redundant agent steps and retries), reduce tokens (shorter system prompts, fewer and smaller chunks, history budgets and summaries, capped output length), and reduce price (smaller models for easy tasks, batch APIs for offline jobs, provider prompt caching for repeated prefixes). Enforce per-user budgets and monitor continuously.
+@Q 5.35
+Q: What alert would you set first?
+A: Daily spend (and tokens per request) exceeding a multiple of the trailing 7-day average, plus a per-user daily cap alert.
+@Q 5.36
+Q: Should you show the raw invalid output to the user?
+A: No: show a clear failure and retry option; keep the raw output in logs for debugging.
+@Q 5.39
+S: Assume some injections will succeed and design so that success does little harm. Layers: least-privilege tools whose scope (user, tenant) comes from code; argument validation; approval for side effects; separating and labelling untrusted content (delimiters, “data not instructions”); output handling (no raw HTML, no auto-executing model output, check links/emails against the source); input heuristics/classifiers for known attack patterns; and monitoring/red-team tests in the eval set.
+Q: What is a canary or spotlighting technique?
+A: Marking untrusted text (e.g. wrapping or encoding it) so the model can tell it apart, or inserting a secret marker in the system prompt and alerting if it appears in output (a sign the prompt leaked).

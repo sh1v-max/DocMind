@@ -1,0 +1,77 @@
+@Q 18.1
+S: Retrieval supplies evidence; it doesn’t control generation. The model still generates token by token from everything it knows, so it can ignore, misread or extend the evidence. Failure points: the retrieved text is related but not the answer; the answer is split across chunks; conflicting sources; long noisy context; the model’s prior knowledge pulling against the context; or instructions that don’t demand grounding. That’s why RAG systems add citations, not-found paths and faithfulness checks.
+@Q 18.2
+S: Recall@k measures whether the right chunk is somewhere in the context. Answer quality depends on whether the model finds and uses it amid everything else. Large k adds near-topic but irrelevant chunks, near-duplicates, conflicting statements and more tokens: the signal-to-noise ratio drops, cost and latency rise, and facts in the middle of long contexts are used less reliably.
+E: k = 3: right chunk missing 20% of the time. k = 20: right chunk present 98% of the time, but the model picks a similar wrong chunk’s number 10% of the time. Retrieve 20, rerank to 5: both problems shrink.
+@Q 18.3
+S: Autonomy is a cost when the process is known. Workflows give guarantees agents don’t: every required step runs in order (approval before generation), state survives restarts, each step retries independently, costs are predictable, behaviour is testable, and every run is auditable. Use agents inside steps that truly need judgement.
+Q: Give a case where a workflow wraps an agent.
+A: Course generation: the workflow controls outline → approval → lessons; a research agent inside the “gather sources” step decides which searches to run.
+@Q 18.4
+S: Bigger models cost more per token, are slower (higher time to first token and generation time), hit rate limits sooner, and for many tasks give no measurable improvement. Smaller models are good enough for classification, routing, extraction, rewriting and many summaries, especially with good prompts or fine-tuning. Routing tasks to the cheapest model that passes your eval saves money and latency at scale.
+E: A router running on every message multiplies any per-call difference by every request.
+Q: How do you prove the small model is good enough?
+A: Run the same eval set on both and compare quality, latency and cost; check the error cases.
+N: “Smaller models are always worse.”
+@Q 18.5
+S: Retries re-run work; idempotency makes re-running safe. A step can fail after doing its side effect (row inserted, email sent, card charged) but before the engine records success, or a crash can lose the success record. Without idempotency the retry repeats the effect. The two are complementary: retries give availability, idempotency gives correctness.
+E: Insert lesson 7 → network blip on the snapshot write → retry → second lesson 7, unless the insert is <code>ON CONFLICT DO NOTHING</code> on (course, module, lesson).
+@Q 18.6
+S: Storing history solves persistence, not the prompt size problem. Every turn must fit the context window and you pay for every token sent. Long conversations exceed limits, raise cost per turn, slow responses, and bury important early facts. Summaries (or extracted memories) keep the essential information in a small, stable budget while the full history stays in the database for display.
+E: A 200-message support chat: sending all of it costs ~30K tokens per turn; a 500-token summary + last 10 messages keeps context and cost bounded.
+Q: What must summaries preserve?
+A: Names, ids, decisions, open questions and user preferences; test that answers relying on early facts still work.
+N: “Just send everything; context windows are huge now.”
+@Q 18.7
+S: Embeddings capture general meaning and blur exact tokens, rare words and numbers: product codes, error ids, names, versions, legal clause numbers. Keyword search matches exact strings and weights rare terms heavily (IDF), so for such queries it’s more precise. Embedding models may also never have seen your domain’s new terms. Hybrid search uses both.
+@Q 18.8
+S: JSON validity only guarantees syntax. The data can still have missing or extra fields, wrong types, out-of-range values, inconsistent cross-field relations, ids that don’t exist or belong to someone else, injected content, or plausible but wrong facts. Validation with a schema plus business checks is what makes model output safe to store or act on.
+E: <code>{ "correctIndex": 4, "options": ["A","B","C","D"] }</code> is valid JSON and an invalid quiz.
+Q: Does structured-output mode remove the need?
+A: It reduces shape errors, but not semantic or business-rule errors.
+N: “Valid JSON means valid data.”
+@Q 18.9
+S: Authentication answers who; authorization answers what that identity may access. Every authenticated user can send any id, so without authorization checks on each resource, users can read or modify others’ data (IDOR). Authorization must be enforced server-side in every query and tool, including background jobs and vector search.
+E: Logged-in Bob changes /documents/41 to /42 and reads Alice’s file if the query is <code>WHERE id = $1</code> only.
+Q: What test catches this?
+A: For every endpoint, call it with user B’s token on user A’s resource and expect 404/403.
+N: “Logged-in users are trusted.”
+@Q 18.10
+S: Production differs in configuration (env vars, secrets, URLs, feature flags), infrastructure (proxies, load balancers, TLS, timeouts, buffering), scale (data volume, concurrency, race conditions), resources (memory/CPU limits, sleeping instances), dependencies (real provider limits, regions, DNS), data (unexpected inputs, legacy rows), and multiple instances (in-memory state not shared). Most “works locally” bugs come from one of these.
+E: An in-memory rate limiter works locally with one process; in production with 3 instances, each has its own counter.
+Q: How do you reduce the gap?
+A: Staging that mirrors production, config validated at startup, infrastructure as code, and testing behind a real proxy.
+N: “If it works locally, it’s a production bug in the platform.”
+@Q 18.11
+S: An agent adds latency (multiple calls), cost, non-determinism and new failure modes. It’s justified only when the steps depend on intermediate results the code can’t know in advance (which source to search, whether to search again, which tool fits). If one call (or a fixed pipeline) solves the task with good quality, it’s the better engineering choice.
+E: Summarising a given text: one call. Answering questions over a user’s varied sources where the right source and query vary: maybe an agent.
+Q: How would you decide with data?
+A: Compare the simple pipeline and the agent on the same eval set: quality, latency, cost.
+N: “Agents are always better.”
+@Q 18.12
+S: Unbounded parallelism turns into 429 storms (requests/tokens-per-minute limits), more retries (making it slower overall), DB pool exhaustion, memory spikes, cost spikes, and unfairness (one user’s batch starving others). A concurrency cap matched to limits gives the highest sustained throughput and predictable behaviour.
+E: 20 parallel calls with a 10-RPM limit: half fail immediately, retries collide; with concurrency 3 and a token bucket, all succeed steadily.
+Q: How do you pick the number?
+A: From provider limits and observed latency (throughput ≈ concurrency / latency), then tune while watching 429 rates.
+N: “More parallel is always faster.”
+@Q 18.13
+S: Stale chunks and vectors keep representing the old content, so search returns outdated text and answers cite it. You need change detection (hash, updated_at, webhooks from the source), re-extraction and re-chunking, re-embedding (ideally only changed chunks), atomic replacement of the old chunks, cache invalidation, and versioning if you must show which version an answer used.
+E: A policy PDF updated from 30 to 14 days refund: until re-ingested, the bot keeps saying 30 days.
+Q: How do you re-embed only changed parts?
+A: Hash each chunk’s text; on re-ingest, embed only chunks whose hash isn’t already stored.
+N: “Embeddings update automatically.”
+@Q 18.14
+S: Vector search answers one question: which items are similar to this vector. Everything else in an application is relational: who owns what, permissions and sharing, document status, lists and counts, filters by date or type, joins to users and billing, transactions for consistent updates, audit and history. Many questions users ask (“which files do I have?”, “how many contracts expire this month?”) are SQL questions, not similarity questions.
+E: DocMind’s listDocuments and the 409-on-processing check are pure SQL.
+Q: How does that influence your choice of vector store?
+A: It favours keeping vectors in the relational database (pgvector) unless scale demands otherwise.
+N: “A vector DB replaces the relational DB.”
+@Q 18.15
+S: Approvals are capabilities: whoever can submit one can trigger an action. Bind each pending approval to the run owner (and tenant), check the authenticated user (from the token, not a request field) matches, make the approval single-use with an atomic claim, scope it to the exact action shown (store the validated arguments with the pending record), expire it, and audit who approved what. Unknown or foreign approval ids return 404.
+C sql:
+UPDATE pending_approvals SET status = 'approved', approved_at = now()
+WHERE id = $1 AND user_id = $2 AND status = 'pending' AND expires_at > now()
+RETURNING action, args;   -- 0 rows → 404/409, nothing executes
+Q: Should approval links in emails be bearer links?
+A: Only with short expiry and still requiring login; otherwise a forwarded email lets anyone approve.
+N: “The run id is secret enough.”

@@ -1,0 +1,693 @@
+<x-obj><ul><li>Explain types, coercion, scope, hoisting, closures and <code>this</code> with code you can predict.</li><li>Use promises and async/await correctly, including error handling and concurrency.</li><li>Predict the exact output order of any snippet mixing sync code, nextTick, promises, timers and setImmediate.</li></ul></x-obj>
+<x-pre><ul><li>You can write a function, a loop and an object in JavaScript.</li><li>Have Node installed to try snippets: <code>node file.js</code>.</li></ul></x-pre>
+
+<h2 class="sec"><span class="k">2.A</span>Lessons</h2>
+
+<x-lesson t="Values, types and coercion" tag="must">
+<x-def>Every value in JavaScript has a type. There are 7 primitive types (string, number, bigint, boolean, undefined, null, symbol) and one non-primitive: object (arrays, functions, dates, maps are all objects).</x-def>
+<x-why>Types decide what operations mean. <code>"5" + 1</code> and <code>5 + 1</code> do different things. JavaScript was designed to “keep going” instead of throwing, so it converts types automatically (coercion). That convenience causes many bugs.</x-why>
+<x-in><p><b>Primitives are stored by value</b>: copying a primitive copies the value. <b>Objects are stored by reference</b>: a variable holds a pointer to the object on the heap; copying the variable copies the pointer.</p>
+<pre data-l="js">let a = 1; let b = a; b = 2;        // a is still 1
+const o1 = { n: 1 }; const o2 = o1; o2.n = 2;  // o1.n is now 2: same object</pre>
+<p><b>Coercion rules you must know:</b></p><ul><li><code>+</code> with a string → string concatenation: <code>"5" + 1 === "51"</code>.</li><li>Other math operators convert to number: <code>"5" - 1 === 4</code>, <code>"abc" * 2</code> is <code>NaN</code>.</li><li><code>==</code> converts before comparing; <code>===</code> doesn’t.</li><li>Falsy values: <code>false, 0, -0, 0n, "", null, undefined, NaN</code>. Everything else is truthy, including <code>"0"</code>, <code>[]</code> and <code>{}</code>.</li></ul>
+<pre data-l="js">typeof null            // "object"  (a historic bug, kept for compatibility)
+typeof function(){}    // "function"
+typeof []              // "object" → use Array.isArray([])
+0.1 + 0.2 === 0.3      // false: numbers are 64-bit floating point
+Number.isNaN(NaN)      // true; NaN !== NaN</pre></x-in>
+<x-an>Primitives are like writing a number on a sticky note and handing over a copy. Objects are like handing over the address of a house: two people with the same address walk into the same house.</x-an>
+<x-real>Query params and form fields always arrive as strings. <code>req.query.page</code> is <code>"2"</code>, so <code>req.query.page + 1</code> is <code>"21"</code>. That’s why you parse with Zod (<code>z.coerce.number().int().min(1)</code>).</x-real>
+<x-mist><ul><li>Using <code>==</code> and being surprised by <code>0 == ""</code> (true).</li><li>Checking arrays with <code>typeof</code>.</li><li>Comparing money as floats. Use integer cents.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Scope, hoisting, the TDZ and closures" tag="must">
+<x-def><b>Scope</b> is where a variable can be seen. <b>Hoisting</b> is the engine registering declarations before running the code. A <b>closure</b> is a function together with the variables it captured from where it was created.</x-def>
+<x-why>Closures are how JavaScript keeps private state (counters, caches, configured functions) without classes, and how every callback remembers its context. Hoisting explains why some code works before the line that declares it and some throws.</x-why>
+<x-in><p>Before running a scope, the engine creates bindings for its declarations:</p><ul><li><code>var x</code> → created and set to <code>undefined</code> (function-scoped).</li><li><code>let</code>/<code>const</code>/<code>class</code> → created but <b>uninitialised</b> until the declaration line runs. Touching them before is a ReferenceError. That window is the <b>temporal dead zone</b>.</li><li>Function declarations → created with the whole function, callable before the line.</li></ul>
+<p><b>Lexical scope</b>: a function sees variables based on where it is <i>written</i>, not where it is called. When a function is created it keeps a reference to its surrounding scope. If it outlives that scope (returned, passed as a callback), the variables stay alive: that is the closure.</p>
+<pre data-l="js">function makeCounter() {
+  let count = 0;                 // lives on after makeCounter returns
+  return () => ++count;          // closure over `count`
+}
+const next = makeCounter();
+next(); next();                  // 1, 2  — nobody else can touch `count`
+
+// The classic loop bug
+for (var i = 0; i &lt; 3; i++) setTimeout(() => console.log(i));  // 3 3 3 (one shared i)
+for (let j = 0; j &lt; 3; j++) setTimeout(() => console.log(j));  // 0 1 2 (new j per iteration)</pre></x-in>
+<x-an>A closure is a backpack. A function packs the variables it needs from the room where it was made and carries them wherever it goes.</x-an>
+<x-real>Express middleware factories are closures: <code>rateLimit({ max: 20 })</code> returns a middleware function that remembers <code>max</code>. Memoisation caches, once-only init functions and React hooks all rely on closures.</x-real>
+<x-mist><ul><li>Thinking <code>let</code> isn’t hoisted. It is; it just isn’t initialised (TDZ).</li><li>Memory leaks from closures holding large objects in long-lived callbacks.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="this, call/apply/bind and prototypes" tag="must">
+<x-def><code>this</code> is a hidden parameter set by <b>how a function is called</b>. Prototypes are how objects inherit: each object has a hidden link to another object, and property lookups follow that chain.</x-def>
+<x-in><table><thead><tr><th>Call style</th><th>this is</th></tr></thead><tbody>
+<tr><td><code>obj.method()</code></td><td><code>obj</code></td></tr>
+<tr><td><code>fn()</code> plain call</td><td><code>undefined</code> in strict mode / modules (global object in sloppy scripts)</td></tr>
+<tr><td><code>new Fn()</code></td><td>the new object</td></tr>
+<tr><td><code>fn.call(x, a, b)</code> / <code>fn.apply(x, [a, b])</code></td><td><code>x</code>, called now</td></tr>
+<tr><td><code>const g = fn.bind(x)</code></td><td><code>x</code> forever, called later</td></tr>
+<tr><td>arrow function</td><td>no own <code>this</code>: uses the surrounding one</td></tr>
+</tbody></table>
+<pre data-l="js">const user = { name: 'Asha', hi() { return 'hi ' + this.name; } };
+const f = user.hi;
+f();                    // TypeError in strict mode: this is undefined (method "lost" its object)
+f.call({ name: 'Ravi' }); // 'hi Ravi'
+const g = user.hi.bind(user); g(); // 'hi Asha'
+
+// prototypes
+const animal = { speak() { return this.sound; } };
+const dog = Object.create(animal); dog.sound = 'woof';
+dog.speak();            // 'woof' — speak found on the prototype, this = dog
+class Cat { meow() {} } // class methods live on Cat.prototype</pre>
+<p>Lookup <code>dog.speak</code>: own properties of <code>dog</code> → not found → <code>dog.[[Prototype]]</code> (animal) → found. If not found anywhere up to <code>Object.prototype</code>, the result is <code>undefined</code>.</p></x-in>
+<x-real>Passing <code>this.handle</code> as a callback (e.g. <code>emitter.on('data', this.handle)</code>) loses <code>this</code>. Fix with an arrow function or <code>.bind(this)</code>.</x-real>
+<x-mist><ul><li>Using arrow functions as object methods and expecting <code>this</code> to be the object.</li><li>Saying “JavaScript has classical inheritance”. <code>class</code> is syntax over prototypes.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Arrays, copies, destructuring, spread and rest" tag="must">
+<x-def>Higher-order functions take or return functions. <code>map</code>, <code>filter</code>, <code>reduce</code> are higher-order array methods. Spread copies elements out; rest collects them in. Destructuring unpacks values into variables.</x-def>
+<x-impl><pre data-l="js">const chunks = [
+  { doc: 'a', words: 480, distance: 0.21 },
+  { doc: 'b', words: 120, distance: 0.55 },
+  { doc: 'a', words: 500, distance: 0.30 },
+];
+const close = chunks.filter((c) => c.distance &lt; 0.4);          // keep 2
+const ids = close.map((c) => c.doc);                             // ['a', 'a']
+const wordsPerDoc = chunks.reduce((acc, c) => {
+  acc[c.doc] = (acc[c.doc] ?? 0) + c.words;                      // group + sum
+  return acc;
+}, {});                                                          // { a: 980, b: 120 }
+
+const { doc, ...rest } = chunks[0];       // destructuring + rest: doc='a', rest={words, distance}
+const merged = { ...defaults, ...options };   // spread: later keys win
+function log(level, ...parts) { /* parts is a real array */ }
+
+// shallow vs deep copy
+const orig = { user: { name: 'A' }, tags: ['x'] };
+const shallow = { ...orig };        // new outer object, SAME inner user/tags
+shallow.user.name = 'B';            // orig.user.name is now 'B' too!
+const deep = structuredClone(orig); // copies nested objects (not functions)</pre></x-impl>
+<x-mist><ul><li>Forgetting <code>reduce</code>’s initial value (crashes on an empty array).</li><li>Using <code>JSON.parse(JSON.stringify(x))</code> as deep copy: it drops <code>undefined</code>, functions, and turns Dates into strings.</li><li><code>forEach</code> with an async callback doesn’t wait.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Promises and async/await" tag="must">
+<x-def>A Promise is an object representing a value that will be available later (or an error). <code>async/await</code> is syntax for writing promise code that reads top to bottom.</x-def>
+<x-why>Network calls, database queries and file reads take milliseconds to seconds. Blocking the single JavaScript thread while waiting would freeze the whole server. Callbacks solved this but nested badly (“callback hell”) and made error handling inconsistent. Promises give one composable object with one error channel.</x-why>
+<x-in><p>A promise is <b>pending</b>, then settles once to <b>fulfilled</b> (with a value) or <b>rejected</b> (with a reason). <code>.then</code>/<code>.catch</code> register reactions; when the promise settles, the reactions are queued as <b>microtasks</b>.</p>
+<p><code>await p</code> inside an async function: the function pauses, returns control to the caller (the async function itself already returned a pending promise), and when <code>p</code> settles, the rest of the function is scheduled as a microtask. It does <b>not</b> block the thread.</p>
+<pre data-l="js">// sequential: total ≈ a + b
+const user = await getUser(id);
+const docs = await getDocs(id);
+
+// concurrent: total ≈ max(a, b)
+const [user2, docs2] = await Promise.all([getUser(id), getDocs(id)]);
+
+// errors: one try/catch covers every await
+async function load(id) {
+  try {
+    const doc = await db.getDocument(id);
+    if (!doc) throw new NotFoundError(id);
+    return doc;
+  } catch (err) {
+    logger.error({ err, id }, 'load failed');
+    throw err;                     // rethrow so the caller knows
+  }
+}</pre>
+<table><thead><tr><th>Combinator</th><th>Resolves when</th><th>Rejects when</th></tr></thead><tbody>
+<tr><td><code>Promise.all</code></td><td>all fulfil (array of values)</td><td>the first rejection (others keep running, results ignored)</td></tr>
+<tr><td><code>Promise.allSettled</code></td><td>all settle: <code>[{status, value | reason}]</code></td><td>never</td></tr>
+<tr><td><code>Promise.race</code></td><td>first to settle, if it fulfilled</td><td>first to settle, if it rejected</td></tr>
+<tr><td><code>Promise.any</code></td><td>first to fulfil</td><td>all reject (AggregateError)</td></tr>
+</tbody></table></x-in>
+<x-real>Timeout for an LLM call: <code>Promise.race([callModel(), timeout(30000)])</code>, or better, <code>AbortSignal.timeout(30000)</code> passed to fetch so the request is actually cancelled. Embedding 10 chunks where some may fail: <code>allSettled</code>.</x-real>
+<x-mist><ul><li><code>await</code> inside a <code>for</code> loop when the calls are independent (slow), or <code>Promise.all</code> over 10,000 calls (rate limit explosion). Use a concurrency limit (Phase 11, exercise 2).</li><li>Forgetting <code>await</code>: you get a Promise object instead of the value, and errors become unhandled rejections.</li><li>Thinking <code>Promise.race</code> cancels the losers. It doesn’t.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="The event loop: browser and Node.js" tag="must">
+<x-def>The event loop is the mechanism that lets one JavaScript thread handle many waiting operations: run code until the stack is empty, then take the next queued callback.</x-def>
+<x-why>JavaScript runs your code on one thread. I/O (network, disk, timers) is done by the runtime (browser Web APIs, or libuv in Node). The event loop is how the results come back to your code without blocking.</x-why>
+<x-in><ol><li><b>Call stack:</b> the functions currently running. Synchronous code runs to completion; nothing interrupts it.</li><li><b>Runtime facilities:</b> timers, sockets, file reads are handed off. libuv uses the OS (epoll/kqueue/IOCP) for network I/O and a thread pool (default 4 threads) for file system, DNS lookup, crypto and zlib.</li><li><b>Queues:</b> when an operation completes, its callback is queued.</li><li><b>Microtasks</b> (promise reactions, queueMicrotask) run as soon as the stack empties, all of them, before anything else. In Node, the <b>process.nextTick</b> queue runs even before promise microtasks.</li><li><b>Node’s loop phases</b>, each with its own queue: <code>timers</code> (setTimeout/setInterval) → <code>pending callbacks</code> → <code>idle/prepare</code> → <code>poll</code> (wait for and run I/O callbacks) → <code>check</code> (setImmediate) → <code>close callbacks</code>. Between every callback, Node drains nextTick then microtasks.</li></ol></x-in>
+<x-vis><x-w w="eventloop"></x-w></x-vis>
+<x-an>A chef (the one thread) cooks one dish at a time. Ovens and fryers (libuv, the OS) run in the background and ring a bell when done. Orders behind the counter are the queues. Some notes are marked urgent (microtasks): the chef handles every urgent note before taking the next normal order.</x-an>
+<x-real>A CPU-heavy loop (parsing a 50 MB JSON, hashing with a high cost synchronously, a long regex) blocks the stack, so no other request’s callback can run: the whole server stalls. Fix: worker threads, a job queue, or streaming parsers.</x-real>
+<x-mist><ul><li>“setTimeout(fn, 0) runs immediately.” It runs after the current code and all microtasks, in a later timers phase.</li><li>“Node is multi-threaded so CPU work is fine.” Your JavaScript runs on one thread unless you use worker_threads.</li><li>A recursive <code>process.nextTick</code> or microtask loop starves I/O forever.</li></ul></x-mist>
+</x-lesson>
+
+<h2 class="sec"><span class="k">2.1</span>Core JavaScript</h2>
+
+<x-q n="2.1" tag="must basic"><x-t>What are the different data types in JavaScript?</x-t>
+<x-say>Seven primitives: string, number, bigint, boolean, undefined, null and symbol. Everything else is an object, including arrays, functions, dates and maps.</x-say>
+<x-simple><p>Primitives are immutable values. Objects are mutable collections of properties accessed by reference. <code>typeof</code> returns "object" for null (historic bug) and "function" for functions.</p></x-simple>
+<x-eg>A request body parsed by <code>express.json()</code> gives you strings, numbers, booleans, null, arrays and objects (JSON has no undefined, bigint, symbol or Date). A Postgres <code>bigint</code> column comes back from <code>pg</code> as a <b>string</b> by default, exactly because a JS number can’t hold every 64-bit integer.</x-eg>
+<x-fu q="Why bigint?">Number is a 64-bit float and is exact only up to 2^53 − 1 (<code>Number.MAX_SAFE_INTEGER</code>). Large ids (e.g. some database bigint columns, Twitter-style ids) need bigint or strings.</x-fu>
+<x-no>“Array is a separate type.” It’s an object.</x-no>
+<x-ev>Basic language knowledge.</x-ev></x-q>
+
+<x-q n="2.2" tag="must basic"><x-t>What’s the difference between primitive and reference types?</x-t>
+<x-say>Primitives are copied by value. Objects are accessed by reference: assigning or passing an object copies the reference, so both variables point to the same object.</x-say>
+<x-simple>Every variable holds a value. For primitives the value is the data itself, so assignment copies the data and the two variables are independent. For objects the value is a <b>reference</b> (an address on the heap), so assignment copies the address and both variables point at the same object. Equality follows the same rule: <code>{a:1} === {a:1}</code> is false because two different objects have two different addresses, while two equal strings are <code>===</code>. This is why mutating an object passed into a function is visible to the caller, and why React and immutable patterns create a new object instead of editing the old one.</x-simple>
+<x-code><pre data-l="js">function rename(u) { u.name = 'X'; }
+const user = { name: 'A' }; rename(user);  // user.name === 'X'
+function reassign(u) { u = { name: 'Y' }; } reassign(user); // user unchanged: only the local copy of the reference changed</pre></x-code>
+<x-fu q="Is JavaScript pass-by-reference then?">No, it’s pass-by-value where the value of an object variable is a reference (sometimes called “call by sharing”). That’s why mutating works but reassigning doesn’t.</x-fu>
+
+<x-no>“Objects are copied when you pass them to a function.” Or “JavaScript is pass-by-reference” (you can’t reassign the caller’s variable).</x-no>
+<x-ev>Understanding of mutation bugs.</x-ev></x-q>
+
+<x-q n="2.3" tag="must basic"><x-t>What’s the difference between var, let and const?</x-t>
+<x-say><code>var</code> is function-scoped and initialised to undefined when hoisted. <code>let</code> and <code>const</code> are block-scoped and in the temporal dead zone until declared. <code>const</code> can’t be reassigned, but a const object can still be mutated.</x-say>
+<x-simple><code>var</code> belongs to the nearest function (or the global scope) and ignores blocks, so a <code>var</code> inside an <code>if</code> or loop leaks out. <code>let</code> and <code>const</code> belong to the nearest block <code>{}</code>, can’t be redeclared in the same scope, and sit in the temporal dead zone until their line runs. <code>const</code> forbids <i>reassigning the binding</i>, not changing the object it points to. Modern code uses <code>const</code> by default and <code>let</code> when the value must change; <code>var</code> mainly appears in old code and in classic interview traps like the loop-closure bug.</x-simple>
+<x-code><pre data-l="js">if (true) { var a = 1; let b = 2; }
+a; // 1
+b; // ReferenceError
+const cfg = { port: 3000 }; cfg.port = 4000; // allowed
+cfg = {};                                     // TypeError</pre></x-code>
+
+<x-fu q="Why does the loop with var print 3 3 3?">There is one <code>i</code> for the whole function; the callbacks run after the loop ends and all read the same final value 3. <code>let</code> creates a new binding per iteration, so each callback captures its own value.</x-fu>
+<x-no>“const makes objects immutable.” Use <code>Object.freeze</code> (shallow) for that.</x-no>
+<x-ev>Scope understanding.</x-ev></x-q>
+
+<x-q n="2.4" tag="must basic"><x-t>What is hoisting?</x-t>
+<x-say>Before a scope runs, the engine registers its declarations. var becomes undefined, function declarations are fully available, and let/const/class exist but are uninitialised until their line.</x-say>
+<x-simple>When the engine enters a scope it first creates bindings for all declarations in it (the “creation phase”), then runs the code. Function declarations get their full function value immediately; <code>var</code> gets <code>undefined</code>; <code>let</code>/<code>const</code>/<code>class</code> get an uninitialised binding (TDZ). That is why you can call a function declared lower in the file, why reading a <code>var</code> early gives <code>undefined</code> instead of an error, and why a function <i>expression</i> stored in a <code>var</code> throws “is not a function” when called early.</x-simple>
+<x-code><pre data-l="js">sayHi();                 // works: function declaration hoisted
+function sayHi() {}
+console.log(x);          // undefined
+var x = 5;
+greet();                 // TypeError: greet is not a function (var greet is undefined)
+var greet = () => {};</pre></x-code>
+
+<x-fu q="Are imports hoisted?">Yes. ES module <code>import</code> declarations are processed before any code in the module runs, so imported bindings are available everywhere in the file (they’re live, read-only bindings).</x-fu>
+<x-no>“Hoisting physically moves code to the top.” Nothing moves; declarations are processed first.</x-no>
+<x-ev>Mental model of execution.</x-ev></x-q>
+
+<x-q n="2.5" tag="must basic"><x-t>What is the temporal dead zone?</x-t>
+<x-say>The time between entering a scope and reaching a let/const/class declaration. The binding exists but accessing it throws a ReferenceError.</x-say>
+<x-simple>The TDZ exists because <code>let</code>/<code>const</code> are hoisted (the scope knows the name) but not initialised. Any read or write before the declaration line throws a ReferenceError. It also applies to default parameters referring to later parameters and to <code>typeof</code> (normally safe on undeclared names, but <code>typeof x</code> in x’s TDZ throws).</x-simple>
+<x-code><pre data-l="js">{
+  // TDZ for `limit` starts here
+  console.log(limit);   // ReferenceError: Cannot access 'limit' before initialization
+  const limit = 10;     // TDZ ends
+}</pre></x-code>
+<x-fu q="Why was it designed that way?">To catch bugs early: reading a variable before it has a meaningful value is almost always a mistake, and const must never be seen without its value.</x-fu>
+
+<x-no>“let and const are not hoisted.” They are; they’re just not initialised.</x-no>
+<x-ev>Precise vocabulary.</x-ev></x-q>
+
+<x-q n="2.6" tag="must basic"><x-t>What’s the difference between == and ===?</x-t>
+<x-say><code>===</code> compares value and type with no conversion. <code>==</code> converts types first using coercion rules. Use <code>===</code> except for the idiom <code>x == null</code>, which checks null or undefined.</x-say>
+<x-simple><code>===</code> (strict equality) returns true only if both values have the same type and value (objects: same reference; NaN is never equal to itself). <code>==</code> (loose equality) first converts types with a set of rules: null and undefined equal each other and nothing else; a number vs a string converts the string to a number; booleans convert to numbers first (<code>true == 1</code>); objects convert to primitives. These rules produce non-transitive surprises, so linters forbid <code>==</code> except <code>x == null</code>.</x-simple>
+<x-code><pre data-l="js">0 == ''            // true
+0 == '0'           // true
+'' == '0'          // false (not transitive!)
+null == undefined  // true
+null === undefined // false
+NaN === NaN        // false → Number.isNaN</pre></x-code>
+
+<x-fu q="How would you compare two objects by content?">There’s no built-in deep equality: compare fields you care about, use a library (e.g. Node’s <code>util.isDeepStrictEqual</code>), or compare stable serialisations for simple data.</x-fu>
+<x-no>“== compares value, === compares type.” Both compare values; === just doesn’t convert first.</x-no>
+<x-ev>Avoiding coercion bugs.</x-ev></x-q>
+
+<x-q n="2.7" tag="must basic"><x-t>What is type coercion?</x-t>
+<x-say>Automatic conversion of a value from one type to another, for example to string with <code>+</code> or to number with <code>-</code>, or to boolean in an <code>if</code>. Explicit conversion is <code>Number(x)</code>, <code>String(x)</code>, <code>Boolean(x)</code>.</x-say>
+<x-simple>Coercion happens implicitly in three places: string concatenation (<code>+</code> with any string converts the other side to a string), numeric operators (<code>- * / %</code>, unary <code>+</code>, comparisons) convert to numbers, and boolean contexts (<code>if</code>, <code>&&</code>, <code>||</code>, <code>!</code>) convert to true/false. Objects are converted via <code>valueOf</code>/<code>toString</code> (or <code>Symbol.toPrimitive</code>). Explicit coercion (<code>Number()</code>, <code>String()</code>, <code>Boolean()</code>, <code>parseInt(x, 10)</code>) is clearer and is what you use at API boundaries.</x-simple>
+<x-code><pre data-l="js">'3' * '4'   // 12
+'3' + 4     // '34'
+[] + {}     // '[object Object]'
+if ('0') {} // runs: non-empty string is truthy
+Number('')  // 0   — careful with empty form fields</pre></x-code>
+<x-eg>Pagination bug: <code>offset = req.query.page * 20</code> works by accident, but <code>req.query.page + 1</code> gives "21". Validate and convert at the boundary with Zod.</x-eg>
+
+<x-fu q="Number(&#x27;&#x27;) vs parseInt(&#x27;&#x27;)?"><code>Number('')</code> is 0, <code>parseInt('', 10)</code> is NaN. <code>Number('12px')</code> is NaN while <code>parseInt('12px', 10)</code> is 12. Choose deliberately, or let Zod’s <code>z.coerce.number()</code> plus constraints decide.</x-fu>
+<x-no>Saying coercion is “random”. It follows exact spec rules; they’re just easy to forget.</x-no>
+<x-ev>Practical awareness.</x-ev></x-q>
+
+<x-q n="2.8" tag="must basic"><x-t>What’s the difference between null and undefined?</x-t>
+<x-say><code>undefined</code> means “no value was assigned” (missing property, missing argument, function with no return). <code>null</code> is an intentional “empty” value that a programmer sets.</x-say>
+<x-simple><p>JSON has <code>null</code> but no <code>undefined</code>: <code>JSON.stringify({ a: undefined })</code> gives <code>"{}"</code>. In SQL, NULL maps to JS <code>null</code>. Use <code>??</code> (nullish coalescing) to default only on null/undefined, not on 0 or "".</p></x-simple>
+<x-code><pre data-l="js">const limit = req.query.limit ?? 20;   // keeps 0
+const limit2 = req.query.limit || 20;  // replaces 0 with 20 (bug if 0 is valid)</pre></x-code>
+
+<x-fu q="When would you deliberately return null instead of undefined?">For “looked it up, nothing there” results such as a repository’s <code>findUserByEmail()</code>; it’s explicit, survives JSON, and maps to SQL NULL.</x-fu>
+<x-no>“They’re the same.” <code>null == undefined</code> is true but <code>===</code> is false, typeof differs, and JSON drops undefined.</x-no>
+<x-ev>Precision with absent values.</x-ev></x-q>
+
+<x-q n="2.9" tag="must solid"><x-t>What are closures?</x-t>
+<x-say>A closure is a function plus the variables from the scope where it was created. The function keeps access to them even after that outer function has returned.</x-say>
+<x-simple>When a function is created, it stores a hidden link to the scope it was created in (its lexical environment). When it later runs, variable lookups follow that link outward. If the function survives longer than its outer function call (returned, stored, passed as a callback), the captured variables stay alive in memory because something still references them. Each call of the outer function creates a fresh scope, so each closure gets its own private variables. That’s how factories, memoisation, middleware configuration and module-private state work.</x-simple>
+<x-code><pre data-l="js">function createRateLimiter(max) {
+  const hits = new Map();                      // private state
+  return function allow(ip) {
+    const n = (hits.get(ip) ?? 0) + 1;
+    hits.set(ip, n);
+    return n &lt;= max;                           // remembers `max` and `hits`
+  };
+}
+const allow = createRateLimiter(3);</pre></x-code>
+<x-fu q="Any downside?">Captured variables stay in memory as long as the function is reachable. A long-lived closure capturing a big object (a whole request, a large array) is a common memory leak.</x-fu>
+<x-no>“A closure is a function inside a function.” That’s nesting; the key is captured variables outliving their scope.</x-no>
+<x-ev>Core JS understanding, used everywhere in Node.</x-ev></x-q>
+
+<x-q n="2.10" tag="must basic"><x-t>What is lexical scope?</x-t>
+<x-say>Variable visibility is decided by where code is written. An inner function can see outer variables; the lookup goes outward through the nesting at write time, not through the call stack.</x-say>
+<x-simple>Scope is resolved by position in the source code. The engine builds a chain of scopes from the innermost block outwards to the module/global scope, and looks up a name by walking that chain. Because it’s decided at write time, you can reason about which variable a name refers to by reading the code, and closures are possible. (The opposite, dynamic scope, would resolve names from whoever called the function; JavaScript doesn’t do that, except for <code>this</code>, which is call-time.)</x-simple>
+<x-code><pre data-l="js">const x = 'global';
+function outer() { const x = 'outer'; return inner; function inner() { return x; } }
+function caller() { const x = 'caller'; return outer()(); }
+caller(); // 'outer' — not 'caller'</pre></x-code>
+
+<x-fu q="What is shadowing?">An inner variable with the same name as an outer one hides it inside its scope. It’s legal but confusing; linters warn about it.</x-fu>
+<x-no>“A function can see the variables of the function that called it.”</x-no>
+<x-ev>Foundation for closures.</x-ev></x-q>
+
+<x-q n="2.11" tag="must basic"><x-t>Explain the difference between function declarations and function expressions.</x-t>
+<x-say>A declaration (<code>function f() {}</code>) is hoisted with its body, so it can be called before its line. An expression (<code>const f = function () {}</code> or an arrow) is a value assigned to a variable and only exists after that line runs.</x-say>
+<x-simple><p>Expressions can be anonymous, passed as arguments, and created conditionally. Named function expressions (<code>const f = function fact(n) {...}</code>) help stack traces and recursion.</p></x-simple>
+<x-eg>Callbacks and handlers are usually expressions: <code>app.get('/', async (req, res) => {...})</code>. Utility functions at the bottom of a file are often declarations so the main logic can stay at the top.</x-eg>
+
+<x-fu q="Which should you use?">Either; teams pick one style. Declarations for named top-level functions (hoisted, good stack traces), arrows/expressions for callbacks and when you need lexical <code>this</code>.</x-fu>
+<x-no>“Function expressions are hoisted like declarations.”</x-no>
+<x-ev>Hoisting applied.</x-ev></x-q>
+
+<x-q n="2.12" tag="must basic"><x-t>What are arrow functions?</x-t>
+<x-say>A shorter function syntax with no own <code>this</code>, <code>arguments</code>, <code>super</code> or <code>prototype</code>, and they can’t be used with <code>new</code>. They take <code>this</code> from the surrounding scope.</x-say>
+<x-simple>Arrow functions are always expressions. Besides shorter syntax (implicit return for a single expression), they differ in semantics: no own <code>this</code> (lexical), no <code>arguments</code> object (use rest parameters), no <code>prototype</code>, cannot be constructors, and cannot be generators. These rules make them ideal for callbacks inside methods and poor as object methods that need <code>this</code>.</x-simple>
+<x-code><pre data-l="js">class Uploader {
+  constructor() { this.count = 0; }
+  start(emitter) {
+    emitter.on('file', () => { this.count++; });  // arrow: this = the Uploader
+    // emitter.on('file', function () { this.count++; }) → this = the emitter
+  }
+}</pre></x-code>
+
+<x-fu q="Why can’t you use an arrow function as a method that uses this?"><code>this</code> inside it is taken from where the object literal was written (usually the module scope, so undefined), not from the object the method is called on.</x-fu>
+<x-no>“Arrow functions are just shorter.” The <code>this</code> behaviour is the important difference.</x-no>
+<x-ev>Practical use in callbacks.</x-ev></x-q>
+
+<x-q n="2.13" tag="must solid"><x-t>How does this work in JavaScript?</x-t>
+<x-say><code>this</code> is decided at call time by how a function is called: the object before the dot, the new object with <code>new</code>, an explicit value with call/apply/bind, or undefined for a plain call in strict mode. Arrow functions use the surrounding <code>this</code>.</x-say>
+<x-simple><p>See the table in the lesson above. Priority: <code>new</code> &gt; explicit bind/call/apply &gt; method call &gt; plain call.</p></x-simple>
+<x-eg><code>setTimeout(this.tick, 1000)</code> inside a class loses <code>this</code> (it’s called as a plain function). Use <code>setTimeout(() => this.tick(), 1000)</code> or <code>this.tick = this.tick.bind(this)</code> in the constructor.</x-eg>
+<x-fu q="What is this inside an Express route handler?">Nothing useful: Express calls handlers as plain functions. Use <code>req</code>, <code>res</code>, closures or module variables instead.</x-fu>
+
+<x-no>“this refers to the function itself” or “this is where the function was defined” (only true for arrows).</x-no>
+<x-ev>Precision under a commonly confused topic.</x-ev></x-q>
+
+<x-q n="2.14" tag="must basic"><x-t>What’s the difference between call(), apply() and bind()?</x-t>
+<x-say>All three set <code>this</code>. call runs the function now with arguments listed; apply runs it now with arguments as an array; bind returns a new function with <code>this</code> (and optionally arguments) fixed, to call later.</x-say>
+<x-simple>All three let you choose <code>this</code> explicitly. <code>call</code> and <code>apply</code> invoke the function immediately and differ only in how arguments are passed (list vs array). <code>bind</code> doesn’t call; it returns a new function permanently bound to the given <code>this</code> and any leading arguments (partial application); calling <code>bind</code> again on the result can’t change <code>this</code>. With spread syntax, <code>fn.apply(ctx, args)</code> is equivalent to <code>fn.call(ctx, ...args)</code>.</x-simple>
+<x-code><pre data-l="js">function greet(greeting, mark) { return `${greeting}, ${this.name}${mark}`; }
+const u = { name: 'Asha' };
+greet.call(u, 'Hi', '!');        // 'Hi, Asha!'
+greet.apply(u, ['Hi', '!']);     // same
+const hiAsha = greet.bind(u, 'Hi'); hiAsha('?');  // 'Hi, Asha?'  (partial application)</pre></x-code>
+
+<x-fu q="What happens if you bind an arrow function?">Nothing changes about <code>this</code>: arrows ignore it. Bound leading arguments still apply.</x-fu>
+<x-no>“bind calls the function.”</x-no>
+<x-ev>Function mechanics.</x-ev></x-q>
+
+<x-q n="2.15" tag="must solid"><x-t>What is prototypal inheritance?</x-t>
+<x-say>Objects link to a prototype object. When a property isn’t found on the object, JavaScript looks it up on the prototype, then that one’s prototype, up to Object.prototype. Classes are syntax on top of this.</x-say>
+<x-simple>Every object has an internal <code>[[Prototype]]</code> link (read with <code>Object.getPrototypeOf</code>). Property reads walk this chain until found; writes always go to the object itself (shadowing the prototype’s property). Functions created with <code>new</code> get their instance’s prototype from <code>Constructor.prototype</code>, which is how methods are shared by all instances without copying. <code>class</code> and <code>extends</code> set up exactly these links; <code>super.method()</code> calls the method found on the parent prototype.</x-simple>
+<x-code><pre data-l="js">class HttpError extends Error {
+  constructor(status, msg) { super(msg); this.status = status; }
+}
+const e = new HttpError(404, 'Not found');
+Object.getPrototypeOf(e) === HttpError.prototype;            // true
+Object.getPrototypeOf(HttpError.prototype) === Error.prototype; // true
+e instanceof Error;  // true: walks the chain</pre></x-code>
+<x-eg>Custom error classes for an API (NotFoundError, ValidationError) are prototypal inheritance in practice: the error handler checks <code>instanceof</code> to pick the status code.</x-eg>
+
+<x-fu q="Why put methods on the prototype instead of in the constructor?">One shared function for all instances instead of one copy per instance: less memory, and changes to the prototype apply to all instances.</x-fu>
+<x-no>“JavaScript classes copy methods into each object.”</x-no>
+<x-ev>Whether you know what <code>class</code> really does.</x-ev></x-q>
+
+<x-q n="2.16" tag="must basic"><x-t>What are higher-order functions?</x-t>
+<x-say>Functions that take functions as arguments or return functions. map, filter, reduce, setTimeout, Express’s <code>app.use</code> and middleware factories are all examples.</x-say>
+<x-simple>Functions are values in JavaScript: you can store them, pass them and return them. A higher-order function either takes functions (to customise behaviour: <code>arr.filter(isReady)</code>) or returns them (to configure behaviour once and use it many times: <code>requireRole('admin')</code>). This enables composition: small, testable functions combined into pipelines, and wrappers that add cross-cutting behaviour (timing, retries, error handling) without changing the wrapped code.</x-simple>
+<x-code><pre data-l="js">// returns a function: wraps any async route so errors reach the error handler
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+// (Express 5 does this automatically; Express 4 needs it)</pre></x-code>
+
+<x-fu q="Write a higher-order function that times any async function."><code>const timed = (name, fn) => async (...args) => { const t = performance.now(); try { return await fn(...args); } finally { console.log(name, performance.now() - t, 'ms'); } };</code></x-fu>
+<x-no>“Higher-order functions are only map/filter/reduce.”</x-no>
+<x-ev>Functional thinking.</x-ev></x-q>
+
+<x-q n="2.17" tag="must basic"><x-t>Explain map(), filter() and reduce().</x-t>
+<x-say>map transforms each element into a new array of the same length; filter keeps elements that pass a test; reduce folds the array into one value (a sum, an object, a map). None of them mutate the original array.</x-say>
+<x-simple><code>map(fn)</code> calls fn(element, index, array) for each element and collects the return values; <code>filter(fn)</code> keeps elements for which fn returns truthy; <code>reduce(fn, initial)</code> carries an accumulator through the array: each call receives the previous return value and the current element. Without an initial value, reduce uses the first element as the accumulator and throws on an empty array. All three skip holes in sparse arrays and return new arrays/values without mutating the input (unless your callback mutates).</x-simple>
+<x-code><pre data-l="js">const totalTokens = calls.reduce((sum, c) => sum + c.inputTokens + c.outputTokens, 0);
+const failed = jobs.filter((j) => j.status === 'failed').map((j) => j.id);</pre></x-code>
+<x-fu q="When would you not use them?">When you need to stop early (use <code>find</code>, <code>some</code>, or a <code>for…of</code> with break), or when the callback is async and must be awaited in order.</x-fu>
+
+<x-no>Using map just to loop for side effects (use forEach/for…of), or forgetting reduce’s initial value.</x-no>
+<x-ev>Fluency with everyday code.</x-ev></x-q>
+
+<x-q n="2.18" tag="must basic"><x-t>What’s the difference between shallow copy and deep copy?</x-t>
+<x-say>A shallow copy creates a new top-level object but nested objects are shared. A deep copy copies every level. Spread and Object.assign are shallow; structuredClone is deep.</x-say>
+<x-simple>A shallow copy duplicates only the top-level container: its properties that are primitives are copied, but properties that are objects still point to the same nested objects. Spread, <code>Object.assign</code>, <code>Array.from</code>, <code>arr.slice()</code> are shallow. A deep copy recursively duplicates nested objects. <code>structuredClone</code> (Node 17+, browsers) deep-copies plain data, Maps, Sets, Dates and handles cycles, but not functions, DOM nodes or class prototypes (instances become plain objects).</x-simple>
+<x-eg>Copying a default config with spread and then mutating <code>config.retry.attempts</code> changes the default for every later request. Use structuredClone, or never mutate nested config.</x-eg>
+
+<x-fu q="How do you avoid needing deep copies at all?">Treat data as immutable: create new objects along the path you change (<code>{ ...state, user: { ...state.user, name } }</code>) and never mutate shared config.</x-fu>
+<x-no>“JSON.parse(JSON.stringify(x)) is a perfect deep copy.”</x-no>
+<x-ev>Awareness of shared-state bugs.</x-ev></x-q>
+
+<x-q n="2.19" tag="must basic"><x-t>What is destructuring?</x-t>
+<x-say>Syntax to unpack array elements or object properties into variables, with optional defaults and renaming.</x-say>
+<x-simple>Destructuring is pattern matching on the left side of an assignment. Object patterns match by property name (with renaming <code>{ a: b }</code>, defaults <code>{ a = 1 }</code> which apply only for undefined, and nesting); array patterns match by position (skip with commas, rest with <code>...</code>). In function parameters it gives named, optional arguments. Destructuring <code>undefined</code> or <code>null</code> throws, so default the whole parameter: <code>function f({ x } = {})</code>.</x-simple>
+<x-code><pre data-l="js">const { message, sessionId = crypto.randomUUID(), documentId: docId } = req.body;
+const [first, , third] = results;
+function search({ query, topK = 5 } = {}) {}   // named arguments with defaults</pre></x-code>
+
+<x-fu q="Does a default value apply when the value is null?">No, defaults apply only to <code>undefined</code>. <code>const { limit = 20 } = { limit: null }</code> gives null.</x-fu>
+<x-no>Thinking destructuring copies nested objects (it copies references).</x-no>
+<x-ev>Modern syntax fluency.</x-ev></x-q>
+
+<x-q n="2.20" tag="must basic"><x-t>What are spread and rest operators?</x-t>
+<x-say>Same <code>...</code> syntax, opposite jobs. Spread expands an array or object into elements or properties. Rest collects remaining elements or properties into one array or object.</x-say>
+<x-simple>Spread (<code>...</code> on the right side or in a call) expands an iterable into elements or an object into own enumerable properties: used to copy, merge and pass arrays as arguments. Rest (<code>...</code> in a parameter list or a destructuring pattern) gathers what’s left into a real array or object, and must be last. Both are shallow. Object spread copies own enumerable properties only, so getters run and prototype methods are not copied.</x-simple>
+<x-code><pre data-l="js">const all = [...a, ...b];                 // spread
+const update = { ...doc, status: 'ready' }; // spread, override one key
+const { password_hash, ...safeUser } = row;  // rest: strip a field before sending
+function sum(...nums) { return nums.reduce((x, y) => x + y, 0); } // rest parameters</pre></x-code>
+
+<x-fu q="Which wins when spreading two objects with the same key?">The later one: <code>{ ...defaults, ...options }</code> lets options override defaults.</x-fu>
+<x-no>“Spread makes a deep copy.”</x-no>
+<x-ev>Practical syntax.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">2.2</span>Asynchronous JavaScript</h2>
+
+<x-q n="2.21" tag="must basic"><x-t>What is synchronous versus asynchronous execution?</x-t>
+<x-say>Synchronous code runs line by line and each line finishes before the next. Asynchronous code starts an operation, continues with other work, and handles the result later through a callback or promise.</x-say>
+<x-simple><p>In a server, one request waiting 2 seconds for an LLM shouldn’t stop 100 other requests. Async I/O lets the single thread serve them all while waiting.</p></x-simple>
+<x-eg>Synchronous: <code>JSON.parse</code> of a request body runs to completion before the next line. Asynchronous: <code>pool.query()</code> sends the SQL and returns a promise; while Postgres works, the server handles other requests; the <code>await</code> continues later.</x-eg>
+
+<x-fu q="Is “asynchronous” the same as “parallel”?">No. Async means not waiting; the JS still runs on one thread. The waiting happens elsewhere (the OS, the database, the network).</x-fu>
+<x-no>“async code runs on another thread.”</x-no>
+<x-ev>Fundamental Node model.</x-ev></x-q>
+
+<x-q n="2.22" tag="must basic"><x-t>What are callbacks?</x-t>
+<x-say>Functions passed to another function to be called later, for example when I/O finishes. Node’s classic style is error-first: <code>(err, result) => {}</code>.</x-say>
+<x-simple>A callback is just a function value handed to code that will call it at some point: immediately (array methods, synchronous callbacks) or later (timers, I/O, events). Node’s convention for async callbacks is error-first: the first argument is an error or null, results follow. The callback pattern’s problems are inversion of control (you trust the callee to call once, not twice, not never), error handling scattered across levels, and deep nesting.</x-simple>
+<x-code><pre data-l="js">fs.readFile('a.txt', 'utf8', (err, text) => {
+  if (err) return console.error(err);
+  console.log(text.length);
+});</pre></x-code>
+
+<x-fu q="How do you convert a callback API to promises?"><code>util.promisify(fn)</code> for error-first callbacks, or wrap it in <code>new Promise((resolve, reject) => fn(args, (err, res) => err ? reject(err) : resolve(res)))</code>.</x-fu>
+<x-no>“Callbacks are always asynchronous.” Array.map’s callback is synchronous.</x-no>
+<x-ev>History of async in Node.</x-ev></x-q>
+
+<x-q n="2.23" tag="must basic"><x-t>What is callback hell?</x-t>
+<x-say>Deeply nested callbacks where each async step depends on the previous one. It’s hard to read, error handling is repeated at every level, and it’s easy to forget a branch.</x-say>
+<x-simple>Callback hell (the “pyramid of doom”) appears when each step needs the previous result, so each callback nests inside the last. Beyond readability, the real problems are: errors must be checked at every level, it’s easy to forget to return after calling the callback (calling it twice), running steps in parallel or limiting concurrency is awkward, and try/catch doesn’t catch errors thrown in later callbacks. Promises and async/await flatten the structure and give one error path.</x-simple>
+<x-code><pre data-l="js">getUser(id, (e1, user) => {
+  if (e1) return done(e1);
+  getDocs(user.id, (e2, docs) => {
+    if (e2) return done(e2);
+    embed(docs, (e3, vectors) => { /* ...and so on */ });
+  });
+});
+// the same with async/await:
+const user = await getUser(id); const docs = await getDocs(user.id); const vectors = await embed(docs);</pre></x-code>
+
+<x-fu q="Before promises, how did people tame it?">Named functions instead of inline ones, and libraries like async.js (series, parallel, waterfall).</x-fu>
+<x-no>“Callback hell is just indentation style.”</x-no>
+<x-ev>Why promises exist.</x-ev></x-q>
+
+<x-q n="2.24" tag="must basic"><x-t>What are Promises?</x-t>
+<x-say>An object representing the eventual result of an async operation. It settles once, to a value or an error, and you attach handlers with then/catch/finally or await it.</x-say>
+<x-simple>A Promise is created in the pending state and settles exactly once by calling <code>resolve</code> or <code>reject</code> (or by throwing inside the executor, which rejects). <code>.then(onFulfilled, onRejected)</code> returns a <b>new</b> promise resolved with whatever the handler returns (or rejected if it throws), which is what makes chaining work. Handlers always run asynchronously as microtasks, even if the promise is already settled, so behaviour is consistent.</x-simple>
+<x-code><pre data-l="js">const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function readJson(path) {
+  return new Promise((resolve, reject) => {
+    fs.readFile(path, 'utf8', (err, txt) => {
+      if (err) return reject(err);
+      try { resolve(JSON.parse(txt)); } catch (e) { reject(e); }
+    });
+  });
+}</pre></x-code>
+
+<x-fu q="What does .finally do?">Runs a handler on either outcome without changing the result (unless it throws): good for cleanup like releasing a connection or hiding a spinner.</x-fu>
+<x-no>“A promise can be resolved more than once.”</x-no>
+<x-ev>Core async primitive.</x-ev></x-q>
+
+<x-q n="2.25" tag="must basic"><x-t>Explain the different states of a Promise.</x-t>
+<x-say>Pending (not settled yet), fulfilled (has a value), rejected (has a reason). Fulfilled and rejected are both “settled”, and a settled promise never changes again.</x-say>
+<x-simple><p>Calling resolve twice, or resolve then reject, does nothing after the first. A promise resolved with another promise “follows” it (adopts its eventual state).</p></x-simple>
+<x-eg><code>const p = fetch(url)</code> is pending; when the response headers arrive it’s fulfilled with a Response; if DNS fails it’s rejected with a TypeError. A 404 response still <b>fulfils</b>: fetch only rejects on network errors, so you must check <code>res.ok</code>.</x-eg>
+
+<x-fu q="Can you read a promise’s state synchronously?">Not with the public API. You can only react to it with then/await. (Debuggers and util.inspect can show it.)</x-fu>
+<x-no>“A rejected promise becomes fulfilled after you catch it.” The original stays rejected; <code>.catch</code> returns a new promise.</x-no>
+<x-ev>Precision.</x-ev></x-q>
+
+<x-q n="2.26" tag="must basic"><x-t>What’s the difference between .then() and async/await?</x-t>
+<x-say>Same mechanism. async/await is syntax over promises that reads like synchronous code and lets you use try/catch and normal loops. <code>.then</code> chains are useful for small transforms or when you don’t want to pause.</x-say>
+<x-simple><code>await p</code> is roughly equivalent to <code>p.then(rest of the function)</code>. Differences that matter: await lets you use normal control flow (loops, if, try/catch/finally) across async steps; stack traces are usually better; and it encourages sequential code, so you must remember to start independent operations first and await them together. Top-level await works in ES modules.</x-simple>
+<x-code><pre data-l="js">// then-chain
+getUser(id).then((u) => getDocs(u.id)).then(render).catch(handle);
+// async/await
+try { const u = await getUser(id); render(await getDocs(u.id)); } catch (e) { handle(e); }</pre></x-code>
+
+<x-fu q="Is there any performance difference?">Not meaningfully for app code. The big performance difference is accidentally running things sequentially instead of concurrently.</x-fu>
+<x-no>“async/await is a different mechanism from promises.”</x-no>
+<x-ev>Practical choice.</x-ev></x-q>
+
+<x-q n="2.27" tag="must solid"><x-t>What happens internally when you use await?</x-t>
+<x-say>The async function runs synchronously until the await. Then it suspends: its state is saved, and the caller gets back the function’s pending promise. When the awaited promise settles, the rest of the function is queued as a microtask and resumes with the value, or throws the rejection at the await line.</x-say>
+<x-simple><p>Use the “async / await” example in the event-loop widget above: code after <code>await null</code> runs only after the current synchronous code finishes, even though null is not a real promise.</p></x-simple>
+<x-eg>In DocMind’s chat route, <code>await getEmbedding(message)</code> pauses only that request’s handler for ~hundreds of ms; meanwhile the same Node process serves other requests and runs the BullMQ worker.</x-eg>
+
+<x-fu q="What does an async function return if it throws before any await?">A rejected promise, not a synchronous throw. The caller sees it only via await/catch.</x-fu>
+<x-no>“await blocks the thread.” Only that function pauses; the thread keeps serving other work.</x-no>
+<x-ev>Deeper mental model.</x-ev></x-q>
+
+<x-q n="2.28" tag="must solid"><x-t>What’s the difference between Promise.all() and Promise.allSettled()?</x-t>
+<x-say><code>all</code> fails fast: it rejects as soon as one promise rejects. <code>allSettled</code> always waits for all and gives a status object per promise. Use all when you need everything; allSettled when partial success is fine.</x-say>
+<x-simple>Both take an iterable of promises and start nothing themselves: the operations already started when you created the promises. <code>Promise.all</code> resolves to an array of values in input order, or rejects as soon as any input rejects (fail-fast; the other operations continue and their results are discarded). <code>Promise.allSettled</code> always resolves after every input settles, with <code>{ status: 'fulfilled', value }</code> or <code>{ status: 'rejected', reason }</code> objects. Use all when the result is useless unless everything succeeded (load user + permissions); allSettled for batches where partial success is fine (embedding many chunks, sending notifications).</x-simple>
+<x-code><pre data-l="js">const results = await Promise.allSettled(chunks.map(embed));
+const ok = results.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [{ i, reason: String(r.reason) }] : []));</pre></x-code>
+<x-fu q="With Promise.all, do the other operations stop after one rejects?">No. They keep running; their results are just ignored. To actually stop them, pass an AbortController signal and abort it.</x-fu>
+
+<x-no>“Promise.all runs the promises in parallel.” The work was already running; all just waits.</x-no>
+<x-ev>Error-handling design.</x-ev></x-q>
+
+<x-q n="2.29" tag="should solid"><x-t>What’s the difference between Promise.race() and Promise.any()?</x-t>
+<x-say>race settles with whichever promise settles first, success or failure. any resolves with the first success and only rejects (AggregateError) if all fail.</x-say>
+<x-simple><code>race</code> settles with the first input to settle in either direction, so a fast rejection wins a race. <code>any</code> ignores rejections until one input fulfils, and rejects with an <code>AggregateError</code> (containing all reasons) only when all reject. Neither cancels the losers; use AbortController for cancellation.</x-simple>
+<x-eg>race: timeouts (<code>race([call(), rejectAfter(5000)])</code>). any: ask two replicas or providers and use whoever answers successfully first (hedged requests).</x-eg>
+
+<x-fu q="Implement a timeout with race."><code>const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);</code> (clear the timer in real code, and prefer AbortSignal.timeout for fetch so the request is actually aborted).</x-fu>
+<x-no>“race returns the fastest successful result.” That’s any.</x-no>
+<x-ev>Concurrency tools.</x-ev></x-q>
+
+<x-q n="2.30" tag="must basic"><x-t>How do you handle errors in asynchronous functions?</x-t>
+<x-say>try/catch around awaits, or .catch on the promise. Rethrow or convert to a meaningful error; never swallow silently. At the edges, a central handler (Express error middleware, a job’s failed handler) logs and responds.</x-say>
+<x-simple>In async functions, a rejected await throws at that line, so try/catch works like synchronous code; <code>finally</code> runs cleanup. With promise chains, <code>.catch</code> handles rejections from anything earlier in the chain. Decide at each level: handle (recover, fall back, map to a user-facing error), or let it propagate to a central handler (Express error middleware, a job’s failure handler). Always keep the original error as <code>cause</code> when wrapping: <code>throw new Error('load failed', { cause: err })</code>.</x-simple>
+<x-code><pre data-l="js">app.post('/chat', async (req, res, next) => {
+  try { res.json(await chatService.answer(req.user.id, req.body)); }
+  catch (err) { next(err); }           // Express 5 also forwards a rejected promise automatically
+});</pre></x-code>
+
+<x-fu q="Does try/catch around a non-awaited promise catch its rejection?">No. <code>try { doAsync(); } catch {}</code> only catches synchronous throws; the rejection happens later and is unhandled.</x-fu>
+<x-no>Wrapping everything in try/catch that logs and returns nothing; callers then think it succeeded.</x-no>
+<x-ev>Robustness.</x-ev></x-q>
+
+<x-q n="2.31" tag="must solid"><x-t>What happens when a Promise rejects and nobody handles the rejection?</x-t>
+<x-say>Node emits an <code>unhandledRejection</code> event. Since Node 15 the default is to treat it like an uncaught exception: print it and exit the process.</x-say>
+<x-simple><p>Common causes: a missing await, a fire-and-forget call, a <code>.then</code> without <code>.catch</code>. Fix the cause; a global <code>process.on('unhandledRejection')</code> handler should log and then exit cleanly (the app state may be inconsistent), not keep running.</p></x-simple>
+<x-eg><code>app.post('/x', (req, res) => { saveAudit(req.body); res.sendStatus(204); })</code>: if saveAudit’s promise rejects, nobody awaits or catches it → unhandledRejection → the process exits and every in-flight request fails.</x-eg>
+
+<x-fu q="Should you add a global unhandledRejection handler?">Yes, to log the error with context and then exit cleanly (let the process manager restart). Not to silently continue: the app may be in an inconsistent state.</x-fu>
+<x-no>“Unhandled rejections are just warnings.” Since Node 15 they crash the process by default.</x-no>
+<x-ev>Production awareness.</x-ev></x-q>
+
+<x-q n="2.32" tag="must basic"><x-t>Can you execute multiple asynchronous operations concurrently?</x-t>
+<x-say>Yes: start them without awaiting each one, then await them together with Promise.all/allSettled. For many operations, limit concurrency so you don’t overload a database or hit an API rate limit.</x-say>
+<x-simple>Starting an async operation returns immediately, so you can start several and they progress at the same time (the I/O happens in the OS/database). You then wait for them with Promise.all/allSettled. The common mistake is <code>for (const x of xs) await work(x)</code> when the items are independent: it serialises them. For large lists, unbounded concurrency overloads the downstream service, so use a pool with a limit (Phase 11, exercise 2).</x-simple>
+<x-code><pre data-l="js">const pUser = getUser(id);          // starts now
+const pDocs = listDocuments(id);    // starts now too
+const [user, docs] = await Promise.all([pUser, pDocs]);</pre></x-code>
+
+<x-fu q="What if the operations write to the same rows?">Concurrency can cause races; use transactions, unique constraints or do them sequentially.</x-fu>
+<x-no>“You need threads to do things concurrently in Node.”</x-no>
+<x-ev>Performance thinking.</x-ev></x-q>
+
+<x-q n="2.33" tag="should solid"><x-t>What’s the difference between concurrency and parallelism?</x-t>
+<x-say>Concurrency is dealing with many tasks at once by interleaving them (one thread switching while tasks wait). Parallelism is doing many tasks at the exact same moment on multiple cores. Node’s JS is concurrent on one thread; worker threads and libuv’s thread pool add parallelism.</x-say>
+<x-simple>Concurrency is about structure: several tasks in progress over the same period, interleaved. Parallelism is about execution: several tasks running at the same instant on different CPU cores. Node’s main thread gives concurrency (many requests waiting on I/O at once); true parallelism comes from the OS doing I/O, libuv’s thread pool, worker threads, or multiple processes. For I/O-bound servers concurrency is what matters; for CPU-bound work you need parallelism.</x-simple>
+<x-eg>100 simultaneous LLM requests on one Node process: concurrent (all waiting) but not parallel. Hashing 100 passwords with bcrypt: runs in parallel on libuv’s 4 pool threads.</x-eg>
+<x-an>One waiter serving ten tables (concurrency) versus ten waiters (parallelism).</x-an>
+
+<x-fu q="Can concurrency without parallelism still have race conditions?">Yes: between awaits other code runs, so read-then-write across an await can interleave with another request.</x-fu>
+<x-no>Using the terms interchangeably.</x-no>
+<x-ev>Precise terms.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">2.3</span>Event loop and Node.js runtime</h2>
+
+<x-q n="2.34" tag="must solid"><x-t>What is the JavaScript event loop?</x-t>
+<x-say>The loop that takes completed async callbacks from queues and runs them on the single JS thread whenever the call stack is empty, always draining microtasks before the next macrotask.</x-say>
+<x-simple><p>Step through the widget in the lesson above. Order of priority: current synchronous code → nextTick queue (Node) → promise microtasks → the next macrotask (timer, I/O callback, setImmediate…) → microtasks again → …</p></x-simple>
+<x-eg>A request handler awaits a DB query; while it waits, the loop runs a timer callback, another request’s handler and a BullMQ worker callback; when the query result arrives, the loop resumes the first handler.</x-eg>
+
+<x-fu q="What is “event loop lag”, and how do you measure it?">The delay between when a callback should run and when it actually runs, caused by long synchronous work. Measure with <code>perf_hooks.monitorEventLoopDelay()</code> and alert when p99 lag grows.</x-fu>
+<x-no>“The event loop is a thread.” It’s a loop running on the main thread.</x-no>
+<x-ev>Core Node knowledge; often probed with an output-prediction question.</x-ev></x-q>
+
+<x-q n="2.35" tag="must solid"><x-t>What are the call stack, callback queue and microtask queue?</x-t>
+<x-say>The call stack holds currently running functions. The callback (task/macrotask) queue holds callbacks from timers and I/O waiting to run. The microtask queue holds promise reactions and queueMicrotask callbacks, which run as soon as the stack empties, before any macrotask.</x-say>
+<x-simple>The call stack is a LIFO stack of execution frames: calling a function pushes a frame, returning pops it. Only when it is empty can queued callbacks run. The task (callback/macrotask) queue holds callbacks from timers, I/O and events; the loop takes one at a time. The microtask queue holds promise reactions and <code>queueMicrotask</code> callbacks; after every task (and in Node after every callback), the engine drains the entire microtask queue, including microtasks added while draining.</x-simple>
+<x-eg><code>setTimeout(A); Promise.resolve().then(B); C();</code> → C runs on the stack, then B (microtask), then A (task).</x-eg>
+
+<x-fu q="What is a stack overflow?">Too many nested frames (usually infinite recursion): “Maximum call stack size exceeded”.</x-fu>
+<x-no>“Promises go into the same queue as setTimeout.”</x-no>
+<x-ev>Vocabulary.</x-ev></x-q>
+
+<x-q n="2.36" tag="must solid"><x-t>What’s the difference between microtasks and macrotasks?</x-t>
+<x-say>Microtasks (promise callbacks, queueMicrotask, and in Node process.nextTick in its own higher-priority queue) run all together right after the current task. Macrotasks (setTimeout, setInterval, I/O callbacks, setImmediate) run one at a time per loop step, with all microtasks drained between them.</x-say>
+<x-simple>The distinction is priority and batching. One macrotask runs, then <b>all</b> microtasks, then rendering (browsers) or the next phase/callback (Node), then the next macrotask. So microtasks can starve macrotasks, and a promise callback always beats a 0 ms timer scheduled at the same time. In Node the order within the microtask stage is: the nextTick queue, then the promise queue, repeated until both are empty.</x-simple>
+<x-code><pre data-l="js">setTimeout(() => console.log('macro'));
+Promise.resolve().then(() => console.log('micro'));
+// micro, macro</pre></x-code>
+<x-fu q="What if a microtask keeps adding microtasks?">The queue never empties, so timers and I/O never run: the server freezes even though nothing is “blocking” in the usual sense.</x-fu>
+
+<x-no>“Microtasks are smaller tasks.” The name is about scheduling, not size.</x-no>
+<x-ev>Ordering knowledge.</x-ev></x-q>
+
+<x-q n="2.37" tag="must solid"><x-t>What is the Node.js event loop?</x-t>
+<x-say>libuv’s loop with six phases: timers, pending callbacks, idle/prepare, poll, check, close callbacks. Each phase has a queue; between every callback Node drains nextTick and promise microtasks.</x-say>
+<x-simple><ul><li><b>timers:</b> expired setTimeout/setInterval callbacks.</li><li><b>pending callbacks:</b> some deferred system errors (e.g. TCP errors).</li><li><b>idle/prepare:</b> internal.</li><li><b>poll:</b> wait for new I/O and run its callbacks; if nothing is pending, it may block here until a timer is due.</li><li><b>check:</b> setImmediate callbacks.</li><li><b>close:</b> e.g. <code>socket.on('close')</code>.</li></ul></x-simple>
+<x-eg>An HTTP server: incoming connection data is detected in the poll phase, your handler runs, its DB callbacks also come back in later poll phases; a <code>setImmediate</code> used to yield after a CPU chunk runs in the check phase.</x-eg>
+
+<x-fu q="When does Node exit?">When the loop has nothing left to do: no pending timers, no open handles (sockets, servers, intervals) and no pending I/O. <code>unref()</code> on a timer lets the process exit even if it’s pending.</x-fu>
+<x-no>“Node’s loop is the same as the browser’s.” Same idea, different phases and queues (nextTick, setImmediate).</x-no>
+<x-ev>Node-specific depth.</x-ev></x-q>
+
+<x-q n="2.38" tag="must solid"><x-t>What is libuv?</x-t>
+<x-say>The C library under Node that provides the event loop, async networking via the OS (epoll, kqueue, IOCP), a thread pool (default 4 threads) for file system, DNS lookup, some crypto and zlib, plus timers and child processes.</x-say>
+<x-simple>Node’s JavaScript engine (V8) has no I/O. libuv provides a cross-platform abstraction: it uses each OS’s readiness/completion mechanism (epoll on Linux, kqueue on macOS, IOCP on Windows) for sockets, so thousands of connections need no threads; it runs the event loop with its phases; and it has a thread pool for operations the OS can’t do asynchronously in a portable way: file system calls, <code>dns.lookup</code>, and CPU-heavy built-ins like <code>crypto.pbkdf2</code>, <code>scrypt</code> and zlib compression.</x-simple>
+<x-eg>10 concurrent <code>bcrypt.hash</code> calls on the default pool: 4 run at once, 6 queue. Under load that looks like slow logins while CPU is not maxed.</x-eg>
+<x-fu q="When does the thread pool size matter?">Many concurrent file reads, bcrypt hashes or zlib jobs queue behind 4 threads. You can raise <code>UV_THREADPOOL_SIZE</code> (set before startup). Network sockets don’t use the pool.</x-fu>
+
+<x-no>“libuv runs your JavaScript in its thread pool.”</x-no>
+<x-ev>Understanding beneath the API.</x-ev></x-q>
+
+<x-q n="2.39" tag="must solid"><x-t>What’s the difference between setTimeout() and setImmediate()?</x-t>
+<x-say>setTimeout runs in the timers phase after at least the delay; setImmediate runs in the check phase right after poll. Inside an I/O callback, setImmediate always runs first. In the main module their order is not guaranteed.</x-say>
+<x-simple><p>See the “setImmediate vs setTimeout in I/O” example in the widget.</p></x-simple>
+<x-eg>In a request handler that reads a file and then wants to “defer” work until after the current I/O phase, <code>setImmediate</code> is the predictable choice.</x-eg>
+
+<x-fu q="Which would you use to break a long CPU loop into chunks?">setImmediate between chunks, so I/O callbacks get a chance to run (nextTick or promises would starve them).</x-fu>
+<x-no>“setTimeout(fn, 0) and setImmediate are identical.”</x-no>
+<x-ev>Detailed Node knowledge.</x-ev></x-q>
+
+<x-q n="2.40" tag="must solid"><x-t>What is process.nextTick()?</x-t>
+<x-say>Node’s way to schedule a callback to run right after the current operation, before promise microtasks and before the event loop continues. It’s used inside Node’s APIs to make callbacks consistently async.</x-say>
+<x-simple><code>process.nextTick(fn)</code> queues fn in a Node-specific queue that is processed after the current operation completes, before promise microtasks and before the event loop continues to any phase. Node’s own APIs use it to emit events asynchronously but before any I/O (so listeners attached right after creating an object still receive events). Because it runs before I/O, recursive nextTick calls starve the event loop entirely. In ES modules the module body runs inside a promise job, so promise callbacks queued in the main module run before nextTick callbacks (verified: CJS prints A E D C B, ESM prints A E C D B).</x-simple>
+<x-eg>Node’s <code>stream</code> implementation uses nextTick to emit <code>'error'</code> after the constructor returns, so <code>stream.on('error', ...)</code> attached on the next line still catches it.</x-eg>
+<x-fu q="When would you use it over setImmediate?">Almost never in app code. nextTick for “after this function returns but before anything else” (e.g. emit an event after the caller attached listeners). setImmediate for “yield to I/O first”; it’s the safer default.</x-fu>
+
+<x-no>“nextTick runs on the next loop iteration.” It runs before the loop moves on at all; setImmediate is the one that waits.</x-no>
+<x-ev>Node depth.</x-ev></x-q>
+
+<x-q n="2.41" tag="must solid"><x-t>Does Node.js execute JavaScript in multiple threads?</x-t>
+<x-say>Your JavaScript runs on one main thread. Node itself uses extra threads (libuv thread pool, V8’s garbage collector and compiler). You get JS parallelism only with worker_threads, child processes, or running several processes (cluster, PM2, containers).</x-say>
+<x-simple>The process has several threads (V8 helpers for garbage collection and compilation, libuv’s pool, possibly worker threads), but each JavaScript context runs on exactly one thread at a time, so your request handlers never run in parallel with each other in one process. To use multiple cores you run multiple processes (the cluster module, PM2, several containers behind a load balancer) or worker threads for specific CPU-bound tasks. Shared state then has to live outside (Redis, the database).</x-simple>
+<x-eg>A Render or Kubernetes deployment with 3 instances = 3 independent Node processes; an in-memory rate limiter then counts per instance, not globally (DocMind’s limiter has this limitation).</x-eg>
+
+<x-fu q="What does the cluster module do?">Forks several Node processes sharing one server port; the primary distributes connections. Each worker has its own memory.</x-fu>
+<x-no>“Node is multi-threaded because of libuv, so handlers run in parallel.”</x-no>
+<x-ev>Accurate model.</x-ev></x-q>
+
+<x-q n="2.42" tag="should solid"><x-t>What is the worker thread module?</x-t>
+<x-say><code>node:worker_threads</code> runs JavaScript in separate threads, each with its own V8 instance and event loop, communicating via messages (and optionally SharedArrayBuffer). Use it for CPU-heavy work so the main thread keeps serving requests.</x-say>
+<x-simple>Each worker thread has its own V8 isolate, heap and event loop, so they don’t share JS objects; they communicate by <code>postMessage</code> (data is structured-cloned) or by transferring ArrayBuffers or sharing SharedArrayBuffer memory. Creating a worker costs tens of milliseconds and memory, so use a pool (e.g. Piscina) for repeated jobs. Use them for CPU-bound work (parsing large files, image processing, local embedding models); don’t use them for I/O, which is already async.</x-simple>
+<x-code><pre data-l="js">// main.js
+import { Worker } from 'node:worker_threads';
+function runHeavy(data) {
+  return new Promise((resolve, reject) => {
+    const w = new Worker(new URL('./heavy.js', import.meta.url), { workerData: data });
+    w.once('message', resolve); w.once('error', reject);
+  });
+}
+// heavy.js
+import { parentPort, workerData } from 'node:worker_threads';
+parentPort.postMessage(expensiveParse(workerData));</pre></x-code>
+
+<x-fu q="Worker threads or a job queue?">Worker threads keep the work in the same service and return results quickly. A queue with separate worker processes survives crashes, retries, scales independently, and is better for long jobs.</x-fu>
+<x-no>“Worker threads make async I/O faster.”</x-no>
+<x-ev>Knowing the escape hatch.</x-ev></x-q>
+
+<x-q n="2.43" tag="must basic"><x-t>What is the difference between CPU-bound and I/O-bound operations?</x-t>
+<x-say>CPU-bound work is limited by computation (hashing, image resizing, big JSON parsing). I/O-bound work is mostly waiting (database, HTTP, LLM calls). Node is excellent at I/O-bound work and needs help (workers, queues) for CPU-bound work.</x-say>
+<x-simple>Measure where time goes: CPU-bound code shows high CPU usage and the same duration regardless of network; I/O-bound code shows low CPU and time spent waiting. Node handles I/O-bound concurrency for free; CPU-bound work blocks the single JS thread. Typical CPU-bound tasks in AI backends: PDF parsing of big files, tokenising large texts, cosine similarity over large in-memory arrays, image resizing; I/O-bound: LLM calls, embeddings via API, database queries.</x-simple>
+<x-eg>An LLM call is I/O-bound for your server: 5 seconds of waiting, almost no CPU. Generating embeddings locally with a model would be CPU/GPU-bound.</x-eg>
+
+<x-fu q="Is calling an embeddings API CPU-bound?">No, for your server it’s I/O-bound (waiting on the network); the provider’s GPUs do the compute.</x-fu>
+<x-no>“Everything in an AI app is CPU-heavy.”</x-no>
+<x-ev>Architecture judgement.</x-ev></x-q>
+
+<x-q n="2.44" tag="must solid"><x-t>Why can a CPU-intensive operation block a Node.js server?</x-t>
+<x-say>Because all requests share one JS thread. While a callback is computing, the stack is never empty, so the event loop can’t run any other callback: every other request waits, timeouts fire, health checks fail.</x-say>
+<x-code><pre data-l="js">app.get('/slow', (req, res) => {
+  const end = Date.now() + 5000; while (Date.now() &lt; end) {}  // 5 s of CPU
+  res.send('done');            // meanwhile /health doesn't answer either
+});</pre></x-code>
+<x-eg>Parsing a 50 MB JSON upload with <code>JSON.parse</code> can take hundreds of ms; a regex with catastrophic backtracking (ReDoS) on user input can take seconds. During that time health checks time out and the platform may restart the instance.</x-eg>
+<x-fu q="How do you fix it?">Move the work off the main thread (worker_threads, a job queue with separate workers), break it into chunks with setImmediate between them, or use async/streaming APIs.</x-fu>
+
+<x-no>“It only slows down that one request.”</x-no>
+<x-ev>Production reasoning.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">2.4</span>Practical follow-up: predict the output</h2>
+<x-ex t="Predict the execution order (console.log, setTimeout, Promise.resolve, process.nextTick)" tag="must solid" open>
+<x-prob>Given a snippet containing <code>console.log</code>, <code>setTimeout</code>, <code>Promise.resolve</code> and <code>process.nextTick</code>, predict the execution order.</x-prob>
+<x-tests><pre data-l="js">console.log('start');
+setTimeout(() => console.log('timeout'), 0);
+Promise.resolve().then(() => {
+  console.log('promise 1');
+  process.nextTick(() => console.log('tick inside promise'));
+}).then(() => console.log('promise 2'));
+process.nextTick(() => console.log('tick'));
+setImmediate(() => console.log('immediate'));
+console.log('end');</pre></x-tests>
+<x-hint>Sync first. Then nextTick queue, then promise queue. A nextTick added from inside a promise callback runs after the promise queue is empty. Then timers vs check.</x-hint>
+<x-sol><pre data-l="text">start
+end
+tick
+promise 1
+promise 2
+tick inside promise
+timeout        (usually before immediate here; not guaranteed in the main module)
+immediate</pre>
+<p><b>Why:</b> <code>start</code>, <code>end</code> are synchronous. The stack empties: Node drains nextTick (<code>tick</code>), then the promise queue: <code>promise 1</code> runs and adds a nextTick; its <code>.then</code> queues <code>promise 2</code>, which also runs because Node finishes the current microtask queue first. Then the nextTick queue is checked again: <code>tick inside promise</code>. Then the loop: timers phase (<code>timeout</code>, if 1 ms has passed, which is typical) and check phase (<code>immediate</code>).</p></x-sol>
+<x-mist><ul><li>Putting <code>timeout</code> before promises.</li><li>Not knowing nextTick beats promises in CommonJS.</li><li>Claiming the timeout/immediate order is guaranteed in the main module.</li></ul></x-mist>
+</x-ex>
+<x-ex t="Three more predictions" tag="must solid">
+<x-prob>Predict each output, then reveal.</x-prob>
+<x-tests><pre data-l="js">// (a)
+async function a() { console.log(1); await b(); console.log(2); }
+async function b() { console.log(3); }
+a(); console.log(4);
+
+// (b)
+for (var i = 0; i &lt; 3; i++) setTimeout(() => console.log(i), 0);
+
+// (c)
+const p = new Promise((resolve) => { console.log('x'); resolve('y'); console.log('z'); });
+p.then(console.log); console.log('w');</pre></x-tests>
+<x-sol><p>(a) <code>1 3 4 2</code>: async functions run synchronously until the first await; b’s body runs immediately.</p><p>(b) <code>3 3 3</code>: one shared <code>var i</code>, read after the loop ended. With <code>let</code>: 0 1 2.</p><p>(c) <code>x z w y</code>: the executor runs synchronously; resolve doesn’t stop it; the <code>.then</code> callback is a microtask.</p></x-sol>
+</x-ex>
+
+<h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
+<x-quiz id="qz-p02">
+<x-mcq a="2"><x-t>What does <code>[1,2,3].map(async x => x * 2)</code> return?</x-t><x-o>[2, 4, 6]</x-o><x-o>A Promise of [2, 4, 6]</x-o><x-o>An array of three Promises</x-o><x-o>An error</x-o><x-why>map doesn’t await. Wrap it: <code>await Promise.all(arr.map(async ...))</code>.</x-why></x-mcq>
+<x-mcq a="1"><x-t>Output order: <code>setTimeout(A); Promise.resolve().then(B); process.nextTick(C); D();</code> (CommonJS, D logs synchronously)</x-t><x-o>A B C D</x-o><x-o>D C B A</x-o><x-o>D B C A</x-o><x-o>C D B A</x-o><x-why>Sync → nextTick → promise microtasks → timers.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Which values are falsy?</x-t><x-o>"0" and []</x-o><x-o>{} and "false"</x-o><x-o>" " (space)</x-o><x-o>0, "" and NaN</x-o><x-why>Falsy: false, 0, -0, 0n, "", null, undefined, NaN. Non-empty strings and all objects are truthy.</x-why></x-mcq>
+<x-mcq a="0"><x-t>You need 50 embeddings and 3 might fail. You want all successes. Use…</x-t><x-o>Promise.allSettled (ideally with a concurrency limit)</x-o><x-o>Promise.all</x-o><x-o>Promise.race</x-o><x-o>a for loop without await</x-o><x-why>allSettled keeps the successes; a limit protects the provider’s rate limit.</x-why></x-mcq>
+<x-mcq a="1"><x-t>A 3-second synchronous loop runs inside one Express handler. What happens to other requests?</x-t><x-o>They run in parallel on other cores</x-o><x-o>They wait until the loop finishes</x-o><x-o>libuv moves the loop to its thread pool</x-o><x-o>They fail immediately</x-o><x-why>One JS thread: nothing else runs until the stack empties.</x-why></x-mcq>
+<x-mcq a="2"><x-t><code>const o = {a:{b:1}}; const c = {...o}; c.a.b = 2;</code> What is <code>o.a.b</code>?</x-t><x-o>1</x-o><x-o>undefined</x-o><x-o>2</x-o><x-o>TypeError</x-o><x-why>Spread is shallow: <code>c.a</code> and <code>o.a</code> are the same object.</x-why></x-mcq>
+</x-quiz>

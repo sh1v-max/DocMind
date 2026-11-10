@@ -1,0 +1,268 @@
+<x-obj><ul><li>Run a 15-minute system design conversation with a repeatable method.</li><li>Design four AI applications end to end: document chat, quiz generator, support assistant, AI search.</li><li>Justify each component and say what you’d leave out at small scale.</li></ul></x-obj>
+<x-pre><ul><li>Phases 3–9. System design reuses all of them.</li></ul></x-pre>
+
+<h2 class="sec"><span class="k">10.A</span>The method</h2>
+<x-lesson t="How to run a junior system design interview" tag="must">
+<x-def>System design = turning a vague product request into components, data, APIs and flows, then stress-testing it with failures and growth.</x-def>
+<x-in><ol><li><b>Requirements (3 min):</b> users, core actions, non-functional needs (latency, scale: “1,000 users, 10 uploads/day each?”, privacy, cost). Write assumptions down out loud.</li><li><b>Components (3 min):</b> client, API, auth, database, object storage, queue + workers, LLM/embedding providers, cache, observability.</li><li><b>Data model (3 min):</b> tables and keys; who owns what.</li><li><b>API (2 min):</b> the 4–6 endpoints, request/response, sync vs async (202 + polling/SSE).</li><li><b>Data flow (3 min):</b> walk one request through every box. Interviewers explicitly want the flow, not just boxes.</li><li><b>Failure and scale (rest):</b> what if the LLM is down, a worker crashes, a user uploads 2,000 pages, traffic ×10. Where’s the bottleneck? What’s the first thing you’d add?</li></ol></x-in>
+<x-mist><ul><li>Starting with Kubernetes and microservices for 1,000 users.</li><li>Drawing boxes without data flow or ownership.</li><li>Forgetting authorization, cost and observability.</li></ul></x-mist>
+</x-lesson>
+
+<h2 class="sec"><span class="k">10.1</span>Document chat application</h2>
+<x-lesson t="Walkthrough: document chat" tag="must">
+<x-vis><x-w w="flow" f="sd_docchat"></x-w></x-vis>
+<x-impl><pre data-l="text">API
+POST /documents            → presigned upload URL + document row (status: uploading)
+POST /documents/:id/finish → enqueue ingest job → 202 { status: processing }
+GET  /documents            → list with status/progress
+DELETE /documents/:id      → owner check, delete row (cascade), delete file
+POST /conversations        → { documentIds[] }
+POST /conversations/:id/messages (SSE) → streamed answer + sources
+GET  /conversations/:id/messages
+
+TABLES  users · documents(user_id, storage_key, sha256, status, pages_done, pages_total)
+        chunks(document_id, chunk_index, content, embedding, page, heading)
+        conversations(user_id) · conversation_documents · messages(conversation_id, role, content, metadata jsonb)</pre></x-impl>
+<x-walk><ol><li>Upload: browser → presigned PUT to object storage (API never holds the bytes) → finish call → job queued.</li><li>Worker: download → extract → chunk → embed (batched, rate-limited) → insert chunks → status ready; progress counters updated.</li><li>Chat: auth → conversation owned by user? → rewrite query with history → embed → hybrid search filtered by the conversation’s documents and user → rerank → prompt with sources → stream → save both messages with sources and token usage.</li></ol></x-walk>
+<x-dm>DocMind is this design at a smaller scale: no object storage (PDF parsed in the request, 10 MB cap), BullMQ for embedding only, pgvector without an index, no conversations table (session ids on messages), SSE streaming, per-user scoping everywhere.</x-dm>
+</x-lesson>
+<x-q n="10.1.1" tag="must solid"><x-t>What components would you need?</x-t><x-say>Web client, API server with auth and rate limiting, Postgres with pgvector, object storage for files, a queue with workers for ingestion, embedding and LLM providers, and logging/metrics/tracing. Redis for the queue and caching.</x-say>
+<x-simple>Map each requirement to a component and say why it exists: the client for UI; one API service (auth, validation, rate limits, orchestration of chat); Postgres for relational data plus pgvector for chunks (one consistency boundary); object storage because files are large blobs; a queue + workers because ingestion is slow and must be retried; embedding and LLM providers behind a client with timeouts/retries/fallback; Redis for the queue and short caches; observability so you can debug quality, cost and latency. Then name what you’d skip at small scale (separate vector DB, microservices, Kubernetes).</x-simple>
+<x-eg>1,000 users, 10 uploads each per month, 50 questions per day each → one API instance + one worker + managed Postgres is enough; the LLM bill dominates cost.</x-eg>
+<x-fu q="What would you add first if traffic grew 10×?">More API instances behind a load balancer, autoscaled workers on queue depth, a pooled DB endpoint, an HNSW index, and per-user budgets.</x-fu>
+<x-no>Listing technologies without saying why each is needed.</x-no>
+<x-ev>Completeness without over-building.</x-ev></x-q>
+<x-q n="10.1.2" tag="must basic"><x-t>How would the frontend communicate with the backend?</x-t><x-say>HTTPS JSON REST for CRUD, Server-Sent Events for streamed answers, direct-to-storage presigned uploads for files, and polling or SSE for ingestion status. Auth token in the Authorization header (or httpOnly cookie on the same site).</x-say>
+<x-simple>Request/response JSON for CRUD (documents list, delete, conversations), multipart or presigned uploads for files, SSE for the streamed answer (one-way, works over HTTP, simple with fetch), and polling or SSE for ingestion progress. Auth via a Bearer token or a same-site httpOnly cookie. WebSockets only if you need bidirectional real-time features (collaboration, live typing).</x-simple>
+<x-eg><code>POST /conversations/:id/messages</code> returns <code>text/event-stream</code> with events meta → delta… → sources → done.</x-eg>
+<x-fu q="Why not WebSockets for chat?">SSE is enough for server-to-client token streaming, simpler to scale and proxy, and works with normal HTTP auth; WebSockets add connection management you don’t need.</x-fu>
+<x-no>“Poll every 100 ms for new tokens.”</x-no>
+<x-ev>Protocol choices.</x-ev></x-q>
+<x-q n="10.1.3" tag="must basic"><x-t>Where would you store uploaded documents?</x-t><x-say>In object storage (S3, R2, GCS) under a key like <code>users/{userId}/{documentId}.pdf</code>, private, accessed through short-lived signed URLs; the database stores only the key and metadata.</x-say>
+<x-simple>Object storage is cheap, durable, scales without limits, and serves large files without loading your API. Keep buckets private; generate short-lived presigned URLs for upload and download; store only the key, size, content type and hash in the database; set lifecycle rules (delete originals after N days if you only need chunks); scan or validate files after upload.</x-simple>
+<x-eg><code>PUT</code> to a presigned URL for <code>users/u_42/docs/d_9.pdf</code> valid for 5 minutes; then <code>POST /documents/d_9/finish</code> to start ingestion.</x-eg>
+<x-fu q="Why not store PDFs in Postgres bytea?">It bloats the database, backups and replication, and streaming large values through the DB is inefficient.</x-fu>
+<x-no>Saving uploads on the API server’s local disk (lost on redeploy, not shared between instances).</x-no>
+<x-ev>Right storage for blobs.</x-ev></x-q>
+<x-q n="10.1.4" tag="must basic"><x-t>Where would you store extracted text?</x-t><x-say>Chunk text in the chunks table next to its embedding (needed for prompts and keyword search); optionally the full extracted text as a file in object storage for re-chunking later without re-extracting.</x-say>
+<x-eg>Chunk text in <code>chunks.content</code> (prompt + keyword search); the full cleaned text as <code>users/u_42/docs/d_9.txt</code> in storage for re-chunking experiments.</x-eg>
+<x-fu q="Why keep the full extracted text?">Extraction can be slow or paid (OCR); having it lets you change chunking or embedding models without re-extracting.</x-fu>
+<x-no>Storing only vectors.</x-no>
+<x-ev>Reasoning.</x-ev></x-q>
+<x-q n="10.1.5" tag="must basic"><x-t>Where would you store embeddings?</x-t><x-say>In Postgres with pgvector on the chunks table at this scale (joins with ownership, transactions, one system); a dedicated vector DB only when scale or features demand it.</x-say>
+<x-eg>Postgres + pgvector: <code>chunks.embedding vector(1536)</code> with an HNSW index once the table is large.</x-eg>
+<x-fu q="When would you move embeddings to a dedicated vector DB?">At very large scale or QPS, or when you need features like built-in hybrid search across billions of vectors, accepting the sync complexity.</x-fu>
+<x-no>“Embeddings must go in a vector database.”</x-no>
+<x-ev>Pragmatism.</x-ev></x-q>
+<x-q n="10.1.6" tag="must solid"><x-t>How would you structure the database?</x-t><x-say>users → documents (owner, status, hash) → chunks (embedding, text, page, heading); conversations (owner) ↔ documents via a join table; messages per conversation with metadata JSONB for sources and usage. Foreign keys with cascade, indexes on owner and conversation, unique (document_id, chunk_index).</x-say>
+<x-eg>See lesson 4.A’s schema: users → documents → chunks; conversations ↔ documents; messages with JSONB metadata.</x-eg>
+<x-fu q="How would you support shared documents between users?">A <code>document_access(document_id, user_id, role)</code> table and retrieval that joins through it instead of a single owner column.</x-fu>
+<x-no>One big table with everything.</x-no>
+<x-ev>Data modelling.</x-ev></x-q>
+<x-q n="10.1.7" tag="must solid"><x-t>How would you process uploaded documents?</x-t><x-say>Asynchronously: the API records the document and enqueues a job; workers extract, clean, chunk, embed in batches and store; the job is idempotent and retried; status and progress are updated; failures are recorded with a reason.</x-say>
+<x-eg>API: insert row + enqueue job (jobId = documentId) → 202. Worker: download → extract → chunk → embed (batches, rate limited) → transaction (delete old chunks, insert new, status ready) → on final failure, status failed + error.</x-eg>
+<x-fu q="How do you prevent two workers processing the same document?">Stable job id per document (the queue rejects duplicates) and idempotent writes in case it still happens.</x-fu>
+<x-no>Processing inside the upload request.</x-no>
+<x-ev>Async design.</x-ev></x-q>
+<x-q n="10.1.8" tag="must solid"><x-t>How would you implement RAG?</x-t><x-say>Rewrite the question with history, embed it, hybrid retrieval scoped to the conversation’s documents and the user, rerank the top 30–50 to 5–8, build a labelled context, generate with grounding and citations, stream, and evaluate offline with a labelled set.</x-say>
+<x-eg>The full code in Phase 7’s implementation lesson: <code>rewrite → retrieve (hybrid, owner-scoped) → context → grounded generation</code>.</x-eg>
+<x-fu q="How would you show citations in the UI?">Return source ids with filename/page and a preview; render [n] markers as links that open the source.</x-fu>
+<x-no>“Embed the question and send top-3 to the LLM” with nothing about filters or grounding.</x-no>
+<x-ev>Applied RAG.</x-ev></x-q>
+<x-q n="10.1.9" tag="must basic"><x-t>How would you manage chat history?</x-t><x-say>Store every message in the database; send the last N turns (by token budget) to the model; summarise older turns into a running summary when conversations get long; keep sources and tool results in metadata so reopened chats are complete.</x-say>
+<x-eg>Last 10 turns or 3,000 tokens, plus a running summary of older turns stored on the conversation row and updated every N messages.</x-eg>
+<x-code><pre data-l="js">async function buildHistory(conversationId, userId, budget = 3000) {
+  const msgs = await repo.recentMessages(conversationId, userId, 30);          // newest first, scoped to the user
+  const out = []; let used = 0;
+  for (const m of msgs) { const t = estimateTokens(m.content); if (used + t &gt; budget) break; out.unshift(m); used += t; }
+  const summary = await repo.conversationSummary(conversationId, userId);      // updated in the background
+  return summary ? [{ role: 'system', content: `Earlier conversation summary: ${summary}` }, ...out] : out;
+}</pre></x-code>
+<x-fu q="Where do sources go in history?">Store them in message metadata for display; usually don’t resend old sources to the model, only the answer text.</x-fu>
+<x-no>Sending the entire conversation every time.</x-no>
+<x-ev>Memory management.</x-ev></x-q>
+<x-q n="10.1.10" tag="must basic"><x-t>How would you handle multiple users?</x-t><x-say>Authentication on every request, an owner column on every user-owned table, every query filtered by the user id from the token, per-user quotas and rate limits.</x-say>
+<x-eg>Every repository function requires userId; every route gets it from req.user.id; tests try cross-user access on each endpoint.</x-eg>
+<x-fu q="What about per-user resource limits?">Caps on documents, storage, messages per minute and daily tokens, enforced in services and the rate limiter.</x-fu>
+<x-no>“Different users have different URLs, so it’s isolated.”</x-no>
+<x-ev>Multi-tenancy basics.</x-ev></x-q>
+<x-q n="10.1.11" tag="must solid"><x-t>How would you enforce document permissions?</x-t><x-say>In the data layer: repository functions require a userId and include it in every WHERE/JOIN (including vector search); someone else’s id returns 404; shared documents use an ACL table checked the same way; optionally Postgres row-level security as a backstop.</x-say>
+<x-eg><code>SELECT … FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.user_id = $1 AND d.id = ANY($2)</code>: the document set comes from the conversation (validated), the user from the token.</x-eg>
+<x-fu q="What is row-level security?">Postgres policies that filter rows by a session variable (e.g. current user id), enforcing isolation even if a query forgets the WHERE clause.</x-fu>
+<x-no>Checking permissions only when listing documents but not in vector search.</x-no>
+<x-ev>Security.</x-ev></x-q>
+<x-q n="10.1.12" tag="must basic"><x-t>How would you track ingestion status?</x-t><x-say>A status column (uploading, processing, ready, failed) plus progress counters and an error message on the document row, updated by workers; the client polls or subscribes via SSE; chat refuses non-ready documents with 409.</x-say>
+<x-eg><code>documents(status, pages_done, pages_total, error)</code>; the UI shows “Processing 34/120 pages” and enables chat when ready.</x-eg>
+<x-fu q="Polling or push?">Polling with backoff is simple and robust (DocMind polls every 2 s, then 10 s); SSE/WebSocket push is nicer for many long jobs.</x-fu>
+<x-no>Showing “ready” as soon as the upload request returns.</x-no>
+<x-ev>UX + correctness.</x-ev></x-q>
+<x-q n="10.1.13" tag="must solid"><x-t>How would you handle large files?</x-t><x-say>Size and page limits, direct-to-storage uploads, workers processing page ranges with bounded memory, batched embeddings, progress tracking, partial retries per range.</x-say>
+<x-eg>200 MB PDF: browser uploads directly to storage in parts; worker processes 50 pages per job; memory stays under 500 MB; progress is visible; a failed range is retried alone.</x-eg>
+<x-fu q="What limits would you enforce?">Max file size, max pages, per-user storage quota, and a timeout per range job.</x-fu>
+<x-no>Increasing server memory and request timeouts.</x-no>
+<x-ev>Scale thinking.</x-ev></x-q>
+<x-q n="10.1.14" tag="must solid"><x-t>How would you scale document processing?</x-t><x-say>Add workers horizontally (the queue distributes jobs), split big documents into page-range jobs, cap per-worker concurrency to provider rate limits, prioritise small/paid jobs, and autoscale on queue depth.</x-say>
+<x-eg>Queue depth rises to 5,000 jobs at 9 a.m.; the autoscaler adds workers up to the provider’s rate limit; small documents are prioritised so most users see results quickly.</x-eg>
+<x-fu q="What stops more workers from helping?">The embedding provider’s rate limit and the database’s write capacity; past that point, more workers just get 429s.</x-fu>
+<x-no>“Add more API servers” (ingestion runs in workers).</x-no>
+<x-ev>Scaling.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">10.2</span>AI quiz generator</h2>
+<x-lesson t="Walkthrough: quiz generator" tag="must"><x-vis><x-w w="flow" f="sd_quiz"></x-w></x-vis>
+<x-impl><pre data-l="sql">quizzes(id, user_id, document_id, status, idempotency_key UNIQUE per user, created_at)
+questions(id, quiz_id, position, question, options jsonb, correct_index, explanation, source_chunk_id,
+          question_embedding vector(768), status)   -- draft | approved | rejected</pre></x-impl></x-lesson>
+<x-q n="10.2.1" tag="must basic"><x-t>How would you extract information?</x-t><x-say>Reuse the ingestion pipeline (extract, clean, chunk); for quizzes, sample chunks to cover the whole material (per section or evenly spaced), not a similarity search.</x-say>
+<x-simple>Reuse ingestion (extract, clean, chunk with section metadata), then choose source passages for coverage: sample chunks evenly or per section/topic, optionally extract key facts or learning objectives first with an LLM, and keep the source chunk id for every generated question. Similarity search is the wrong tool here because a quiz should cover the material, not one topic.</x-simple>
+<x-eg>A 10-section chapter, 20 questions → 2 per section from evenly sampled chunks.</x-eg><x-dm>DocMind’s quiz uses <code>sampleChunks</code> for broad coverage, not <code>searchSimilar</code>.</x-dm>
+<x-fu q="How would you let users pick topics?">Store section/heading metadata and filter chunks by the chosen sections.</x-fu>
+<x-no>“Search for chunks similar to the word ‘quiz’.”</x-no>
+<x-ev>Coverage awareness.</x-ev></x-q>
+<x-q n="10.2.2" tag="must basic"><x-t>How would you generate questions?</x-t><x-say>An LLM call per section or batch in structured-output mode with a schema (question, 4 options, correct index, explanation, source chunk), low-moderate temperature, instructions to use only the given text and vary difficulty.</x-say>
+<x-simple>Structured generation per batch: give the model the source passages, the number and type of questions, difficulty mix, and rules (one correct answer, plausible distractors, no “all of the above”, answerable from the text only), and request JSON with a schema including the source chunk id and an explanation. Generate in small batches (5–10) for better quality and easier retries, with a concurrency cap.</x-simple>
+<x-code><pre data-l="js">const Batch = z.object({ questions: z.array(z.object({
+  question: z.string().min(10), options: z.array(z.string().min(1)).length(4),
+  correctIndex: z.number().int().min(0).max(3), explanation: z.string(), sourceChunkId: z.number().int(),
+})).min(1).max(10) });</pre></x-code>
+<x-fu q="Why include an explanation?">Learners see why an answer is right, and it helps reviewers and judge models verify the key.</x-fu>
+<x-no>One huge call for 100 questions.</x-no>
+<x-ev>Structured generation.</x-ev></x-q>
+<x-q n="10.2.3" tag="must solid"><x-t>How would you validate generated questions?</x-t><x-say>Zod schema (exactly 4 distinct options, index 0–3), business checks (answer supported by the source chunk, no “all of the above”), an optional judge pass that answers the question from the source to confirm the key, shuffle options in code, retry invalid ones.</x-say>
+<x-eg>Reject: two identical options; correctIndex 4; explanation that contradicts the source; a question whose answer appears in its own wording.</x-eg><x-dm>DocMind retries once, then 502, and shuffles options because answer positions were skewed (22/36/32/10%).</x-dm>
+<x-fu q="How would a judge verify the key?">Give a second model the source and the question with shuffled options, ask it to answer; flag disagreements for review or regeneration.</x-fu>
+<x-no>“The model said it’s correct, so it is.”</x-no>
+<x-ev>Quality control.</x-ev></x-q>
+<x-q n="10.2.4" tag="must solid"><x-t>How would you prevent duplicate questions?</x-t><x-say>Normalise and compare text, embed each question and drop any with cosine similarity above a threshold to existing ones in the quiz, pass existing questions to the generator as “don’t repeat”, and a unique constraint on normalised text per quiz.</x-say>
+<x-eg>Embed each new question; if cosine similarity with any existing question in the quiz &gt; 0.92, drop and regenerate.</x-eg>
+<x-code><pre data-l="js">const isDuplicate = (vec, existing, threshold = 0.92) =&gt; existing.some((e) =&gt; cosine(vec, e) &gt; threshold);</pre></x-code>
+<x-fu q="Where do you store question embeddings?">A vector column on questions, or computed on the fly for a single quiz.</x-fu>
+<x-no>Only exact text comparison.</x-no>
+<x-ev>Dedup techniques.</x-ev></x-q>
+<x-q n="10.2.5" tag="must basic"><x-t>How would you store questions and answers?</x-t><x-say>A quizzes table and a questions table (one row per question with options JSONB, correct index, explanation, source chunk id, position, status), plus attempts/answers tables if users take quizzes server-side.</x-say>
+<x-eg><code>questions(id, quiz_id, position, question, options jsonb, correct_index, explanation, source_chunk_id, status)</code>; <code>attempts(id, quiz_id, user_id, started_at, score)</code>; <code>answers(attempt_id, question_id, chosen_index, correct)</code>.</x-eg>
+<x-fu q="Should the correct answer be sent to the client?">If grading happens server-side, no: send it only after submission (DocMind grades client-side and includes it, acceptable for self-study).</x-fu>
+<x-no>Storing the quiz only as one JSON blob when you need per-question regeneration and stats.</x-no>
+<x-ev>Modelling.</x-ev></x-q>
+<x-q n="10.2.6" tag="must solid"><x-t>How would you handle partially completed generation?</x-t><x-say>Generate in batches saved as drafts with a status; on failure keep finished batches and retry only missing ones (idempotent by quiz + batch number); show progress; mark the quiz ready only when the target count is met or let the user accept fewer.</x-say><x-ev>Resilience.</x-ev></x-q>
+<x-q n="10.2.7" tag="must basic"><x-t>How would you allow users to regenerate individual questions?</x-t><x-say><code>POST /quizzes/:id/questions/:qid/regenerate</code>: owner check, regenerate from the same source chunk with the other questions as “avoid”, validate, replace that row (or version it), keep position.</x-say>
+<x-eg><code>POST /quizzes/q_1/questions/q_7/regenerate</code> → 202 → the job regenerates from chunk 312, passing the other 19 questions as “avoid”, validates, replaces row q_7 (keeping position), and records the old version.</x-eg>
+<x-fu q="How do you keep stats meaningful after regeneration?">Version questions; attempts reference the version they used.</x-fu>
+<x-no>Regenerating the whole quiz.</x-no>
+<x-ev>API design.</x-ev></x-q>
+<x-q n="10.2.8" tag="must solid"><x-t>How would you evaluate question quality?</x-t><x-say>Automatic checks (answerable from source, single correct option, distractor plausibility via a judge model, difficulty spread), user signals (reports, skip rate, correct rate per question), and periodic human review of samples.</x-say>
+<x-eg>Weekly: 2% of questions reported, 5% answered correctly by under 10% of learners (probably wrong key), judge agreement 96%.</x-eg>
+<x-fu q="Which signal finds wrong answer keys fastest?">Questions where most strong learners pick the same “wrong” option.</x-fu>
+<x-no>Only checking that the JSON is valid.</x-no>
+<x-ev>Evaluation mindset.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">10.3</span>AI customer support assistant</h2>
+<x-lesson t="Walkthrough: support assistant" tag="must"><x-vis><x-w w="flow" f="sd_support"></x-w></x-vis></x-lesson>
+<x-q n="10.3.1" tag="must basic"><x-t>How would you ingest company documents?</x-t><x-say>Connectors or uploads for help-centre articles, PDFs and FAQs; scheduled re-sync with change detection (hash/updated_at) to re-embed only changed docs; structure-aware chunking by heading; metadata for product, version, audience and visibility.</x-say>
+<x-simple>Pull from sources (help centre, docs site, PDFs, internal wiki) with connectors or scheduled crawls; detect changes by updated_at or content hash; re-ingest only changed documents; chunk by headings; keep metadata (product, version, audience: public/internal, URL, last updated) and delete chunks for removed pages. Track freshness: answers should cite the latest version.</x-simple>
+<x-eg>Nightly sync job: 1,200 articles checked, 14 changed → re-embedded; 2 deleted → chunks removed.</x-eg>
+<x-fu q="How do you avoid serving internal-only docs to customers?">A visibility field filtered at retrieval time based on the caller type.</x-fu>
+<x-no>A one-time manual upload with no sync.</x-no>
+<x-ev>Freshness.</x-ev></x-q>
+<x-q n="10.3.2" tag="must basic"><x-t>How would you retrieve relevant information?</x-t><x-say>Hybrid search (product names and error codes need keywords) with metadata filters (product, version, public vs internal), reranking, and query rewriting from the conversation.</x-say>
+<x-simple>Hybrid search (product names, error codes, plan names need keyword matching), query rewriting from the conversation, metadata filters (product, version, customer plan, visibility), reranking, and a relevance threshold that triggers clarification or escalation instead of a weak answer.</x-simple>
+<x-eg>“Error 0x80070005 on the desktop app” → keyword hit on the exact code + vector hits on “permission denied” articles → rerank.</x-eg>
+<x-fu q="How would you handle multiple product versions?">Filter by the customer’s version when known; otherwise ask, or show version-labelled answers.</x-fu>
+<x-no>Vector search only.</x-no>
+<x-ev>Retrieval design.</x-ev></x-q>
+<x-q n="10.3.3" tag="must solid"><x-t>How would you maintain customer context?</x-t><x-say>The authenticated customer’s profile, plan and recent orders loaded through read-only tools scoped to their id; conversation history with summaries; a ticket id linking sessions.</x-say>
+<x-simple>Customer context comes from authenticated data, not from what they type: account, plan, region, recent orders/tickets via read-only tools scoped to their id, plus conversation history and a summary carried into escalations. Load only what the question needs (tools on demand) to limit tokens and exposure.</x-simple>
+<x-eg>“Where is my order?” → getRecentOrders(customerId from session) → “Order #A12 shipped yesterday, tracking …”.</x-eg>
+<x-fu q="Should the whole customer profile be in the system prompt?">No; fetch what’s needed through tools to save tokens and reduce exposure.</x-fu>
+<x-no>Trusting an order id typed by the user without checking it belongs to them.</x-no>
+<x-ev>Context design.</x-ev></x-q>
+<x-q n="10.3.4" tag="must solid"><x-t>How would you prevent access to another customer’s information?</x-t><x-say>Customer and tenant ids come only from the session; every tool and query is scoped by them; the model can’t pass ids for other customers; internal-only docs filtered by visibility; tests that try cross-customer access.</x-say>
+<x-eg><code>getOrder({ orderId })</code> runs <code>WHERE id = $1 AND customer_id = $2</code> with $2 from the session; another customer’s order id returns “not found”.</x-eg>
+<x-fu q="What about multi-tenant B2B (companies with many users)?">Scope by tenant id from the session in every query and index; add per-tenant encryption keys or separate schemas if contracts require it.</x-fu>
+<x-no>Putting the customer id into the prompt and trusting the model to respect it.</x-no>
+<x-ev>Security.</x-ev></x-q>
+<x-q n="10.3.5" tag="must basic"><x-t>How would you escalate unresolved queries to human support?</x-t><x-say>Escalate on user request, low retrieval confidence, repeated failed answers, negative sentiment, or policy topics; create a ticket in the helpdesk with the transcript and a summary; tell the user what happens next.</x-say>
+<x-simple>Triggers: explicit request (“talk to a human”), low retrieval confidence or “not found” answers, repeated rephrasing, negative sentiment, policy topics (refunds above a threshold, legal), or VIP accounts. The handoff creates a ticket in the helpdesk with the transcript, a short summary, detected intent and the customer’s context, and tells the customer what happens next and when.</x-simple>
+<x-code><pre data-l="js">const shouldEscalate = ({ userAsked, topScore, notFoundCount, sentiment, topic }) =&gt;
+  userAsked || topScore &lt; 0.35 || notFoundCount &gt;= 2 || sentiment === 'angry' || ['legal', 'refund_exception'].includes(topic);</pre></x-code>
+<x-fu q="How do you measure escalation quality?">Escalation rate, time to human response, and whether humans needed to re-ask questions already answered in the transcript.</x-fu>
+<x-no>Never escalating, or escalating everything.</x-no>
+<x-ev>Product sense.</x-ev></x-q>
+<x-q n="10.3.6" tag="must solid"><x-t>How would you detect unsupported questions?</x-t><x-say>No chunk above a relevance threshold, the model’s explicit “not found” output, a classifier for out-of-scope topics, and missing citations; respond honestly and offer escalation instead of guessing.</x-say>
+<x-eg>Question about a competitor’s product, or a policy not in the docs: retrieval top score 0.21 (below threshold) → “I don’t have information on that. Would you like me to connect you with our team?”</x-eg>
+<x-fu q="Can the model itself decide it’s unsupported?">Yes, with an instruction to output a not-found marker; combine it with retrieval scores for reliability.</x-fu>
+<x-no>Letting the model answer from general knowledge.</x-no>
+<x-ev>Safety.</x-ev></x-q>
+<x-q n="10.3.7" tag="must solid"><x-t>How would you measure answer quality?</x-t><x-say>Offline eval set (faithfulness, correctness, retrieval recall), online metrics (resolution rate, escalation rate, thumbs up/down, repeat contacts), and reviewing a sample of conversations weekly.</x-say>
+<x-eg>Dashboard: resolution without escalation 62%, thumbs-up 81%, faithfulness on the eval set 0.94, repeat contact within 24 h 9%.</x-eg>
+<x-fu q="Why track repeat contacts?">A “resolved” conversation followed by another contact on the same topic means the answer didn’t actually help.</x-fu>
+<x-no>Measuring only response time.</x-no>
+<x-ev>Evaluation.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">10.4</span>General system design scenarios</h2>
+<x-lesson t="Walkthrough: AI-powered search" tag="should"><x-vis><x-w w="flow" f="sd_search"></x-w></x-vis></x-lesson>
+<x-q n="10.4.1" tag="must solid"><x-t>Design a chat application supporting multiple conversations.</x-t><x-say>conversations (owner, title, created_at) and messages (conversation_id, role, content, created_at, id for ordering); endpoints to list/create/rename/delete conversations and stream messages; title generated from the first message; history window + summaries per conversation; pagination by message id.</x-say>
+<x-eg>Sidebar of conversations (title, last message time), rename/delete, a new conversation per topic; messages paginated by id; conversations scoped to the user.</x-eg>
+<x-code><pre data-l="sql">CREATE TABLE conversations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title text, summary text, created_at timestamptz NOT NULL DEFAULT now(), last_message_at timestamptz);
+CREATE INDEX ON conversations (user_id, last_message_at DESC);
+CREATE TABLE messages (id bigserial PRIMARY KEY, conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role text NOT NULL, content text NOT NULL, metadata jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX ON messages (conversation_id, id);</pre></x-code><x-dm>DocMind derives sessions from messages (no sessions table); a real conversations table would make titles, renames and per-session scope explicit.</x-dm>
+<x-fu q="How would you generate titles?">From the first user message (truncate) or a cheap model call after the first exchange, done in the background.</x-fu>
+<x-no>Ordering messages by created_at only (ties).</x-no>
+<x-ev>Modelling.</x-ev></x-q>
+<x-q n="10.4.2" tag="must solid"><x-t>Design a background document-processing system.</x-t><x-say>API records the document and enqueues (stable job id); a Redis/SQS queue; stateless workers with concurrency limits, retries with backoff, idempotent steps, dead-letter queue for permanent failures; status + progress on the row; metrics on queue depth and failure rate; autoscaling on depth.</x-say>
+<x-eg>Upload → queue → worker pool (concurrency per worker 2, autoscale 1–10 on depth) → DLQ after 5 attempts → admin view of failed jobs with “retry” button.</x-eg><x-vis><x-w w="flow" f="queue"></x-w></x-vis>
+<x-fu q="What’s a dead-letter queue for?">Holding jobs that failed permanently so they don’t block the queue and can be inspected and retried after a fix.</x-fu>
+<x-no>Retrying failed jobs forever.</x-no>
+<x-ev>Async architecture.</x-ev></x-q>
+<x-q n="10.4.3" tag="must solid"><x-t>Design a URL summarization service.</x-t><x-say>POST /summaries { url } → validate URL and block private IPs (SSRF protection), cache by normalised URL + content hash, fetch with timeout and size limit in a worker, extract main content (readability), chunk and map-reduce summarise for long pages, store and return; respect robots and rate-limit per user.</x-say>
+<x-code><pre data-l="js">import dns from 'node:dns/promises';
+import net from 'node:net';
+const isPrivate = (ip) =&gt; /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/.test(ip) || ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80');
+async function assertPublicUrl(raw) {
+  const url = new URL(raw);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new HttpError(400, 'Only http(s) URLs');
+  const addrs = net.isIP(url.hostname) ? [url.hostname] : (await dns.lookup(url.hostname, { all: true })).map((a) =&gt; a.address);
+  if (addrs.some(isPrivate)) throw new HttpError(400, 'URL not allowed');
+  return url;   // also: fetch with redirect: 'manual' and re-check each hop; cap size and time
+}</pre></x-code><x-fu q="Why block private IPs?">Otherwise users can make your server fetch internal endpoints (cloud metadata at 169.254.169.254, internal admin APIs): server-side request forgery.</x-fu>
+<x-fu q="Why re-check after redirects?">A public URL can redirect to an internal address; each hop must be validated.</x-fu>
+<x-no>Fetching any URL the user sends.</x-no>
+<x-ev>Security + caching.</x-ev></x-q>
+<x-q n="10.4.4" tag="must solid"><x-t>Design an AI-powered search engine.</x-t><x-say>Ingestion into keyword and vector indexes with metadata; query understanding; parallel BM25 + ANN search with permission filters; RRF fusion; cross-encoder rerank; optional LLM answer with citations above the results; caching of popular queries; evaluation with NDCG and click data.</x-say>
+<x-eg>Developer docs search: “how to paginate list endpoint” → BM25 + ANN → RRF → rerank top 50 → 10 results + a 3-sentence cited answer.</x-eg>
+<x-fu q="How do you evaluate it?">Labelled queries with graded relevance → NDCG@10 offline; click-through and “no result clicked” rate online.</x-fu>
+<x-no>“Just use an LLM to answer everything without results.”</x-no>
+<x-ev>Retrieval architecture.</x-ev></x-q>
+<x-q n="10.4.5" tag="must solid"><x-t>Design a system that generates reports from database records.</x-t><x-say>Compute numbers with SQL (never let the LLM do arithmetic on raw rows), pass aggregated results to the LLM for narrative only, generate in a background job, store versioned reports, schedule with cron, restrict the data each user may report on; for “ask your data” features, generate read-only SQL against an allow-listed view with a statement timeout and validate it.</x-say>
+<x-eg>Monthly sales report: SQL computes totals by region and month-over-month change; the LLM receives the table (not raw rows) and writes three paragraphs; numbers in the text are checked against the table before publishing.</x-eg>
+<x-fu q="How do you stop the LLM from inventing numbers?">Provide all numbers it may use, instruct it to use only those, and validate that every number in the output appears in the input table.</x-fu>
+<x-no>Sending 50,000 raw rows to the LLM to compute totals.</x-no>
+<x-ev>Correct division of labour.</x-ev></x-q>
+<x-q n="10.4.6" tag="must solid"><x-t>Design an API that supports streaming LLM responses.</x-t><x-say>POST endpoint returning text/event-stream: named events (meta, delta, sources, done, error), heartbeat comments to keep proxies from closing idle connections, abort the provider call on client disconnect, save the final message after streaming, disable proxy buffering, and design errors after headers as in-band events.</x-say>
+<x-eg>Event contract: <code>event: meta</code> {conversationId}, unnamed <code>data</code> {text} per delta, <code>event: sources</code>, <code>event: done</code>, <code>event: error</code>; a comment line <code>: ping</code> every 15 s.</x-eg><x-dm>DocMind’s /chat-stream protocol: meta, status, sources, action, unnamed text pieces, done, error; additive events are safe because the client ignores unknown ones.</x-dm>
+<x-fu q="How do you scale many open streams?">Node handles many idle connections well; make sure proxies/load balancers allow long-lived responses and set idle timeouts above your heartbeat interval.</x-fu>
+<x-no>Buffering the whole answer and sending it at the end.</x-no>
+<x-ev>Streaming design.</x-ev></x-q>
+<x-q n="10.4.7" tag="must solid"><x-t>Design an application supporting multiple LLM providers.</x-t><x-say>A provider-neutral interface (generate, stream, embed, tools) with adapters; config-driven model routing per task; fallback chain on 429/5xx/timeout; normalised usage logging and cost tables; a shared eval set run per provider before switching; per-provider rate limiters.</x-say>
+<x-eg>Config: <code>{ router: 'gemini/flash-lite', answer: ['openai/large', 'gemini/flash'], embed: 'openai/text-embedding-…' }</code> with an adapter per provider and a fallback chain for the answer task.</x-eg>
+<x-fu q="Can embeddings fall back to another provider?">Not transparently: vectors from different models are incompatible; embedding fallback needs a pre-built parallel index or must wait/queue.</x-fu>
+<x-no>“Switching providers is just changing the model string.”</x-no>
+<x-ev>Abstraction + resilience.</x-ev></x-q>
+<x-q n="10.4.8" tag="must solid"><x-t>Design an AI application with user-specific memory.</x-t><x-say>A memories table (user_id, text, embedding, type, source, created_at, expires_at); extraction of durable facts after conversations (with user visibility and delete controls); retrieval of relevant memories per request by similarity + recency; strict user scoping; privacy controls and PII handling.</x-say>
+<x-eg>After a conversation, a background job extracts “prefers TypeScript examples; works on a Postgres stack”; next session, the top 3 relevant memories are added to the system prompt; a “What I remember about you” page allows edits and deletion.</x-eg>
+<x-code><pre data-l="sql">CREATE TABLE memories (id bigserial PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text text NOT NULL, embedding vector(768) NOT NULL, kind text NOT NULL, source_message_id bigint,
+  created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz);
+-- retrieve: WHERE user_id = $1 AND (expires_at IS NULL OR expires_at &gt; now()) ORDER BY embedding &lt;=&gt; $2 LIMIT 3</pre></x-code>
+<x-fu q="How do you prevent poisoned memories?">Only extract from the user’s own messages (not documents/tool results), validate extracted memories, and let users review them.</x-fu>
+<x-no>Saving every message as a memory.</x-no>
+<x-ev>Privacy-aware design.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
+<x-quiz id="qz-p10">
+<x-mcq a="1"><x-t>Where should uploaded PDFs live?</x-t><x-o>A bytea column</x-o><x-o>Object storage, with the key in the database</x-o><x-o>The API server’s disk</x-o><x-o>Redis</x-o><x-why>Blobs belong in object storage; servers are ephemeral.</x-why></x-mcq>
+<x-mcq a="2"><x-t>For a quiz over a whole chapter, choose chunks by…</x-t><x-o>Top-3 similarity to “quiz”</x-o><x-o>The first 3 chunks</x-o><x-o>Sampling across the chapter for coverage</x-o><x-o>Random documents</x-o><x-why>Coverage, not similarity.</x-why></x-mcq>
+<x-mcq a="0"><x-t>URL summarizer: the biggest security risk to address first?</x-t><x-o>SSRF (fetching internal addresses)</x-o><x-o>CORS</x-o><x-o>JWT expiry</x-o><x-o>Temperature</x-o><x-why>Your server fetches user-supplied URLs.</x-why></x-mcq>
+</x-quiz>

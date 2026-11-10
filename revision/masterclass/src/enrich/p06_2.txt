@@ -1,0 +1,12 @@
+@Q 6.4
+S: Dimensionality is the length of each vector, fixed by the model (some let you request a shorter output). Each extra dimension adds capacity to separate meanings, but also storage (4 bytes per float32 dimension), memory for indexes, and compute per comparison. Dimension doesn’t depend on input length: a word and a page both become, say, 1,536 numbers.
+Q: Can you just cut a vector to fewer dimensions?
+A: Only if the model was trained for it (Matryoshka-style models like many current ones); truncating other models’ vectors degrades quality badly. Re-normalise after truncating.
+@Q 6.11
+S: An embedding model defines its own space; similarity is only meaningful between vectors produced by that model with the same settings (version, output dimension, task type). Queries and documents must therefore be embedded by the same model, or retrieval silently returns nonsense with no error.
+@Q 6.19
+S: HNSW builds a multi-layer proximity graph: each vector links to its nearest neighbours (m links), upper layers are sparse shortcuts, the bottom layer holds all vectors. Search enters at the top and greedily moves toward the query, keeping ef_search candidates. It has high recall at low latency, supports inserts without rebuilding, but uses more memory and builds slowly. IVFFlat runs k-means to create <code>lists</code> centroids, assigns each vector to its nearest list, and at query time scans only the <code>probes</code> nearest lists. It builds quickly and uses less memory, but must be built after data exists, and recall drops if data drifts from the centroids.
+@Q 6.27
+S: Isolation must happen inside the retrieval query, because top-k is computed over whatever rows the query can see. Options: filter by an owner/tenant column through a join or denormalised column (with the id from the session), row-level security policies as a backstop, partial indexes or partitions per tenant for ANN correctness at scale, or separate collections per tenant in a vector DB. Test it explicitly: one user’s best-matching content must never appear for another user.
+@Q 6.28
+S: Deleting a document’s vectors must be complete (no orphans that could still be retrieved), authorised (only the owner), and consistent with ongoing processing (a running ingestion job must not re-insert after deletion). Use foreign keys with ON DELETE CASCADE or an explicit delete in the same transaction as the document row, scoped by owner; with an external vector DB, delete by a document-id metadata filter and handle failures with retries or a cleanup job.

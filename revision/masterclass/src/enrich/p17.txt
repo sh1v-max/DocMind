@@ -1,0 +1,77 @@
+@Q 17.1
+S: The interviewer checks how you behave when stuck: do you persist methodically, ask for help at the right time, change approach, and learn? A good story has a real block, the specific steps you tried, the moment you changed strategy (measuring, reading source, asking someone), and the outcome, even if the outcome was a workaround.
+Q: When would you have asked for help in a team?
+A: After a time box (e.g. an hour or two of focused attempts) with my notes ready: what I tried, what I observed, what I suspect.
+N: A story with no specifics, or one where someone else solved it and you can’t explain how.
+@Q 17.2
+S: Describe a repeatable method, not luck: reproduce reliably; read the full error and logs; narrow down the component (binary search, timing, removing parts); form one hypothesis; test it with a measurement; fix the root cause; add a regression test or log; write down what you learned.
+Q: What tools do you use?
+A: Structured logs with request ids, the debugger and breakpoints, network inspection, EXPLAIN ANALYZE for queries, and small scripts to reproduce issues in isolation.
+N: “I add console.log everywhere until it works.”
+@Q 17.3
+S: Show self-sufficiency with judgement: read the source code and type definitions, search issues and changelogs, write a minimal experiment to observe behaviour, check what version you’re actually using, and ask maintainers or the community with a minimal reproduction; then document what you found for the team.
+Q: How do you avoid trusting outdated blog posts?
+A: Check the date and version they target, and verify against the installed version’s docs or source.
+N: “I just guess until it works.”
+@Q 17.5
+S: Interviewers want honesty and evidence that you learned to verify. A good answer names a real problem, how you caught it (review, test, runtime error), the fix, and the process change you made (reading diffs, tests, checking APIs against docs).
+Q: How would you prevent it now?
+A: Review every diff line by line, run the type checker and tests, and test edge and failure paths before committing.
+N: “AI code never caused me problems.”
+@Q 17.6
+S: Treat generated code like a pull request from an unknown contributor: understand every line, check it against the requirements, run it, test failure paths, check library APIs for your version, look for security issues (injection, auth checks, secrets), and keep changes small enough to review.
+E: Generated Express code using <code>req.query = …</code>: that fails in Express 5 (read-only); reading the docs for your version catches it.
+Q: What signs make you distrust a generated snippet?
+A: APIs you’ve never seen, missing error handling, confident comments about behaviour you can’t verify, and code that “works” only on the happy path.
+N: “If it compiles, it’s fine.”
+@Q 17.7
+S: As an author: small focused PRs, a description of what and why, how it was tested, screenshots or logs, and responsiveness to comments without defensiveness. As a reviewer: understand the goal first, check correctness, security and edge cases, then design and readability; comment kindly and specifically with reasons, separate blocking issues from suggestions, and approve when it’s good enough.
+E: “This query filters by document id only; could another user read it? Suggest adding <code>AND user_id = $2</code>.”
+Q: How do you handle a review comment you disagree with?
+A: Explain your reasoning briefly; if it remains a preference, follow the reviewer or team convention.
+N: “I just approve if tests pass.”
+@Q 17.8
+S: Show you separate ego from code: listen and restate their concern, share your reasoning and evidence (benchmarks, constraints), look for the underlying goal you both share, and defer to their experience on judgement calls while still raising correctness or security concerns clearly. Afterwards, learn from the outcome.
+E: “They preferred a queue over doing it inline; I explained my latency concern, we measured, and the queue was the better choice for retries.”
+Q: What if you’re sure you’re right?
+A: Bring evidence (a test, a benchmark, docs); if it’s still disputed, escalate respectfully or try it in a small experiment.
+N: “I’d just do it my way.” or “I’d never disagree with a senior.”
+@Q 17.9
+S: Show a learning plan: read the official getting-started and core concepts, build a tiny prototype, read existing code in the team that uses it, pair with someone who knows it, then deliver the task in small steps, asking questions early and noting what you learned for others.
+Q: How fast can you become productive?
+A: Usually days for a library, longer for a new language; I prefer to show progress early with small pieces.
+N: “I’d avoid unfamiliar tasks.”
+@Q 17.10
+S: Prioritise by impact and urgency (and by who’s blocked), confirm priorities with the lead when they conflict, break tasks into small deliverables, timebox, and communicate trade-offs (“if I do X today, Y moves to Thursday”).
+E: A production bug affecting users beats a feature; a reviewer blocked on my PR gets my response before I start new work.
+Q: How do you handle constant interruptions?
+A: Batch them where possible, protect focus blocks, and make interruptions visible to the lead if they affect commitments.
+N: “I do whatever comes first.”
+@Q 17.11
+S: The interviewer checks transparency and ownership: raise the risk early, explain why (scope, unknowns), offer options (reduce scope, extra help, new date), and agree on a plan; never surprise people on the due date.
+E: “Two days before, I saw the integration would take longer; I told my lead, we shipped the core path on time and the admin screen two days later.”
+Q: How do you estimate better next time?
+A: Break work into smaller pieces, add buffer for unknowns, compare estimates with actuals.
+N: “I’d work all night and not tell anyone.”
+@Q 17.12
+S: Show you seek feedback and act on it: thank, ask clarifying questions, separate the feedback from your identity, apply it, and follow up to check you improved.
+Q: How do you ask for feedback?
+A: Specifically: “Was my PR description clear enough?”, “What would you have done differently in this design?”
+N: “Yes, I’m fine with feedback” with no example.
+@Q 17.13
+S: Maintainable code is easy for someone else (or you in six months) to understand and change safely: clear names and structure, small functions with one job, consistent layering, types and validation at boundaries, tests for important behaviour, comments explaining why, no clever tricks without reason, and docs/runbooks for non-obvious operations.
+E: DocMind’s rule that only repositories touch SQL, and that every repository function requires userId, makes a whole class of bugs easy to spot.
+Q: How do you know code is maintainable?
+A: A new person can make a change confidently; tests catch regressions; reviews are fast.
+N: “Comment every line.”
+@Q 17.14
+S: Production quality means correct under real conditions, not just the happy path: input validation, error handling with useful messages, timeouts and retries for dependencies, security (auth, authorization, secrets), observability (logs, metrics), tests, performance that meets requirements, backwards-compatible changes and migrations, and documentation for operators.
+E: The difference between “calls the LLM” and “calls the LLM with timeout, retries, validation, usage logging and a fallback”.
+Q: What do you skip in a prototype?
+A: Some polish and scale work, but never authorization, secrets handling or data-loss risks.
+N: “Code with no bugs.”
+@Q 17.15
+S: The interviewer checks expectations and fit. Ask for things that help a junior grow: code review, mentorship, clear expectations, real ownership, and a culture where asking questions is normal; and say what you’ll bring.
+Q: What would make you leave a team?
+A: Avoid negativity; say you value learning, feedback and ownership, and you’d raise problems early.
+N: Only asking about salary and remote days.

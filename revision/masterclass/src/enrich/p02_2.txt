@@ -1,0 +1,4 @@
+@Q 2.44
+S: Node runs all your JavaScript callbacks on one thread. A CPU-heavy computation is one long synchronous function call: until it returns, the call stack never empties, so the event loop can’t reach the poll phase to accept new connections, can’t run timers, and can’t resume any awaiting handler. Every concurrent request’s latency grows by the duration of that computation, health checks fail, and under load the effect compounds. That’s why CPU-heavy work goes to worker threads, a separate service, or a queue.
+Q: How can you detect this in production?
+A: Event-loop lag metrics (monitorEventLoopDelay), CPU at 100% on one core, and request latency rising for all endpoints at once; a CPU profile (--cpu-prof or clinic flame) shows the hot function.

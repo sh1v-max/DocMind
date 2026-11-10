@@ -1,0 +1,227 @@
+@Q 10.1.1
+S: Map each requirement to a component and say why it exists: the client for UI; one API service (auth, validation, rate limits, orchestration of chat); Postgres for relational data plus pgvector for chunks (one consistency boundary); object storage because files are large blobs; a queue + workers because ingestion is slow and must be retried; embedding and LLM providers behind a client with timeouts/retries/fallback; Redis for the queue and short caches; observability so you can debug quality, cost and latency. Then name what you’d skip at small scale (separate vector DB, microservices, Kubernetes).
+E: 1,000 users, 10 uploads each per month, 50 questions per day each → one API instance + one worker + managed Postgres is enough; the LLM bill dominates cost.
+Q: What would you add first if traffic grew 10×?
+A: More API instances behind a load balancer, autoscaled workers on queue depth, a pooled DB endpoint, an HNSW index, and per-user budgets.
+N: Listing technologies without saying why each is needed.
+@Q 10.1.2
+S: Request/response JSON for CRUD (documents list, delete, conversations), multipart or presigned uploads for files, SSE for the streamed answer (one-way, works over HTTP, simple with fetch), and polling or SSE for ingestion progress. Auth via a Bearer token or a same-site httpOnly cookie. WebSockets only if you need bidirectional real-time features (collaboration, live typing).
+E: <code>POST /conversations/:id/messages</code> returns <code>text/event-stream</code> with events meta → delta… → sources → done.
+Q: Why not WebSockets for chat?
+A: SSE is enough for server-to-client token streaming, simpler to scale and proxy, and works with normal HTTP auth; WebSockets add connection management you don’t need.
+N: “Poll every 100 ms for new tokens.”
+@Q 10.1.3
+S: Object storage is cheap, durable, scales without limits, and serves large files without loading your API. Keep buckets private; generate short-lived presigned URLs for upload and download; store only the key, size, content type and hash in the database; set lifecycle rules (delete originals after N days if you only need chunks); scan or validate files after upload.
+E: <code>PUT</code> to a presigned URL for <code>users/u_42/docs/d_9.pdf</code> valid for 5 minutes; then <code>POST /documents/d_9/finish</code> to start ingestion.
+Q: Why not store PDFs in Postgres bytea?
+A: It bloats the database, backups and replication, and streaming large values through the DB is inefficient.
+N: Saving uploads on the API server’s local disk (lost on redeploy, not shared between instances).
+@Q 10.1.4
+E: Chunk text in <code>chunks.content</code> (prompt + keyword search); the full cleaned text as <code>users/u_42/docs/d_9.txt</code> in storage for re-chunking experiments.
+Q: Why keep the full extracted text?
+A: Extraction can be slow or paid (OCR); having it lets you change chunking or embedding models without re-extracting.
+N: Storing only vectors.
+@Q 10.1.5
+E: Postgres + pgvector: <code>chunks.embedding vector(1536)</code> with an HNSW index once the table is large.
+Q: When would you move embeddings to a dedicated vector DB?
+A: At very large scale or QPS, or when you need features like built-in hybrid search across billions of vectors, accepting the sync complexity.
+N: “Embeddings must go in a vector database.”
+@Q 10.1.6
+E: See lesson 4.A’s schema: users → documents → chunks; conversations ↔ documents; messages with JSONB metadata.
+Q: How would you support shared documents between users?
+A: A <code>document_access(document_id, user_id, role)</code> table and retrieval that joins through it instead of a single owner column.
+N: One big table with everything.
+@Q 10.1.7
+E: API: insert row + enqueue job (jobId = documentId) → 202. Worker: download → extract → chunk → embed (batches, rate limited) → transaction (delete old chunks, insert new, status ready) → on final failure, status failed + error.
+Q: How do you prevent two workers processing the same document?
+A: Stable job id per document (the queue rejects duplicates) and idempotent writes in case it still happens.
+N: Processing inside the upload request.
+@Q 10.1.8
+E: The full code in Phase 7’s implementation lesson: <code>rewrite → retrieve (hybrid, owner-scoped) → context → grounded generation</code>.
+Q: How would you show citations in the UI?
+A: Return source ids with filename/page and a preview; render [n] markers as links that open the source.
+N: “Embed the question and send top-3 to the LLM” with nothing about filters or grounding.
+@Q 10.1.9
+E: Last 10 turns or 3,000 tokens, plus a running summary of older turns stored on the conversation row and updated every N messages.
+C js:
+async function buildHistory(conversationId, userId, budget = 3000) {
+  const msgs = await repo.recentMessages(conversationId, userId, 30);          // newest first, scoped to the user
+  const out = []; let used = 0;
+  for (const m of msgs) { const t = estimateTokens(m.content); if (used + t > budget) break; out.unshift(m); used += t; }
+  const summary = await repo.conversationSummary(conversationId, userId);      // updated in the background
+  return summary ? [{ role: 'system', content: `Earlier conversation summary: ${summary}` }, ...out] : out;
+}
+Q: Where do sources go in history?
+A: Store them in message metadata for display; usually don’t resend old sources to the model, only the answer text.
+N: Sending the entire conversation every time.
+@Q 10.1.10
+E: Every repository function requires userId; every route gets it from req.user.id; tests try cross-user access on each endpoint.
+Q: What about per-user resource limits?
+A: Caps on documents, storage, messages per minute and daily tokens, enforced in services and the rate limiter.
+N: “Different users have different URLs, so it’s isolated.”
+@Q 10.1.11
+E: <code>SELECT … FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.user_id = $1 AND d.id = ANY($2)</code>: the document set comes from the conversation (validated), the user from the token.
+Q: What is row-level security?
+A: Postgres policies that filter rows by a session variable (e.g. current user id), enforcing isolation even if a query forgets the WHERE clause.
+N: Checking permissions only when listing documents but not in vector search.
+@Q 10.1.12
+E: <code>documents(status, pages_done, pages_total, error)</code>; the UI shows “Processing 34/120 pages” and enables chat when ready.
+Q: Polling or push?
+A: Polling with backoff is simple and robust (DocMind polls every 2 s, then 10 s); SSE/WebSocket push is nicer for many long jobs.
+N: Showing “ready” as soon as the upload request returns.
+@Q 10.1.13
+E: 200 MB PDF: browser uploads directly to storage in parts; worker processes 50 pages per job; memory stays under 500 MB; progress is visible; a failed range is retried alone.
+Q: What limits would you enforce?
+A: Max file size, max pages, per-user storage quota, and a timeout per range job.
+N: Increasing server memory and request timeouts.
+@Q 10.1.14
+E: Queue depth rises to 5,000 jobs at 9 a.m.; the autoscaler adds workers up to the provider’s rate limit; small documents are prioritised so most users see results quickly.
+Q: What stops more workers from helping?
+A: The embedding provider’s rate limit and the database’s write capacity; past that point, more workers just get 429s.
+N: “Add more API servers” (ingestion runs in workers).
+@Q 10.2.1
+S: Reuse ingestion (extract, clean, chunk with section metadata), then choose source passages for coverage: sample chunks evenly or per section/topic, optionally extract key facts or learning objectives first with an LLM, and keep the source chunk id for every generated question. Similarity search is the wrong tool here because a quiz should cover the material, not one topic.
+E: A 10-section chapter, 20 questions → 2 per section from evenly sampled chunks.
+Q: How would you let users pick topics?
+A: Store section/heading metadata and filter chunks by the chosen sections.
+N: “Search for chunks similar to the word ‘quiz’.”
+@Q 10.2.2
+S: Structured generation per batch: give the model the source passages, the number and type of questions, difficulty mix, and rules (one correct answer, plausible distractors, no “all of the above”, answerable from the text only), and request JSON with a schema including the source chunk id and an explanation. Generate in small batches (5–10) for better quality and easier retries, with a concurrency cap.
+C js:
+const Batch = z.object({ questions: z.array(z.object({
+  question: z.string().min(10), options: z.array(z.string().min(1)).length(4),
+  correctIndex: z.number().int().min(0).max(3), explanation: z.string(), sourceChunkId: z.number().int(),
+})).min(1).max(10) });
+Q: Why include an explanation?
+A: Learners see why an answer is right, and it helps reviewers and judge models verify the key.
+N: One huge call for 100 questions.
+@Q 10.2.3
+E: Reject: two identical options; correctIndex 4; explanation that contradicts the source; a question whose answer appears in its own wording.
+Q: How would a judge verify the key?
+A: Give a second model the source and the question with shuffled options, ask it to answer; flag disagreements for review or regeneration.
+N: “The model said it’s correct, so it is.”
+@Q 10.2.4
+E: Embed each new question; if cosine similarity with any existing question in the quiz &gt; 0.92, drop and regenerate.
+C js:
+const isDuplicate = (vec, existing, threshold = 0.92) => existing.some((e) => cosine(vec, e) > threshold);
+Q: Where do you store question embeddings?
+A: A vector column on questions, or computed on the fly for a single quiz.
+N: Only exact text comparison.
+@Q 10.2.5
+E: <code>questions(id, quiz_id, position, question, options jsonb, correct_index, explanation, source_chunk_id, status)</code>; <code>attempts(id, quiz_id, user_id, started_at, score)</code>; <code>answers(attempt_id, question_id, chosen_index, correct)</code>.
+Q: Should the correct answer be sent to the client?
+A: If grading happens server-side, no: send it only after submission (DocMind grades client-side and includes it, acceptable for self-study).
+N: Storing the quiz only as one JSON blob when you need per-question regeneration and stats.
+@Q 10.2.7
+E: <code>POST /quizzes/q_1/questions/q_7/regenerate</code> → 202 → the job regenerates from chunk 312, passing the other 19 questions as “avoid”, validates, replaces row q_7 (keeping position), and records the old version.
+Q: How do you keep stats meaningful after regeneration?
+A: Version questions; attempts reference the version they used.
+N: Regenerating the whole quiz.
+@Q 10.2.8
+E: Weekly: 2% of questions reported, 5% answered correctly by under 10% of learners (probably wrong key), judge agreement 96%.
+Q: Which signal finds wrong answer keys fastest?
+A: Questions where most strong learners pick the same “wrong” option.
+N: Only checking that the JSON is valid.
+@Q 10.3.1
+S: Pull from sources (help centre, docs site, PDFs, internal wiki) with connectors or scheduled crawls; detect changes by updated_at or content hash; re-ingest only changed documents; chunk by headings; keep metadata (product, version, audience: public/internal, URL, last updated) and delete chunks for removed pages. Track freshness: answers should cite the latest version.
+E: Nightly sync job: 1,200 articles checked, 14 changed → re-embedded; 2 deleted → chunks removed.
+Q: How do you avoid serving internal-only docs to customers?
+A: A visibility field filtered at retrieval time based on the caller type.
+N: A one-time manual upload with no sync.
+@Q 10.3.2
+S: Hybrid search (product names, error codes, plan names need keyword matching), query rewriting from the conversation, metadata filters (product, version, customer plan, visibility), reranking, and a relevance threshold that triggers clarification or escalation instead of a weak answer.
+E: “Error 0x80070005 on the desktop app” → keyword hit on the exact code + vector hits on “permission denied” articles → rerank.
+Q: How would you handle multiple product versions?
+A: Filter by the customer’s version when known; otherwise ask, or show version-labelled answers.
+N: Vector search only.
+@Q 10.3.3
+S: Customer context comes from authenticated data, not from what they type: account, plan, region, recent orders/tickets via read-only tools scoped to their id, plus conversation history and a summary carried into escalations. Load only what the question needs (tools on demand) to limit tokens and exposure.
+E: “Where is my order?” → getRecentOrders(customerId from session) → “Order #A12 shipped yesterday, tracking …”.
+Q: Should the whole customer profile be in the system prompt?
+A: No; fetch what’s needed through tools to save tokens and reduce exposure.
+N: Trusting an order id typed by the user without checking it belongs to them.
+@Q 10.3.4
+E: <code>getOrder({ orderId })</code> runs <code>WHERE id = $1 AND customer_id = $2</code> with $2 from the session; another customer’s order id returns “not found”.
+Q: What about multi-tenant B2B (companies with many users)?
+A: Scope by tenant id from the session in every query and index; add per-tenant encryption keys or separate schemas if contracts require it.
+N: Putting the customer id into the prompt and trusting the model to respect it.
+@Q 10.3.5
+S: Triggers: explicit request (“talk to a human”), low retrieval confidence or “not found” answers, repeated rephrasing, negative sentiment, policy topics (refunds above a threshold, legal), or VIP accounts. The handoff creates a ticket in the helpdesk with the transcript, a short summary, detected intent and the customer’s context, and tells the customer what happens next and when.
+C js:
+const shouldEscalate = ({ userAsked, topScore, notFoundCount, sentiment, topic }) =>
+  userAsked || topScore < 0.35 || notFoundCount >= 2 || sentiment === 'angry' || ['legal', 'refund_exception'].includes(topic);
+Q: How do you measure escalation quality?
+A: Escalation rate, time to human response, and whether humans needed to re-ask questions already answered in the transcript.
+N: Never escalating, or escalating everything.
+@Q 10.3.6
+E: Question about a competitor’s product, or a policy not in the docs: retrieval top score 0.21 (below threshold) → “I don’t have information on that. Would you like me to connect you with our team?”
+Q: Can the model itself decide it’s unsupported?
+A: Yes, with an instruction to output a not-found marker; combine it with retrieval scores for reliability.
+N: Letting the model answer from general knowledge.
+@Q 10.3.7
+E: Dashboard: resolution without escalation 62%, thumbs-up 81%, faithfulness on the eval set 0.94, repeat contact within 24 h 9%.
+Q: Why track repeat contacts?
+A: A “resolved” conversation followed by another contact on the same topic means the answer didn’t actually help.
+N: Measuring only response time.
+@Q 10.4.1
+E: Sidebar of conversations (title, last message time), rename/delete, a new conversation per topic; messages paginated by id; conversations scoped to the user.
+C sql:
+CREATE TABLE conversations (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title text, summary text, created_at timestamptz NOT NULL DEFAULT now(), last_message_at timestamptz);
+CREATE INDEX ON conversations (user_id, last_message_at DESC);
+CREATE TABLE messages (id bigserial PRIMARY KEY, conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role text NOT NULL, content text NOT NULL, metadata jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX ON messages (conversation_id, id);
+Q: How would you generate titles?
+A: From the first user message (truncate) or a cheap model call after the first exchange, done in the background.
+N: Ordering messages by created_at only (ties).
+@Q 10.4.2
+E: Upload → queue → worker pool (concurrency per worker 2, autoscale 1–10 on depth) → DLQ after 5 attempts → admin view of failed jobs with “retry” button.
+Q: What’s a dead-letter queue for?
+A: Holding jobs that failed permanently so they don’t block the queue and can be inspected and retried after a fix.
+N: Retrying failed jobs forever.
+@Q 10.4.3
+C js:
+import dns from 'node:dns/promises';
+import net from 'node:net';
+const isPrivate = (ip) => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/.test(ip) || ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80');
+async function assertPublicUrl(raw) {
+  const url = new URL(raw);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new HttpError(400, 'Only http(s) URLs');
+  const addrs = net.isIP(url.hostname) ? [url.hostname] : (await dns.lookup(url.hostname, { all: true })).map((a) => a.address);
+  if (addrs.some(isPrivate)) throw new HttpError(400, 'URL not allowed');
+  return url;   // also: fetch with redirect: 'manual' and re-check each hop; cap size and time
+}
+Q: Why re-check after redirects?
+A: A public URL can redirect to an internal address; each hop must be validated.
+N: Fetching any URL the user sends.
+@Q 10.4.4
+E: Developer docs search: “how to paginate list endpoint” → BM25 + ANN → RRF → rerank top 50 → 10 results + a 3-sentence cited answer.
+Q: How do you evaluate it?
+A: Labelled queries with graded relevance → NDCG@10 offline; click-through and “no result clicked” rate online.
+N: “Just use an LLM to answer everything without results.”
+@Q 10.4.5
+E: Monthly sales report: SQL computes totals by region and month-over-month change; the LLM receives the table (not raw rows) and writes three paragraphs; numbers in the text are checked against the table before publishing.
+Q: How do you stop the LLM from inventing numbers?
+A: Provide all numbers it may use, instruct it to use only those, and validate that every number in the output appears in the input table.
+N: Sending 50,000 raw rows to the LLM to compute totals.
+@Q 10.4.6
+E: Event contract: <code>event: meta</code> {conversationId}, unnamed <code>data</code> {text} per delta, <code>event: sources</code>, <code>event: done</code>, <code>event: error</code>; a comment line <code>: ping</code> every 15 s.
+Q: How do you scale many open streams?
+A: Node handles many idle connections well; make sure proxies/load balancers allow long-lived responses and set idle timeouts above your heartbeat interval.
+N: Buffering the whole answer and sending it at the end.
+@Q 10.4.7
+E: Config: <code>{ router: 'gemini/flash-lite', answer: ['openai/large', 'gemini/flash'], embed: 'openai/text-embedding-…' }</code> with an adapter per provider and a fallback chain for the answer task.
+Q: Can embeddings fall back to another provider?
+A: Not transparently: vectors from different models are incompatible; embedding fallback needs a pre-built parallel index or must wait/queue.
+N: “Switching providers is just changing the model string.”
+@Q 10.4.8
+E: After a conversation, a background job extracts “prefers TypeScript examples; works on a Postgres stack”; next session, the top 3 relevant memories are added to the system prompt; a “What I remember about you” page allows edits and deletion.
+C sql:
+CREATE TABLE memories (id bigserial PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text text NOT NULL, embedding vector(768) NOT NULL, kind text NOT NULL, source_message_id bigint,
+  created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz);
+-- retrieve: WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > now()) ORDER BY embedding <=> $2 LIMIT 3
+Q: How do you prevent poisoned memories?
+A: Only extract from the user’s own messages (not documents/tool results), validate extracted memories, and let users review them.
+N: Saving every message as a memory.

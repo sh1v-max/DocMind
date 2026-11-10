@@ -1,0 +1,291 @@
+@Q 9.1
+S: A workflow engine executes a defined graph of steps for each run: it passes data from step to step, records each step’s status and output, retries failed steps by policy, can pause (suspend/sleep) and continue later, and lets you inspect runs. The definition is code (or config) and the order is fixed by it; individual steps can call anything, including LLMs or agents.
+E: Order fulfilment: validate payment → reserve stock → ship → email, with retries per step and a human check for high-value orders.
+Q: How is it different from a job queue?
+A: A queue runs independent jobs; a workflow coordinates many steps of one process with state across them (a workflow engine often uses queues underneath).
+N: “A workflow is a list of function calls in a route handler.” (No persistence, retries or resume.)
+@Q 9.2
+E: “Generate a course” (fixed steps) → workflow. “Help me understand my documents” (open-ended, choose tools) → agent. “Generate a course, researching each topic” → workflow whose research step calls an agent.
+Q: Can an agent call a workflow?
+A: Yes, as a tool: the agent decides to start it; the workflow guarantees the process.
+N: “Workflows can’t use LLMs.”
+@Q 9.3
+S: Deterministic here means the control flow is fixed by code: given the same inputs and step outputs, the same steps run in the same order. This is what makes replay, resume and debugging possible: the engine can re-run from a snapshot and know which step is next. LLM outputs inside steps are still non-deterministic, so steps must validate their outputs and be safe to re-run.
+E: Temporal-style engines require workflow code to be deterministic so they can replay history; Mastra persists step results in snapshots for a similar purpose.
+Q: Can a deterministic workflow branch on an LLM classification?
+A: Yes: the branch logic is deterministic given the step’s (stored) output; on resume the stored output is reused, not regenerated.
+N: “Deterministic means the LLM gives the same answer every time.”
+@Q 9.4
+S: A non-deterministic process can take different paths or produce different results for the same input: an agent deciding tools, sampling at temperature &gt; 0, timing-dependent concurrency, external data that changes. Non-determinism isn’t bad, but it must be contained: record outputs so re-runs don’t re-decide, validate results, and bound behaviour with limits.
+E: Asking an agent the same question twice may produce 2 searches one time and 3 the next.
+Q: How do you test something non-deterministic?
+A: Fix what you can (temperature 0, seeds, fakes), test properties (valid schema, cites a source, under N steps) rather than exact strings, and evaluate on sets of runs.
+N: “Non-deterministic means random and useless.”
+@Q 9.5
+S: A step is the smallest unit the engine tracks: it has an id, an input schema, an output schema, and an execute function; optionally suspend/resume schemas and retry settings. The engine validates input, runs execute, validates output, and stores the result in the run snapshot. Good steps are small enough to retry cheaply, large enough to be meaningful, and idempotent.
+E: <code>createStep({ id: 'write-lesson', retries: 2, inputSchema: LessonItem, outputSchema: z.object({ moduleNo, lessonNo }), execute })</code>.
+Q: How big should a step be?
+A: One logical action with one side effect (one LLM call + one write), so a retry repeats little and is safe.
+N: “Steps are just functions; size doesn’t matter.”
+@Q 9.6
+S: Sequential steps form a chain where each consumes the previous output; total time is the sum. Use it for real dependencies (outline before lessons, validation before charging). Mastra: <code>.then(a).then(b)</code>.
+E: prepare → outline → approve: each needs the previous result.
+Q: How do you pass the original input to a later step?
+A: Carry it through outputs, use <code>.map()</code> to combine, read an earlier step with <code>getStepResultAsync</code>, or use workflow state.
+N: “Sequential is always slower, so avoid it.”
+@Q 9.7
+S: Independent steps start together and the workflow continues when all complete; total time ≈ the slowest step. In Mastra, <code>.parallel([a, b])</code> outputs an object keyed by step id; <code>.foreach(step, { concurrency: n })</code> runs one step per array item with a cap. If any parallel step throws, the block fails, so catch inside steps when partial success is acceptable.
+E: Generating summaries for 3 modules in parallel takes ~1 call’s time instead of 3.
+Q: What limits how parallel you should go?
+A: Provider rate limits, DB pool size, memory, and cost spikes.
+N: “Parallel steps share variables safely.” (They should communicate through outputs, not shared mutable state.)
+@Q 9.8
+S: Branching selects steps based on data. In Mastra’s <code>.branch([[condition, step], …])</code> every condition that’s true runs its step (not just the first), and the output is keyed by step id like parallel. Simple skips can be an <code>if</code> inside a step that returns its input unchanged. Conditions should use stored step outputs so resumed runs follow the same path.
+C js:
+createWorkflow({ id: 'triage', inputSchema: Ticket, outputSchema: z.any() })
+  .then(classify)                                   // { category: 'billing' | 'bug' | 'other' }
+  .branch([
+    [async ({ inputData }) => inputData.category === 'billing', billingStep],
+    [async ({ inputData }) => inputData.category === 'bug', createIssueStep],
+  ])
+  .commit();
+Q: What if no condition is true?
+A: No branch step runs; design a default condition or handle it after the branch.
+N: “.branch runs only the first matching branch.”
+@Q 9.9
+S: Run state = input, status (running, suspended, success, failed, canceled, waiting), each step’s status and output, suspend payloads and resume data, plus optional shared workflow state. It’s what makes inspection (“where is this run?”), resume and retry possible. Keep business data in your own tables and keep run state focused on orchestration.
+E: Snapshot for a course run: <code>{ status: 'suspended', steps: { prepare: success, outline: success, 'approve-outline': suspended { outline } } }</code>.
+Q: Should large data (lesson bodies) go into run state?
+A: Prefer storing large content in your tables and passing ids, to keep snapshots small.
+N: “State lives in memory while the server runs.”
+@Q 9.10
+S: Persistence writes run state to durable storage after steps and on suspend, usually a table keyed by workflow name + run id. Any process with access to the storage can load the run, so a different instance (after a deploy or crash) can resume it. Mastra uses its storage adapters (e.g. Postgres via <code>@mastra/pg</code>), with tables like <code>mastra_workflow_snapshot</code>.
+E: A run suspended on Monday is resumed on Wednesday by a different server instance after two deploys.
+Q: What happens if the database is down during a step?
+A: The engine can’t persist; the step’s result may be lost and the step re-run later, so steps must be idempotent.
+N: “Persistence means logging.”
+@Q 9.11
+S: Suspend stops the run at a step and saves its state with a payload explaining what it’s waiting for; nothing runs while suspended (no thread or request held). Resume loads the state, claims the run, and continues the suspended step with resume data (validated by a resume schema). In Mastra the step’s execute runs again from its first line, now with resumeData, so code above the suspend call must be safe to repeat.
+E: Step “approve-outline”: <code>if (!resumeData) return await suspend({ outline })</code>.
+Q: Suspend vs sleep?
+A: Suspend waits for external input (resume); sleep waits for time (in Mastra the run status is “waiting”).
+N: “Suspend keeps a promise waiting in memory.”
+@Q 9.12
+E: Waiting for a manager’s approval on an expense, a user choosing an option, a payment provider’s webhook, a document finishing processing, or a scheduled date.
+Q: Why not keep the HTTP request open until the user answers?
+A: Requests time out, connections drop, deploys restart processes; the wait might be hours or days.
+N: “Workflows suspend to save CPU.”
+@Q 9.13
+S: The process dies mid-step: in-memory progress is lost, but the last snapshot records which steps completed. On restart (or when a recovery job runs), the engine finds runs still marked running and re-executes from the first incomplete step. Whatever the interrupted step did before the crash (partial DB writes, API calls) happens again on re-run, so idempotent side effects are essential.
+E: Lesson 7 was written to the DB but the crash happened before the snapshot recorded it; on re-run the lesson step sees the draft exists and skips the LLM call.
+Q: Does Mastra resume automatically?
+A: By default (<code>recovery: { workflows: 'auto' }</code>) it re-drives running runs at boot; it can be turned off globally or per workflow.
+@Q 9.14
+S: Two cases. Suspended runs: your code calls resume with the run id, the suspended step id and resume data, after checking the user may resume it. Crashed running runs: the engine’s recovery or your own job restarts them from the last snapshot. Failed runs: either re-run (new run with the same business key so idempotent steps skip finished work) or use engine features to restart from a step.
+E: <code>const run = await wf.createRun({ runId }); await run.resume({ step: 'approve-outline', resumeData: { approved: true } });</code>
+Q: What if two resume calls race?
+A: Mastra claims the run atomically (suspended → running); the loser gets WORKFLOW_RESUME_ALREADY_CLAIMED; add your own app-level claim to return a clean 409.
+N: “Resume restarts the whole workflow.”
+@Q 9.15
+S: Human-in-the-loop (HITL) inserts a person at decision points: approve/reject, edit generated content, choose between options, or handle cases the system flags as uncertain. Implementation: suspend with a payload the UI can render, notify the person, accept their decision through an authenticated endpoint, validate it against a resume schema, and resume. Also plan for timeouts (reminders, expiry) and audit (who approved what, when).
+E: A course outline review screen with “Approve”, “Request changes (feedback)” and “Cancel”.
+Q: Where is HITL most valuable in AI systems?
+A: Before irreversible or expensive actions and where quality matters more than speed (publishing, sending, deleting, paying).
+N: “HITL means a human does the work instead of the AI.”
+@Q 9.16
+E: Step “save lesson”: <code>INSERT … ON CONFLICT (course_id, module_no, lesson_no) DO NOTHING</code>; step “send email”: record <code>email_sent_at</code> and skip if set; step “charge card”: pass an idempotency key to the payment API.
+Q: Which side effects are hardest to make idempotent?
+A: External ones without idempotency support (emails, SMS, third-party APIs); record intent and completion in your DB and check before acting.
+N: “The engine guarantees each step runs once.”
+@Q 9.17
+S: Duplicate execution has several sources: the client submitting twice, two resumes, recovery re-running a step, retries, and two workers picking the same job. Guards at each level: an idempotency key per business request (one run per user+request), an atomic claim for resumes, unique constraints for writes, and stable run/job ids. Check the business key before starting expensive work.
+E: POST /courses twice with the same Idempotency-Key → second call returns the first course or run.
+Q: Is a client-generated run id enough?
+A: Only if it’s stored with a unique constraint and validated per user; otherwise another user could collide or guess it.
+N: “Disable the button and it’s solved.”
+@Q 9.18
+S: Classify failures: transient (timeouts, 429, 5xx) → retry with backoff; invalid LLM output → retry once or twice; permanent (bad input, missing data) → don’t retry, fail with a reason. Configure retries per step (Mastra <code>retries</code>) or per workflow (<code>retryConfig: { attempts, delay }</code>), avoid stacking with the HTTP client’s own retries, and make sure retried steps are idempotent. After exhaustion, the run fails with state saved so it can be re-run without repeating finished steps.
+E: Lesson step: retries 2 at the step level; the LLM client retries 429s internally once; total worst case 2 × 2 = 4 calls for a lesson.
+Q: Should validation errors from Zod be retried?
+A: Output validation failures from an LLM, yes (a new sample may be valid); input validation failures, no.
+N: Setting high retry counts everywhere.
+@Q 9.19
+E: Booking saga: reserve flight ✓ → reserve hotel ✓ → charge card ✗ (declined) → compensate: cancel hotel, cancel flight, mark booking failed, notify the user.
+C js:
+// a tiny saga runner: run steps, and on failure run compensations in reverse
+async function runSaga(steps, ctx) {
+  const done = [];
+  try {
+    for (const s of steps) { await s.run(ctx); done.push(s); }
+  } catch (err) {
+    for (const s of done.reverse()) await s.compensate?.(ctx).catch((e) => log({ evt: 'compensation_failed', step: s.id, e: e.message }));
+    throw err;
+  }
+}
+Q: Must compensations be idempotent?
+A: Yes: they can be retried too (a refund call might time out).
+N: “Just roll back the database transaction.” (External effects can’t be rolled back by your DB.)
+@Q 9.20
+E: Monthly report generation: fetch data → compute metrics → LLM narrative → human review → publish: a workflow; an agent would add nothing but risk.
+Q: Can you start with an agent and later replace it with a workflow?
+A: Yes: agent traces often reveal the common path, which you can then encode as a workflow.
+N: “Workflows are for non-AI tasks only.”
+@Q 9.21
+S: Mastra provides: agents (instructions, model, tools, memory, maxSteps, streaming, tool approval), tools (createTool with Zod schemas), workflows (typed steps, control flow, suspend/resume, snapshots, recovery), storage adapters (Postgres and others), RAG utilities, evals/scorers, tracing, a model router for many providers via “provider/model” strings, and a local dev playground. It runs inside your Node app or as its own server.
+E: DocMind plans to use only Mastra workflows + Postgres storage inside the existing Express app.
+Q: Is Mastra tied to one LLM provider?
+A: No, models are chosen per agent/call via its router (provider/model ids).
+N: “Mastra is a model.”
+@Q 9.22
+S: Building production AI features means repeatedly writing the same plumbing: provider adapters, tool loops, schema conversion, retries, streaming, memory, durable multi-step processes that survive restarts, human approval, and observability. Mastra packages these with TypeScript types and Zod schemas so teams focus on prompts, tools and business logic.
+E: Without a framework, a suspendable approval requires your own state table, claim logic, resume endpoint and recovery job (Phase 8’s hand-made version); with Mastra it’s <code>suspend()</code>/<code>resume()</code> plus storage.
+Q: What doesn’t it solve?
+A: Your data model, authorization, retrieval quality, prompt quality and cost decisions.
+N: “It removes the need to understand agents.”
+@Q 9.23
+S: An Agent is configured with an id, a name, instructions (static or a function of request context), a model, tools (and optionally sub-agents and workflows), memory, and defaults. <code>generate()</code> runs the loop and returns text, tool calls/results, usage and a runId; <code>stream()</code> streams text and tool events. Options per call include <code>maxSteps</code>, <code>requestContext</code> (per-request values like userId) and structured output.
+C js:
+import { RequestContext } from '@mastra/core/request-context';
+const rc = new RequestContext(); rc.set('userId', req.user.id);
+const out = await docAgent.generate([{ role: 'user', content: req.body.message }], { maxSteps: 4, requestContext: rc });
+res.json({ answer: out.text });
+Q: How do tools get the user id?
+A: Through the request context available in the tool’s execute context, set by your route from the session.
+N: “Mastra agents run autonomously on a schedule.”
+@Q 9.24
+S: A Mastra tool is an object from <code>createTool({ id, description, inputSchema, outputSchema, execute })</code>. Mastra converts the input schema to the provider’s format, validates arguments before calling <code>execute(input, context)</code>, can validate output, and supports options like <code>requireApproval</code>, suspend/resume schemas for tools, and MCP metadata. The same tool can be used by agents, called inside workflow steps, or exposed over MCP.
+E: The <code>searchDocuments</code> createTool in lesson 8.A.
+Q: Where does authorization go?
+A: Inside execute (and your repository), using the request context user, exactly as with hand-written tools.
+N: “Mastra tools are executed by the model.”
+@Q 9.25
+S: A workflow is created with an id and input/output schemas, built by chaining control-flow methods (<code>.then</code>, <code>.parallel</code>, <code>.branch</code>, <code>.foreach</code>, <code>.dountil/.dowhile</code>, <code>.map</code>, <code>.sleep</code>) and finished with <code>.commit()</code>. It’s registered on a Mastra instance (which provides storage), and executed via runs: <code>createRun()</code> → <code>start()</code> / <code>resume()</code> / <code>cancel()</code>. Results report status and per-step outputs.
+E: <code>createWorkflow({ id: 'course-generation', inputSchema, outputSchema }).then(prepare).then(outline).then(approve)…commit()</code>.
+Q: Why register it on the Mastra instance?
+A: So it gets storage (snapshots), logging and recovery; an unregistered workflow has nowhere to persist suspend state.
+N: “A workflow is an agent with steps.”
+@Q 9.26
+S: Agents can be used inside workflow steps (a step calls <code>agent.generate()</code> for an open-ended sub-task, and the workflow keeps the overall order and persistence), agents can be given workflows as tools (the agent decides when to start a defined process), and a step can itself be created from an agent or tool. The workflow provides structure and durability; the agent provides judgement.
+E: A “research topic” step inside course generation calls a research agent with a web-search tool; everything else stays deterministic.
+Q: What’s the risk of an agent inside a workflow step?
+A: The step becomes slower and less predictable; give it maxSteps, timeouts and output validation like any LLM step.
+N: “You must choose either agents or workflows.”
+@Q 9.27
+C js:
+import { createTool } from '@mastra/core/tools';
+import { z } from 'zod';
+export const listDocuments = createTool({
+  id: 'list-documents',
+  description: "List the user's documents (filename, status). Use when they ask which files they have.",
+  inputSchema: z.object({}),
+  outputSchema: z.object({ documents: z.array(z.object({ filename: z.string(), status: z.string() })) }),
+  execute: async (_input, context) => {
+    const userId = context?.requestContext?.get('userId');
+    if (!userId) throw new Error('no user in context');
+    const rows = await repo.listDocuments(userId);
+    return { documents: rows.map((d) => ({ filename: d.filename, status: d.status })) };
+  },
+});
+Q: How do you test this tool without the agent?
+A: Call <code>listDocuments.execute({}, { requestContext })</code> directly with a fake repository.
+N: Accepting userId in inputSchema.
+@Q 9.28
+E: <code>createStep({ id: 'outline', inputSchema: CourseState, outputSchema: CourseState.extend({ outline: Outline }), execute: async ({ inputData }) => ({ ...inputData, outline: await makeOutline(inputData) }) })</code>.
+Q: What parameters does execute receive?
+A: The 1.82 step reference lists inputData, resumeData, suspendData, suspend, runId, getStepResultAsync, getInitData, state/setState, retryCount, mastra and requestContext; bail() is documented in the error-handling and suspend/resume docs.
+N: “Steps can’t access earlier steps’ results.”
+@Q 9.29
+E: After <code>.parallel([summary, quiz])</code> the next step receives <code>{ summary: {...}, quiz: {...} }</code> keyed by step id; a <code>.map(async ({ inputData }) => ({ text: inputData.summary.text, questions: inputData.quiz.questions }))</code> reshapes it.
+Q: What happens if schemas don’t line up between steps?
+A: TypeScript flags it at build time (where types allow), and Mastra’s runtime validation fails the step; use .map to adapt.
+N: Passing data through global variables.
+@Q 9.30
+S: Each step declares Zod (or other Standard Schema) input and output schemas. Mastra validates step input before execute and output after it (input validation is on by default), which catches wiring mistakes and invalid data early. Inside steps that call LLMs, validate the model’s output with its own schema before returning it, so invalid content never reaches later steps or the DB.
+E: The lesson step’s output schema requires moduleNo and lessonNo numbers; returning a string fails the step immediately instead of corrupting the publish counts.
+Q: What about suspend/resume data?
+A: suspendSchema validates what you save when pausing; resumeSchema validates what the user sends back.
+N: “Types are enough; no runtime validation needed.”
+@Q 9.31
+E: An outline step that gets malformed JSON twice throws → run status failed → the API marks the course failed with “Outline generation failed, please retry”.
+Q: How do you surface workflow errors to users?
+A: Map run status and error to your own business status and message; never show raw stack traces.
+N: Swallowing errors inside steps and returning empty outputs.
+@Q 9.32
+E: Sequence: POST /courses → run.start → outline step → approve step suspends → 202 with outline. POST /courses/:id/approval → claim → run.resume({ step: 'approve-outline', resumeData }) → step re-runs with resumeData → lessons generated in the background.
+N: Saying the HTTP request waits for the user.
+@Q 9.33
+E: <code>new Mastra({ storage: new PostgresStore({ id: 'mastra-storage', connectionString: process.env.DATABASE_URL }), workflows: { courseWorkflow } })</code>; or only the workflows domain with <code>WorkflowsPG</code> on an existing pg Pool (DocMind’s plan).
+Q: Where do you store the link between a run and your user?
+A: In your own table (course row with run_id and user_id) or the run’s resourceId, and check it on every resume/status call.
+N: Keeping run ids only in the browser.
+@Q 9.34
+E: A step with suspendSchema <code>{ outline }</code> and resumeSchema <code>{ approved: boolean, feedback?: string }</code>; the frontend posts the decision; the endpoint checks the owner and claims once.
+Q: How do you expire approvals?
+A: A scheduled job cancels runs suspended longer than N days and marks the business record expired.
+N: Letting any authenticated user resume any run id.
+@Q 9.35
+E: The lesson step calls the LLM; the provider returns 503 for 2 minutes; the step retries twice with delay and then fails; the run fails; a retry endpoint starts a new run with the same course key and only missing lessons are generated.
+Q: Would you add a fallback model inside the step?
+A: Yes for user-facing latency-sensitive steps; validate the fallback’s output the same way.
+N: “The workflow will wait until the API is back.” (Not without retries/sleep configured.)
+@Q 9.36
+E: Hand-rolled: DocMind’s agent loop (~1 file, full control, learned the protocol). Framework: course generation with suspend/resume and recovery, which would need a state table, claims and a recovery job if hand-rolled.
+Q: How do you reduce the risk of depending on a fast-moving framework?
+A: Wrap it behind your own small interface, pin versions, read release notes before upgrading, and keep integration tests.
+N: “Frameworks are always better” or “never use frameworks”.
+@SCN Scenario A: course generation
+Y: Long generation times; occasional half-built courses; duplicate modules after retries; users waiting on a spinner with no progress.
+U: Generation done in one HTTP request or one big agent run; no per-step persistence; no idempotent writes; no progress reporting.
+I: Trace a slow/failed generation: which step failed, what was written, whether retries duplicated rows.
+F: A persisted workflow: outline → approval → lessons (foreach, capped) → quizzes → transactional publish; drafts with unique keys; progress counters; retries per step.
+G js:
+// progress the UI can poll (from the drafts table, not from the workflow internals)
+app.get('/courses/:id', requireAuth, async (req, res) => {
+  const { rows: [c] } = await pool.query(
+    `SELECT c.status, c.outline,
+            (SELECT count(*) FROM lesson_drafts l WHERE l.course_id = c.id)::int AS lessons_done
+     FROM courses c WHERE c.id = $1 AND c.user_id = $2`, [req.params.id, req.user.id]);
+  if (!c) return res.sendStatus(404);
+  const total = c.outline?.modules?.reduce((s, m) => s + m.lessons.length, 0) ?? 0;
+  res.json({ status: c.status, progress: { done: c.lessons_done, total }, outline: c.outline });
+});
+@SCN Scenario B: human approval
+Y: Users can’t find what they need to approve; approvals lost after deploys; double clicks start two generations; abandoned approvals pile up.
+U: Waiting in memory; no persisted pending state; no claim; no expiry; no notification.
+I: Check how pending approvals are stored and resumed; reproduce a deploy during a pending approval; send two approvals at once.
+F: Suspend with a payload; persist; show it from your own status endpoint; claim-once approval endpoint checked against the owner; background resume; reminders and expiry.
+G sql:
+-- expire stale approvals daily (then cancel their runs in code)
+UPDATE courses SET status = 'expired'
+WHERE status = 'awaiting_approval' AND created_at < now() - interval '7 days'
+RETURNING id, run_id;
+@SCN Scenario C: partial failure
+Y: Lessons 1–6 exist, 7–10 missing; the course stuck in “generating” or marked failed; a manual retry regenerates everything.
+U: Provider failures on one lesson exceeding retries; no skip-if-exists; no record of completed items.
+I: Count drafts per course; read the failed run’s error and failing item.
+F: Idempotent per-lesson writes with unique keys, skip-if-exists before LLM calls, re-run continuing from the failed step, publish only when counts match.
+G sql:
+-- which lessons are missing for this course?
+SELECT m.module_no, l.lesson_no
+FROM jsonb_array_elements((SELECT outline->'modules' FROM courses WHERE id = $1)) WITH ORDINALITY AS m(module, module_no)
+CROSS JOIN LATERAL generate_series(1, jsonb_array_length(m.module->'lessons')) AS l(lesson_no)
+WHERE NOT EXISTS (SELECT 1 FROM lesson_drafts d WHERE d.course_id = $1 AND d.module_no = m.module_no AND d.lesson_no = l.lesson_no);
+@SCN Scenario D: 20 quizzes
+Y: 429 bursts when many quizzes start together; DB pool waits; spend spikes; whole batch failing due to one item.
+U: Unbounded parallelism; no shared rate limiter across workers; parallel block failing on one error.
+I: Look at 429 rates and in-flight counts per second; check foreach concurrency settings; check whether failures are caught per item.
+F: Cap concurrency (foreach concurrency 3–5), shared token bucket per provider key, retries with backoff and jitter on 429, catch-and-mark per item, and pace very large batches over time.
+G js:
+// shared token bucket: every worker awaits a token before calling the provider
+class TokenBucket {
+  constructor(ratePerMin) { this.capacity = ratePerMin; this.tokens = ratePerMin; this.refillMs = 60000 / ratePerMin; this.last = Date.now(); }
+  async take() {
+    for (;;) {
+      const now = Date.now();
+      this.tokens = Math.min(this.capacity, this.tokens + (now - this.last) / this.refillMs); this.last = now;
+      if (this.tokens >= 1) { this.tokens -= 1; return; }
+      await new Promise((r) => setTimeout(r, this.refillMs));
+    }
+  }
+}
+const llmBucket = new TokenBucket(60);   // e.g. 60 requests per minute (per process; use Redis for many processes)

@@ -1,0 +1,111 @@
+@SCN Scenario 1: API is slow
+Y: p95 latency 10× normal on many endpoints; event-loop lag up or DB time up; timeouts and retries rising; CPU or pool saturation alerts.
+U: A slow query after data growth (missing index), lock contention, pool exhaustion, a slow external dependency, CPU-blocking code on the event loop, a noisy deploy, increased traffic, cross-region latency.
+I: Check what changed (deploys, traffic, data size); compare per-endpoint and per-dependency timings via traces; look at pg_stat_statements, pg_stat_activity (locks, waiting), pool waiting count, event-loop delay and CPU; reproduce one slow request with a trace.
+F: Fix the bottleneck found (index/rewrite query, shorten transactions, move CPU work off the main thread, add timeouts and caching for the slow dependency, scale out), then add a regression alert on that metric.
+G js:
+// event-loop lag and pool saturation as metrics
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+const h = monitorEventLoopDelay({ resolution: 20 }); h.enable();
+setInterval(() => {
+  metrics.gauge('event_loop_p99_ms', h.percentile(99) / 1e6);
+  metrics.gauge('db_pool_waiting', pool.waitingCount);
+  metrics.gauge('db_pool_total', pool.totalCount);
+  h.reset();
+}, 10_000).unref();
+@SCN Scenario 2: database connection exhaustion
+Y: “timeout exceeded when trying to connect” or “sorry, too many clients already”; requests hang; pool waitingCount climbs; many idle-in-transaction sessions.
+U: Clients not released on error paths; long transactions (LLM calls inside); pool size × instances above max_connections; slow queries; traffic spikes; serverless instances each opening connections.
+I: pg_stat_activity grouped by state and application; pool metrics over time; code search for pool.connect() without finally/release; check transaction durations.
+F: Release in finally, move slow work out of transactions, set connectionTimeoutMillis, statement_timeout and idle_in_transaction_session_timeout, size pools against max_connections, add a server-side pooler.
+G sql:
+-- who holds connections, and for how long?
+SELECT state, count(*), max(now() - xact_start) AS oldest_tx
+FROM pg_stat_activity WHERE datname = current_database() GROUP BY state;
+ALTER DATABASE app SET idle_in_transaction_session_timeout = '30s';
+@SCN Scenario 3: duplicate document processing
+Y: The same file appears three times in a user’s list; triple embedding cost; duplicate search results.
+U: No content hash or unique constraint; double clicks; client retries after timeouts; check-then-insert races.
+I: Query documents grouped by (user_id, sha256) or (user_id, filename, size) with count &gt; 1; check request logs for repeated uploads within seconds.
+F: Hash bytes on upload, unique (user_id, sha256), ON CONFLICT returning the existing row, stable job ids, UI disabling repeat submits.
+G sql:
+ALTER TABLE documents ADD COLUMN sha256 text;
+CREATE UNIQUE INDEX documents_user_hash_uq ON documents (user_id, sha256);
+INSERT INTO documents (user_id, filename, sha256) VALUES ($1, $2, $3)
+ON CONFLICT (user_id, sha256) DO UPDATE SET filename = documents.filename   -- no-op update so RETURNING gives the row
+RETURNING id, (xmax = 0) AS inserted;                                      -- inserted=false → duplicate
+@SCN Scenario 4: LLM provider outage
+Y: 5xx/timeouts from the provider; chat and quiz endpoints failing; queues backing up; error budget burning.
+U: Provider incident, regional outage, quota exhausted, bad deploy on their side, network issues.
+I: Provider status page, error codes by provider/model, success rate per model over time; check whether non-LLM endpoints are healthy.
+F: Circuit breaker + fallback model per task, graceful messages, queue non-urgent work for later, keep non-AI features up, alert and communicate.
+G js:
+// minimal circuit breaker: closed → open after N failures → half-open probe after cooldown
+class CircuitBreaker {
+  constructor({ failures = 5, cooldownMs = 30_000 } = {}) { Object.assign(this, { failures, cooldownMs, count: 0, openedAt: 0 }); }
+  get state() { return this.count < this.failures ? 'closed' : Date.now() - this.openedAt > this.cooldownMs ? 'half-open' : 'open'; }
+  async call(fn) {
+    if (this.state === 'open') throw new Error('circuit open');
+    try { const r = await fn(); this.count = 0; return r; }
+    catch (e) { if (++this.count >= this.failures) this.openedAt = Date.now(); throw e; }
+  }
+}
+@SCN Scenario 5: hallucinated answers
+Y: Users report answers with facts not in their documents; faithfulness scores drop; citations missing or pointing to unrelated chunks.
+U: Retrieval misses, weak grounding instructions, noisy/long context, high temperature, model prior knowledge, no not-found path, a model change.
+I: Sample bad answers; check whether the needed chunk was retrieved; replay prompts at temperature 0; run the faithfulness checker on the eval set and on samples.
+F: Improve retrieval (hybrid, rewrite, rerank), strict citation rules, relevance threshold with fixed not-found answer, lower temperature, claim-level verification for high-risk answers, regression evals.
+G js:
+// block answers with no valid citations
+const cited = [...answer.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
+if (!cited.length || cited.some((n) => n < 1 || n > sources.length)) {
+  answer = "I couldn't find a reliable answer in your documents.";
+}
+@SCN Scenario 6: agent loop
+Y: Requests taking 30+ s; logs show the same tool and arguments repeated; token cost per request spikes.
+U: Unhelpful or ambiguous tool results, missing “nothing found” signals, vague descriptions, trimmed history hiding earlier results, no step limit, tool errors telling the model to retry.
+I: Trace runs with many steps; compare tool results across repeats; check descriptions and what history the model saw.
+F: Step limit with tools-off final call, duplicate-call detection, clearer tool results and descriptions, token/time budget per run, alert on steps-per-run.
+G js:
+const key = `${call.function.name}:${JSON.stringify(sortKeys(args))}`;
+if (seen.has(key)) return toolResult(call.id, { error: 'Already done. Use the earlier result or answer now.' });
+seen.add(key);
+@SCN Scenario 7: workflow crash
+Y: Runs stuck in “running” after a deploy or crash; half of the lessons generated; users waiting with no progress.
+U: Process killed mid-step; no persistence; non-idempotent steps; recovery off; long steps with no checkpoints.
+I: List runs in running state older than N minutes; compare snapshots with business tables (which lessons exist); check boot logs for recovery.
+F: Persisted snapshots, recovery on boot (or a sweeper job), idempotent steps with skip-if-done, smaller steps, transactional publish, and a manual retry endpoint.
+G sql:
+-- find stuck runs from your own business table
+SELECT id, run_id, status, updated_at FROM courses
+WHERE status IN ('generating', 'resuming') AND updated_at < now() - interval '15 minutes';
+@SCN Scenario 8: changing a document id
+Y: A user reports seeing another user’s document; logs show successful reads where document owner ≠ requester.
+U: Queries filtering by id only; authorization done in the UI; a missing check in one endpoint, a background job, or vector search.
+I: Grep repositories for queries on user-owned tables without an owner condition; replay requests with another user’s token; audit access logs for owner ≠ requester.
+F: Owner condition in every query (required userId parameter), 404 for foreign ids, default-deny routing, cross-user tests for every endpoint, RLS as backstop, incident response for exposed data.
+G js:
+// test that fails if any endpoint leaks
+for (const path of ['/documents/', '/documents/:id/chunks', '/conversations/']) {
+  const res = await request(app).get(path.replace(':id', aliceDocId) + (path.endsWith('/') ? aliceDocId : ''))
+    .set('authorization', `Bearer ${bobToken}`);
+  assert.equal(res.status, 404, `${path} leaked Alice's data to Bob`);
+}
+@SCN Scenario 9: LLM cost explosion
+Y: Daily spend 3× baseline; tokens per request or requests per user up; one feature or a few users dominating.
+U: Prompt/context growth (history, more chunks), a new feature or agent step, retry storms, loops, abuse by a few accounts, a model switch to a pricier model, caching disabled.
+I: Usage logs grouped by day, feature, model and user; compare before/after the change date; inspect the top requests by tokens.
+F: Token budgets per request/user, history summarisation, step limits, retry discipline, model routing, caching, per-user rate limits, anomaly alerts on spend.
+G sql:
+SELECT user_id, sum(input_tokens + output_tokens) AS tokens, count(*) AS calls
+FROM llm_calls WHERE created_at > now() - interval '1 day'
+GROUP BY user_id ORDER BY tokens DESC LIMIT 10;
+@SCN Scenario 10: poor retrieval
+Y: Good embeddings by spot checks, but answers miss information; low recall@k on the eval set; users rephrase repeatedly.
+U: Bad extraction (garbled text, missing tables), chunk boundaries, raw follow-up queries, filters excluding documents, wrong operator or sort order, ANN index recall/post-filtering, stale or failed documents, model mismatch.
+I: For failing questions, find the right chunk with plain SQL, check its text quality, rank it with exact search with and without filters, compare with the ANN result, log the exact embedded query and model version.
+F: Fix the link that breaks: re-extract/rechunk, query rewriting, filter fix, iterative scan or higher ef_search, hybrid search for exact terms, reranking; track recall@k.
+G sql:
+-- compare ANN vs exact for one query: missing ids = recall loss from the index
+SET LOCAL enable_indexscan = off;   -- inside a transaction: force exact search
+SELECT id FROM chunks ORDER BY embedding <=> $1 LIMIT 10;

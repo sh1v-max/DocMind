@@ -1,0 +1,226 @@
+@Q 8.1
+S: An agent combines three things: a model that can choose actions, a set of tools (functions with schemas) it may request, and a loop in your code that executes requested tools and feeds results back until the model produces a final answer or a limit is hit. The autonomy is bounded by what tools exist, what they’re allowed to do, and how many steps you allow.
+E: “What does my RAG guide say about chunk overlap?” → the agent decides to call searchDocuments with a query it writes, reads the result, and answers. If the result is empty, it may search again with different words.
+Q: Is a RAG pipeline an agent?
+A: A fixed RAG pipeline isn’t (code decides to search once); it becomes agentic when the model decides whether, what and how many times to search.
+N: “Any chatbot is an agent.”
+@Q 8.2
+S: In a plain call, the number of model calls and the order of operations are fixed by your code; the model only produces text. In an agent, the model’s output determines the next operation (which tool, with what arguments, or stop), so the number of calls varies per request and the path is decided at runtime. That flexibility brings variable latency and cost, new failure modes (wrong tool, loops), and the need for limits and validation.
+E: Summarise this text (one call) vs “find my latest document and summarise it” (list → pick → fetch → summarise, decided by the model).
+@Q 8.3
+S: The loop: (1) send the conversation + tool definitions; (2) if the response contains tool calls, validate and execute each, append a tool-result message per call, increment the step counter; (3) if it contains only text, that’s the answer; (4) stop at the step limit (send a last request without tools so the model must answer). Everything in the conversation is resent each step, so context grows with every tool result.
+E: The agent simulator in lesson 8.A shows each message being appended.
+Q: Where do you put the step limit and why there?
+A: In the loop in code: the model can’t be trusted to stop itself, and the limit bounds cost and latency per request.
+N: “The provider runs the loop.” (Some SDKs/frameworks do it for you, but it’s still client-side code, not the model.)
+@Q 8.4
+S: ReAct (from a 2022 paper) interleaves “Thought: … Action: tool[input] … Observation: …” steps in text; the model reasons about what it needs, acts, observes the result, and repeats. It improved accuracy on tasks needing external information because reasoning guides tool use and observations correct reasoning. Native function calling replaced the text-parsing part with structured calls; many models still reason internally (hidden thinking) before calling.
+E: Thought: “I need the user’s documents.” Action: listDocuments{}. Observation: [rag-guide.pdf]. Thought: “Search it.” Action: searchDocuments{query: "chunk overlap"}. …
+Q: Should you show the model’s reasoning to users?
+A: Usually show progress (“Searching for …”) rather than raw reasoning; raw thoughts can be confusing and may leak instructions.
+N: “ReAct is a JavaScript framework.”
+@Q 8.5
+S: You describe functions to the model (name, purpose, JSON-schema parameters). The model, trained on examples of tool use, can respond with a structured request to call one or more of them instead of text. Your application executes the request and returns the result; the model then continues. It turns a text generator into something that can look things up and act, through your code.
+E: Weather, database lookup, sending an email (with approval), searching documents, calling another API.
+Q: What’s “parallel tool calling”?
+A: The model requests several independent calls in one turn (e.g. get weather for three cities); you can execute them concurrently.
+N: “Tool calling lets the model access the internet by itself.”
+@Q 8.6
+S: Function calling is the provider API feature: you pass function declarations, the model returns <code>tool_calls</code> / <code>functionCall</code> parts with a name and JSON arguments, often constrained to the schema. It’s structured output specialised for choosing actions. “Tools” is the broader concept (functions, built-in tools like code execution or web search, MCP tools).
+E: OpenAI-style: <code>tools: [{ type: 'function', function: { name, description, parameters } }]</code>; Gemini: <code>tools: [{ functionDeclarations: [...] }]</code>.
+Q: Can you force the model to call a specific tool?
+A: Most APIs allow a tool-choice setting (auto, none, required/any, or a specific function); DocMind found Gemini Flash-Lite ignored mode NONE in testing, so it omits tools instead.
+N: “Function calling executes functions.”
+@Q 8.7
+E: Function calling output: <code>{ name: 'deleteDocument', arguments: '{"documentId":"d_9"}' }</code>. Tool execution: lookup → validate UUID → check approval → <code>DELETE … WHERE id = $1 AND user_id = $2</code> → result.
+N: Using the terms as if the model did both.
+@Q 8.8
+S: The model runs on the provider’s servers and only returns tokens. Your backend reads the structured call, decides whether it’s allowed, executes real code (SQL, HTTP, file access), and sends the result back as input for the next model call. This separation is the security boundary: everything the model “does” passes through code you control.
+E: Even “code interpreter” style built-in tools are executed by the provider’s sandbox, not by the model weights.
+Q: So what can a malicious prompt do through tools?
+A: Only what your tools allow for the current user; that’s why tools must be narrow, validated and authorised.
+@Q 8.9
+S: Tool names, descriptions and parameter schemas are part of the model’s input; during instruction tuning the model learned to map user intent to the best-matching tool description. Choice quality depends on: clear, distinct descriptions saying when to use and when not to use each tool; good parameter descriptions; few overlapping tools; examples in the system prompt; and the model’s capability. Too many tools (dozens) degrade selection.
+E: DocMind’s listDocuments description: “Use it when the user asks which documents or files they have, or how many.” That sentence is what makes “show me my uploaded documents” pick it.
+Q: How do you test tool selection?
+A: A labelled set of prompts with the expected tool (or none), run on each prompt/model change; track accuracy.
+N: “The model reads your function’s code.”
+@Q 8.10
+S: The result is appended to the conversation as a tool message linked to the call id (OpenAI <code>role: 'tool', tool_call_id</code>; Gemini a <code>functionResponse</code> part). The backend calls the model again with the full conversation; the model reads the result as context and decides: answer, call another tool, or ask the user for clarification. The loop continues until a text answer or a limit.
+E: Tool returns <code>{ results: [] , note: 'Nothing relevant found.' }</code> → the model either tries a different query or tells the user it found nothing.
+Q: Should tool results be raw database rows?
+A: Return only fields the model needs, trimmed and labelled; raw rows waste tokens and may leak internal data.
+N: “The tool result goes straight to the user.”
+@Q 8.11
+S: Yes, in two ways: sequentially across steps (each step’s result informs the next call) and in parallel within one step (several calls in one model turn). Your loop must handle a list of calls per turn, return one result per call id, and decide whether independent calls can run concurrently (reads yes; writes with dependencies, no).
+E: “Compare the refund policy in doc A and doc B” → two searchDocuments calls in one turn, run in parallel.
+Q: What if two parallel calls conflict (both write the same row)?
+A: Run side-effecting calls sequentially, or make them idempotent and use transactions.
+N: “Only one tool per conversation.”
+@Q 8.12
+S: Chaining is when the output of one tool becomes the input of the next: list → pick an id → fetch → transform → act. The model performs the chaining by reading results and producing the next call; you can also chain deterministically in code (a workflow) when the sequence is fixed, which is cheaper and more reliable.
+E: listDocuments → (model picks the newest id) → getDocumentChunks(id) → generateQuiz(id).
+Q: When would you hard-code the chain instead?
+A: When the order never changes: put it in a workflow or a single tool (“quizLatestDocument”) to save model calls and avoid errors.
+N: Confusing chaining with prompt chaining.
+@Q 8.13
+S: The context for each model call is the whole request: system instructions, tool definitions (they cost tokens too), conversation history, every tool call and result so far in this run, and the new user message. It grows with each step, so long agent runs get slower, pricier and noisier. Context management: trim/summarise tool results, keep only necessary history, and limit steps.
+E: A 3-step run with 2 search results of 3 chunks each can add ~2–4K tokens per step.
+Q: Why do tool definitions cost tokens?
+A: They’re serialised into the prompt the model reads; 20 tools with long schemas can cost thousands of tokens per call.
+N: “Context only means the chat history.”
+@Q 8.14
+S: Agent memory is whatever information persists across steps or sessions and is fed back into the context: the running conversation (short-term), and stored facts, preferences, summaries or past results retrieved when relevant (long-term). It lives in your database, not in the model. Designing memory means choosing what to save, how to retrieve it, how to keep it scoped to the user, and how to let users see and delete it.
+E: “User prefers answers with code examples” saved after a conversation and added to future system prompts.
+Q: What are the risks of memory?
+A: Wrong or stale memories, privacy (storing sensitive data), prompt injection persisting into memory, and cross-user leaks if not scoped.
+N: “The model remembers past conversations by itself.”
+@Q 8.15
+S: Short-term memory is bounded by the context window and the per-request history you send; it disappears when the conversation ends unless stored. Long-term memory is persisted (DB rows, often with embeddings) beyond the session and must be retrieved selectively because it can’t all fit. Different write policies: short-term is everything recent; long-term is curated (extracted facts, summaries).
+E: Short-term: the last 8 messages DocMind sends. Long-term (not built in DocMind): a memories table searched by similarity at the start of each chat.
+Q: How would you summarise old short-term memory?
+A: When history exceeds a budget, ask a model to summarise older turns (keeping names, ids, decisions) and replace them with the summary.
+N: “Long-term memory is a bigger context window.”
+@Q 8.16
+S: Autonomous agents get a goal rather than a single request and decide many steps on their own (planning, tool use, self-correction), sometimes running for minutes or hours. They’re useful for research or coding tasks with clear verification, but risky in production: compounding errors, cost blow-ups, unpredictable actions. Practical systems add plans reviewed by humans, budgets, sandboxes, checkpoints, and approval for side effects.
+E: A coding agent that edits files and runs tests until they pass, inside a sandboxed repository.
+Q: What makes autonomy safer?
+A: Verifiable goals (tests), reversible actions, least-privilege tools, budgets, human checkpoints.
+N: “Autonomous agents need no supervision.”
+@Q 8.17
+S: Limits: they’re only as good as the model’s judgement and the tool descriptions; errors compound over steps; latency and cost are variable; outputs are hard to test deterministically; context grows with each step; they’re vulnerable to prompt injection via tool results; and debugging needs full traces of every step.
+E: A model calls searchDocuments five times with near-identical queries, burning budget and time without improving the answer.
+Q: How do you test an agent?
+A: Fake the model with scripted responses for loop logic (DocMind’s AG.4 tests faked Gemini’s SSE), plus an eval set of real tasks scored on outcome, steps used and tool choices.
+N: “Agents are just smarter, with no downside.”
+@Q 8.18
+E: Converting a fixed RAG flow into an agent added a model call to every question; reverting simple FAQs to a single retrieval + generation cut latency by half.
+Q: Give a case where an agent is the right choice.
+A: Open-ended questions where the system must choose between several data sources or decide whether to search again based on what it found.
+N: “Always use agents because they’re more advanced.”
+@Q 8.19
+S: A tool definition has two halves. The declaration the model sees: a short unique name, a description that explains what it does, when to use it and when not to, and a JSON schema for parameters (types, required fields, enums, descriptions with examples). The implementation the model never sees: validation, authorisation, execution, timeouts, result shaping. Treat the declaration like a prompt (test it) and the implementation like an API endpoint (secure it).
+C js:
+const searchDocuments = {
+  name: 'searchDocuments',
+  description: "Search the user's documents for passages relevant to a query. Use for any question about document content. Not for listing files.",
+  parameters: { type: 'object', additionalProperties: false, required: ['query'],
+    properties: { query: { type: 'string', description: 'Standalone query; resolve pronouns first, e.g. "who founded the Lantern Festival".' } } },
+};
+Q: How long should a description be?
+A: One to three precise sentences; long enough to disambiguate, short enough to not waste tokens.
+N: “The function name is enough.”
+@Q 8.20
+S: Schemas tell the model the exact argument shape (names, types, enums, required), let providers constrain generation (fewer malformed calls), document the contract, and give your code something to validate against. Descriptions inside the schema are also instructions (“date in YYYY-MM-DD”).
+E: An enum <code>status: { enum: ['ready', 'processing', 'failed'] }</code> stops the model inventing “done”.
+Q: Why generate the JSON schema from Zod?
+A: One source of truth: the same schema validates the arguments in code (strip the $schema key and check provider restrictions).
+N: “Schemas are only documentation.”
+@Q 8.21
+S: Arguments are model output: they can be missing, wrongly typed, out of range, malicious (SQL fragments, path traversal like ../../etc/passwd), or a valid-looking id belonging to someone else. Validate shape with Zod, validate semantics against your data and permissions, and never let arguments decide scope (user, tenant).
+E: <code>readFile({ path: '../../.env' })</code> must be rejected by an allow-list of directories, not trusted.
+Q: Validation passed; what else must be checked?
+A: Authorization (does this id belong to the user?) and business rules (is the document ready?).
+N: “The provider already validated it against the schema.”
+@Q 8.22
+S: Return the validation error as the tool result (“query must be a non-empty string; documentId must be a UUID”) so the model can retry with corrected arguments on the next step; count it toward the step limit; log it. Repeated invalid calls on the same tool suggest an unclear schema or description; fix those.
+E: DocMind returns <code>{ error: 'query must be a non-empty string of at most 500 characters' }</code>.
+Q: Should you try to repair arguments automatically?
+A: Light normalisation (trim, case) is fine; guessing missing values is risky.
+N: “Throw an exception and return 500.”
+@Q 8.23
+S: Distinguish error types: invalid arguments (tell the model what to fix), not found / empty (tell it nothing matched), permission denied (tell it not allowed, no details), transient failure (retry inside the tool a bounded number of times, then report unavailable), and bugs (log with stack, report a generic failure). Always return a structured error result, never crash the loop, and keep a request-level budget.
+E: DB timeout in searchDocuments → one internal retry after 200 ms → still failing → <code>{ error: 'Search is temporarily unavailable.' }</code>.
+Q: What should the final answer say?
+A: Honest and actionable: “I couldn’t search your documents right now; please try again in a minute.”
+N: Hiding the failure and letting the model guess an answer.
+@Q 8.24
+S: Large results bloat context (cost, latency), can exceed the window, dilute attention, and may include data the model shouldn’t see. Fixes: paginate (return the first N and a cursor), select fields, truncate long texts with a marker, summarise large results with a cheaper model, or store the full result server-side and return a handle plus a short summary.
+E: listDocuments for a user with 2,000 files: return the 50 most recent with a total count and a hint to filter.
+Q: How do you choose the cap?
+A: From the token budget per step (e.g. ≤ 2K tokens per tool result), measured on real data.
+N: Returning entire tables “so the model has everything”.
+@Q 8.25
+S: Defence in depth: only register the tools this user/role may use; scope every tool with the user id from the session; validate arguments; enforce authorization inside the tool and in SQL; require approval for destructive or external actions; rate-limit tool calls; log and audit; and keep secrets (API keys) inside tools, never in the model’s context.
+E: Admin-only tool <code>refundOrder</code> isn’t even sent to the model for normal users.
+Q: Why not rely on the system prompt saying “don’t call admin tools”?
+A: Prompts can be overridden by injection; code-level permissions can’t.
+N: “Users can’t see the tools, so they can’t misuse them.”
+@Q 8.26
+S: Iterate over all calls in the turn; execute independent read-only calls concurrently (Promise.all) and side-effecting ones in order; produce exactly one result per call id (even errors); append them together and make one next model call. Some providers require results in the same message/turn; keep the model’s turn intact (Gemini requires the turn with its signatures sent back unchanged).
+E: The <code>runAgent</code> loop in lesson 8.A uses <code>Promise.all(msg.tool_calls.map(execute))</code>.
+Q: What if one of three calls needs approval?
+A: Run the others, store their results, pause on the one needing approval, and resume the loop once it’s approved or declined.
+N: Executing only the first call.
+@Q 8.27
+S: Loops happen when results don’t satisfy the model or don’t change. Guards: a hard step limit; a final tools-off call; detecting identical (tool, args) repeats and returning “already done”; per-run token and time budgets; tool results that clearly say “nothing found” or “unavailable”; and monitoring of steps per run.
+E: DocMind: max 3 model calls; the third is sent without tools so the model can only answer.
+Q: How would you detect “almost identical” repeated queries?
+A: Normalise arguments (lowercase, trim) or compare query embeddings with a high similarity threshold.
+N: “The model will stop on its own.”
+@Q 8.28
+S: Give every tool a timeout appropriate to its work (fetch with AbortSignal.timeout, SQL statement_timeout, child-process kill), return a timeout error result, and ensure the timed-out operation is cancelled or safe to abandon (idempotent). Keep a request-level deadline so total time stays bounded even across retries and steps.
+C js:
+async function runWithTimeout(fn, ms) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error('tool timeout')), ms);
+  try { return await fn(ac.signal); } finally { clearTimeout(timer); }
+}
+// usage: await runWithTimeout((signal) => fetch(url, { signal }), 8000)
+Q: What if the tool already performed its side effect when it timed out?
+A: The result is unknown; tools with side effects need idempotency keys so a retry doesn’t repeat the effect.
+N: Promise.race without cancelling the underlying work.
+@Q 8.29
+E: <code>{"evt":"tool","runId":"r_1","step":2,"name":"searchDocuments","args":{"query":"chunk overlap"},"ms":143,"ok":true,"resultChars":2210,"userId":"u_42"}</code>
+Q: What must you not log?
+A: Secrets, full document contents for sensitive data, and raw personal data unless your policy allows it; redact arguments where needed.
+N: Logging only errors.
+@Q 8.30
+S: Pattern: mark tools that need approval; when the model calls one, validate arguments, then pause instead of executing: persist the pending call (tool, validated args, user, run/conversation state, expiry) and show the user exactly what will happen. On approve: atomically claim the pending record for that user (so it can’t be used twice or by someone else), execute that exact call, append the result, and continue the loop. On decline: append “user declined” and continue. Frameworks provide this (Mastra’s <code>requireApproval</code> + <code>approveToolCall</code>; workflow suspend/resume).
+E: “Delete rag-guide.pdf?” card with Delete/Cancel; the delete runs only after the click.
+Q: Why not ask the model to confirm with the user in text?
+A: The model could skip it or be manipulated; the approval must be enforced in code.
+N: “Approval = a system prompt saying ‘ask before deleting’.”
+@SCN Scenario A: tool selection
+Y: Users asking to see their files get search snippets instead of a list; logs show searchDocuments called for listing requests.
+U: Overlapping or vague tool descriptions; missing “use when / not for” guidance; too many tools; a weak model for routing.
+I: Collect misrouted prompts from logs; run a tool-selection eval with expected tools; inspect the descriptions the model saw.
+F: Rewrite descriptions with clear when/not-when sentences, reduce overlap, add a few examples, and keep destructive tools behind validation, ownership checks and approval.
+G js:
+{ name: 'listDocuments', description: "List the user's documents (filename, status, date). Use when they ask which or how many files they have. Not for questions about the content." }
+@SCN Scenario B: tool failure
+Y: Agent answers “something went wrong” or hallucinates when the database blips; logs show repeated identical calls; error rate spikes with DB incidents.
+U: DB outage or pool exhaustion; tool throwing instead of returning errors; no retry inside the tool; no duplicate-call guard.
+I: Correlate tool error logs with DB metrics; check how errors are surfaced to the model; count steps per run during the incident.
+F: Catch errors into structured results, bounded internal retry for transient errors, block identical repeats, step limit with a tools-off final call, honest user message, alert on tool error rate.
+G js:
+async run({ query }, ctx) {
+  try {
+    return await retryWithBackoff(() => searchSimilar(ctx.userId, query), 1, { baseMs: 200 });
+  } catch (err) {
+    log({ evt: 'tool_error', tool: 'searchDocuments', err: err.message, reqId: ctx.reqId });
+    return { error: 'Search is temporarily unavailable.' };
+  }
+}
+@SCN Scenario C: multiple tools
+Y: Multi-part requests take many steps, sometimes skip a part, or summarise the wrong document.
+U: The model has to discover the order itself; no tool to read a whole document; summary attempted with top-k search; no parallelism.
+I: Trace runs for these requests: steps, tool order, which document id was used.
+F: Provide the right tools (getDocument, summarizeDocument, generateQuiz), run independent steps in parallel, or move the fixed sequence into a workflow triggered by one tool.
+G js:
+// one tool for a fixed sequence instead of three model decisions
+const quizLatest = { name: 'summarizeAndQuizLatest', schema: z.strictObject({}),
+  async run(_args, ctx) {
+    const [doc] = await repo.listDocuments(ctx.userId, { limit: 1, status: 'ready' });
+    if (!doc) return { error: 'No ready documents.' };
+    const [summary, quiz] = await Promise.all([summarize(doc.id, ctx.userId), generateQuiz(doc.id, ctx.userId)]);
+    return { document: doc.filename, summary, quiz };
+  } };
+@SCN Scenario D: security
+Y: Logs show destructive tool calls following “ignore previous instructions” messages or instructions inside uploaded documents.
+U: Destructive tools available without approval; model-controlled ids or scope; wildcard/batch parameters; authorization only in the prompt.
+I: Audit tool-call logs for destructive calls, their arguments and the messages preceding them; check which tools each role sees.
+F: No bulk-delete tool; validated single ids; owner-scoped SQL; approval tied to the user and the exact call; role-based tool exposure; audit log; red-team prompts in the eval set.
+G sql:
+-- the delete that can't touch other users' data, whatever the model says
+DELETE FROM documents WHERE id = $1 AND user_id = $2 RETURNING id;   -- $2 from the session, never from args

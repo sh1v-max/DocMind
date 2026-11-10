@@ -1,0 +1,29 @@
+<x-obj><ul><li>Know exactly how you will be scored, the critical minimums, and the red flags that sink a good score.</li><li>Use the interactive scorecard after every mock interview.</li></ul></x-obj>
+
+<h2 class="sec"><span class="k">19.1</span>Weighted scorecard (from the bank)</h2>
+<div class="tbl box"><table><thead><tr><th>Category</th><th class="num">Maximum points</th></tr></thead><tbody>
+<tr><td>JavaScript and Node.js</td><td class="num">10</td></tr><tr><td>Express and backend development</td><td class="num">10</td></tr><tr><td>SQL and database fundamentals</td><td class="num">10</td></tr><tr><td>LLM fundamentals and integration</td><td class="num">15</td></tr><tr><td>Embeddings and vector databases</td><td class="num">10</td></tr><tr><td>RAG architecture and retrieval</td><td class="num">15</td></tr><tr><td>Agents, tool calling and Mastra</td><td class="num">10</td></tr><tr><td>Workflows and orchestration</td><td class="num">5</td></tr><tr><td>Practical coding and debugging</td><td class="num">10</td></tr><tr><td>Project ownership and communication</td><td class="num">5</td></tr><tr><th>Total</th><th class="num">100</th></tr></tbody></table></div>
+
+<div class="two">
+<div class="box"><h4>Suggested scoring</h4><table><tbody><tr><td class="num">90–100</td><td>Exceptional fresher; strong hire</td></tr><tr><td class="num">80–89</td><td>Hire</td></tr><tr><td class="num">70–79</td><td>Consider; additional evaluation</td></tr><tr><td class="num">60–69</td><td>Weak for this position</td></tr><tr><td class="num">Below 60</td><td>Reject</td></tr></tbody></table><p class="counter">These are suggested thresholds, not universal hiring standards.</p></div>
+<div class="box"><h4>Critical minimums</h4><p>Even with a good overall score, the interviewer looks for:</p><ul><li>Backend development: at least 6/10.</li><li>SQL and database fundamentals: at least 5/10.</li><li>RAG: at least 10/15.</li><li>Practical coding: at least 6/10.</li><li>Genuine ownership of at least one substantial project.</li></ul></div>
+</div>
+
+<h2 class="sec"><span class="k">19.2</span>Score a mock interview</h2>
+<x-w w="scorecard"></x-w>
+
+<h2 class="sec"><span class="k">19.3</span>Serious red flags, and how to make sure you never show them</h2>
+<div class="tbl box"><table><thead><tr><th>#</th><th>Red flag</th><th>Your defence</th><th>Practise in</th></tr></thead><tbody>
+<tr><td>1</td><td>Cannot explain code from their own GitHub</td><td>Walk through DocMind’s request path file by file until you can do it from memory</td><td>Phase 13</td></tr>
+<tr><td>2</td><td>Confuses an LLM API call with an agent</td><td>“An agent is a loop where the model chooses actions and my code executes them”</td><td>Phase 8.A</td></tr>
+<tr><td>3</td><td>Thinks the LLM directly executes backend functions</td><td>“The model proposes a call; my backend validates, authorizes and runs it”</td><td>Phase 8, tool flow</td></tr>
+<tr><td>4</td><td>Cannot explain how embeddings are stored or retrieved</td><td>vector(3072) column, <code>&lt;=&gt;</code> cosine distance, owner join, top 3</td><td>Phase 6</td></tr>
+<tr><td>5</td><td>Cannot explain their own chunking strategy</td><td>“500 words, no overlap, a deliberate baseline; next: overlap + paragraph-aware, measured”</td><td>Phase 7.B, 13.14/13.17</td></tr>
+<tr><td>6</td><td>Doesn’t understand asynchronous JavaScript</td><td>Predict event-loop output correctly; explain await</td><td>Phase 2</td></tr>
+<tr><td>7</td><td>Cannot write a basic Express endpoint</td><td>Write <code>POST /api/chat</code> from memory in 10 minutes</td><td>Phase 11, ex 1</td></tr>
+<tr><td>8</td><td>Doesn’t understand database relationships</td><td>PK/FK, joins, one-to-many, many-to-many with a join table</td><td>Phase 4</td></tr>
+<tr><td>9</td><td>Uses AI-generated code without understanding it</td><td>“I can explain any line; here’s how I verify generated code”</td><td>Phase 17.4–17.6</td></tr>
+<tr><td>10</td><td>Claims production experience or capabilities they cannot demonstrate</td><td>Say “deployed and live, personal project”, never “production at scale”; name gaps first</td><td>Phase 1</td></tr></tbody></table></div>
+
+<h2 class="sec"><span class="k">19.4</span>What a fresher can realistically aim for</h2>
+<div class="box prose"><p>A strong fresher target with this course: <b>80+</b>, with RAG ≥ 12/15 and backend ≥ 8/10, because those are where DocMind gives you real depth. Weakest areas for you right now are likely “practical coding” under time pressure (practise Phase 11 with a timer) and “project ownership” questions about tests and production readiness (have the technical-debt answer ready: Phase 13.48).</p></div>

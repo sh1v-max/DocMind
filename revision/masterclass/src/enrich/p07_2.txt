@@ -1,0 +1,42 @@
+@Q 7.13
+S: RAG injects knowledge into the input at query time; fine-tuning changes the model’s weights using training examples. RAG wins for facts that change, need citations, or vary per user (permissions); updates are instant (re-index). Fine-tuning wins for behaviour: a consistent format or tone, a domain’s jargon and task style, shorter prompts, or a smaller cheaper model reaching a larger one’s quality on a narrow task. Fine-tuned facts are hard to update or remove and can still be hallucinated.
+Q: Can fine-tuning improve RAG?
+A: Yes: fine-tuning the embedding model or a reranker on your domain, or the generator to follow citation formats better.
+@Q 7.15
+S: Limits are mostly about what top-k retrieval can see: answers needing many documents or whole-document understanding (summaries, comparisons, counts), multi-hop questions whose second step depends on the first, information split across chunks, poor extraction (tables, scans), ambiguous questions, and stale indexes. Operational limits: extra latency and cost per question, more moving parts to evaluate, and permission and freshness engineering. Many are solved by adding other patterns: precomputed summaries, agents that search multiple times, SQL over extracted metadata, and better chunking.
+@Q 7.22
+S: Chunk size balances specificity (small) against self-containedness (large). Consider the content (FAQ entries, contract clauses, narrative prose), the typical question (fact lookup vs explanation), the embedding model’s input limit and quality range, and the prompt budget (k × chunk size must fit). Pick a baseline, then compare a few sizes on a labelled question set using recall@k and answer quality, holding everything else constant.
+@Q 7.26
+S: Treat headings as structure, not text: split at headings so a chunk never spans two sections, keep the full heading path (H1 › H2 › H3) as metadata and as a short prefix in the embedded text, pack whole paragraphs into chunks, and only split a paragraph when it alone exceeds the limit (at sentence boundaries). Very short sections can be merged with their neighbours under the parent heading.
+E: “Billing › Refunds › Annual plans” prefixed to a chunk saying “within 14 days of purchase” lets “annual plan refund” retrieve it.
+Q: What about lists and bullet points?
+A: Keep a list with its introducing sentence; split long lists into groups that repeat the intro.
+N: Treating headings as normal sentences that can end up at the end of the previous chunk.
+@Q 7.27
+S: Tables lose meaning when flattened into text or split row by row without headers. Good handling: extract tables as structured data (layout-aware parsers), serialise to Markdown or “column: value” sentences per row, keep small tables in one chunk, repeat headers for groups of rows in large tables, add a caption or summary chunk describing the table, and for numeric questions consider loading the table into a real database table and answering with SQL.
+@Q 7.28
+S: Code has structure (files, classes, functions) and exact identifiers. Chunk along syntax boundaries with a parser, attach file path, language, symbol name and line range, include enough context (imports, class signature, docstring), and index identifiers for keyword search. Questions like “where is X handled?” need both semantic and exact matching; answers should cite file and line.
+@Q 7.29
+S: Images carry information text extraction can’t see: scanned pages, charts, diagrams, screenshots. Options: OCR for text in images; vision-model captions/descriptions indexed as text with a link to the page; multimodal embeddings to search images directly; and at answer time, sending the relevant page image to a multimodal model. Keep page numbers so users can verify against the original.
+@Q 7.34
+S: Semantic search alone misses exact matches (codes, names, numbers, new terms the embedding model never saw) and can rank “topically similar” chunks above the one containing the exact answer. Keyword search alone misses paraphrases. Hybrid search improves recall because the two make different mistakes; fusion promotes results both agree on. It’s especially valuable in technical, legal, medical and support domains full of identifiers.
+Q: When might hybrid not help?
+A: Purely conversational corpora with no special terms; measure before adding complexity.
+N: “Hybrid is always slower and not worth it.”
+@Q 7.35
+S: BM25 is a bag-of-words ranking function from information retrieval. It scores a document for a query by summing, over query terms, the term’s importance across the corpus (IDF: rarer terms count more) times a saturating function of how often the term appears in the document, normalised by document length relative to the average. It’s fast with an inverted index and remains a strong baseline that neural retrievers are often combined with.
+@Q 7.36
+Q: Why retrieve more candidates than you return?
+A: Fusion and reranking need overlap and choice; with only 5 from each, good items ranked 6–20 in one list can never be promoted.
+@Q 7.37
+S: RRF converts each retriever’s output into ranks, gives each item 1/(k + rank) per list it appears in, sums, and sorts. It needs no score calibration, is robust to outlier scores, and naturally rewards consensus between retrievers. The constant k dampens the advantage of top positions so one retriever’s #1 can’t completely dominate.
+@Q 7.39
+S: First-stage vector search compares precomputed vectors; it’s optimised for recall at scale, not for fine judgements. The top few results often include near-topic passages that don’t answer the question. A reranker reads the question and each candidate together and scores actual answer relevance, which mostly changes the order within the top 20–50, exactly the part that decides what the LLM sees. Better top-5 precision means fewer tokens and fewer misleading chunks.
+@Q 7.42
+S: Bi-encoders encode separately and compare vectors: precomputable, fast, scalable, less precise. Cross-encoders encode the pair jointly: precise, but one forward pass per pair at query time, so they only work on shortlists. The standard design combines them: a bi-encoder retrieves broadly, a cross-encoder reranks narrowly.
+@Q 7.48
+S: Ambiguity comes from short or context-dependent questions (“what’s the limit?”), multiple meanings, or missing scope. Techniques: rewrite with conversation history; use metadata from the UI (selected document, product); multi-query retrieval covering interpretations; diversity selection (MMR) so the context isn’t five versions of one interpretation; and, when scores are low or results split across meanings, ask a clarifying question instead of guessing.
+@Q 7.49
+S: Measure RAG in layers with a fixed, versioned dataset: retrieval metrics against labelled relevant chunks; generation metrics (faithfulness, answer relevancy, correctness against a reference, citation accuracy, not-found behaviour on unanswerable questions) with LLM judges spot-checked by humans; and system metrics (latency, cost per question). Run it in CI or before each change; add online signals (thumbs, escalations, follow-up rephrasing) for production.
+@Q 7.54
+S: Faithfulness (groundedness) asks whether every claim in the answer can be inferred from the retrieved context. It’s the main hallucination metric for RAG: an answer can be helpful and even true, but if it isn’t supported by the provided sources, the system can’t justify it. It doesn’t measure retrieval quality or completeness.

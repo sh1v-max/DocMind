@@ -1,0 +1,56 @@
+@Q 10.1.4
+S: Two copies serve different purposes. Chunk text belongs next to its embedding in the database: it’s what you put in prompts, what keyword search indexes, and what citations show. The full extracted (and cleaned) text is a reusable intermediate: store it in object storage so you can re-chunk or re-embed without re-running extraction or OCR, which may be slow or paid.
+@Q 10.1.5
+S: Embeddings should live where you can filter them by ownership and metadata in the same query: pgvector on the chunks table keeps search, joins and transactions in one database and is enough for millions of vectors with an HNSW index. A separate vector database is an option at much larger scale or for specialised features, at the cost of syncing deletes and permissions.
+@Q 10.1.6
+S: Model the entities and their ownership: users; documents (owner, storage key, hash, status, progress, error); chunks (document FK, index, page, heading, text, embedding, tsvector); conversations (owner, title, summary); a join table for which documents a conversation searches; messages (conversation FK, role, content, metadata JSONB for sources and token usage). Foreign keys with cascade, unique constraints for idempotency (document_id + chunk_index; owner + file hash), and indexes on every column you filter or join by.
+@Q 10.1.7
+S: Processing is a pipeline of idempotent stages run by workers: download the original, extract text (OCR if needed), clean, chunk with metadata, embed in batches under rate limits, write chunks in a transaction that replaces old ones, mark ready (or failed with a reason after the final retry), and update progress throughout. The API only accepts the upload and enqueues; workers scale independently.
+@Q 10.1.8
+S: The RAG path: authorise the conversation and its document set; rewrite the latest question into a standalone query using history; embed it; hybrid search (vector + keyword) filtered to the allowed documents; rerank candidates; build a labelled context within a token budget; generate with grounding rules and citations; stream; save the answer with sources and usage; evaluate offline on a labelled set.
+@Q 10.1.9
+S: Persist every message (role, content, metadata) per conversation; for each new turn send a bounded window (by tokens, not just count) of recent messages plus a running summary of older ones; keep tool results and sources in metadata so the UI can redisplay them; and scope every history query by user so a guessed conversation id never leaks another user’s chat into the prompt.
+@Q 10.1.10
+S: Multi-user means authentication on every request, an owner (or tenant) on every user-owned row, authorization in every query (including vector search and tools), per-user limits (storage, documents, requests, tokens), and isolation tests. Design it in from the start: retrofitting ownership onto an existing schema is painful (DocMind did it in its auth phase).
+@Q 10.1.11
+S: Permissions are enforced in the data layer, not the UI: every query that touches documents or chunks includes the caller’s access condition (owner = user, or a join through an access table for shared documents), with the user id from the session. The conversation’s selected documents are validated against the same rule. Unauthorised ids behave as not found (404). Row-level security can add a database-enforced safety net.
+@Q 10.1.12
+S: Track status as an explicit state machine on the document row (uploading → processing → ready | failed) with progress counters and an error reason, updated by workers at each stage. Expose it through the list/detail endpoints, push or poll to the UI, and make the rest of the system respect it: search only ready documents, refuse chat on processing ones with 409, and allow retry on failed ones.
+@Q 10.1.13
+S: Large files stress memory, time and rate limits. Upload them directly to storage (presigned, multipart), enforce size/page limits, process in page-range jobs with bounded memory (stream or page-wise extraction), batch embeddings under rate limits, record progress, retry failed ranges individually, and decide whether a partially processed document is usable.
+@Q 10.1.14
+S: Scale processing horizontally: stateless workers pulling from a queue, autoscaled on queue depth and age; split large documents into smaller jobs; cap concurrency per worker and globally to stay within provider rate limits; prioritise interactive jobs (small uploads) over bulk backfills; and watch DB write capacity. The real ceiling is usually the embedding provider’s limits, so request higher quotas or batch more texts per call.
+@Q 10.2.3
+S: Validation has layers: schema (types, exactly 4 options, valid index), structural rules (options distinct, no “all/none of the above”, question not giving away the answer), grounding (the correct answer is supported by the source chunk), and quality (one unambiguous correct option, plausible distractors). Automate the first three in code and with a judge model; route uncertain items to regeneration or review. Shuffle option order in code to avoid position bias.
+@Q 10.2.4
+S: Duplicates appear when generating in batches or regenerating. Prevent them by passing existing questions to the generator as “do not repeat”, then checking each new question in code: normalised text equality, and semantic similarity (embedding cosine above a threshold) against existing questions in the quiz; drop and regenerate duplicates. A unique constraint on normalised text per quiz catches exact repeats at the database level.
+@Q 10.2.5
+S: Store questions as rows (not one blob) so they can be regenerated, versioned, analysed and reported individually: quiz header (owner, document, status), questions (position, text, options, correct index, explanation, source chunk, status/version), and if quizzes are taken server-side, attempts and answers for grading and analytics.
+@Q 10.2.6
+S: Generate in batches with each batch saved as draft rows keyed by (quiz, batch or position); record progress on the quiz; on failure, keep completed batches and retry only the missing ones; let the user see partial results with a status (“16 of 20 ready”) and choose to accept fewer or retry. The quiz becomes ready only when the target count of validated questions exists.
+E: Batch 4 of 4 fails validation twice → quiz status partial (15/20) with “Generate remaining 5” button.
+Q: How do you avoid regenerating batches 1–3 on retry?
+A: The job checks which positions already have valid questions and generates only the gaps.
+N: Discarding the whole quiz when one batch fails.
+@Q 10.2.7
+S: Single-question regeneration needs per-question rows and the source chunk id. The endpoint checks ownership, enqueues a small job that generates one question from the same (or a nearby) source, passes the remaining questions as “avoid”, validates and dedupes it, and replaces the row in place (or creates a new version) at the same position.
+@Q 10.2.8
+S: Combine automatic checks (schema validity, grounding/answerability by a judge, distractor plausibility, duplicate rate, difficulty spread), learner analytics (correct rates, discrimination between strong and weak learners, option selection patterns, reports), and periodic human review of samples. Track these per prompt/model version to see whether changes improve quality.
+@Q 10.3.7
+S: Measure offline and online. Offline: an eval set of real customer questions with reference answers and sources, scored for retrieval recall, faithfulness, correctness and not-found behaviour. Online: resolution without escalation, escalation rate, thumbs up/down, repeat contacts on the same issue, CSAT, and sampled human reviews. Watch them per product area and per release.
+@Q 10.4.1
+S: Make conversations first-class: a conversations table (owner, title, summary, last activity) and messages linked to it, ordered by a sequential id. Endpoints: list conversations (paginated by last activity), create, rename, delete, list messages (paginated), and post a message (streamed). Each conversation keeps its own scope (selected documents), history window and summary; switching scope starts a new conversation.
+@Q 10.4.2
+S: Components: an API that validates and enqueues (stable job ids), a durable queue, a pool of stateless workers with concurrency limits, idempotent jobs with retries and backoff, a dead-letter queue for permanent failures, status and progress on the business record, and monitoring of queue depth, job age, failure rate and throughput, with autoscaling on depth.
+@Q 10.4.3
+S: Flow: validate the URL (scheme, length), protect against SSRF (resolve DNS and reject private/link-local/loopback addresses, re-check after each redirect, block non-HTTP schemes), check a cache keyed by normalised URL (and content hash), fetch in a worker with timeout, size cap and content-type checks, extract the main content, summarise (map-reduce for long pages) with citations or quotes, store and return. Rate-limit per user and respect robots.txt where appropriate.
+@Q 10.4.4
+S: An AI search engine combines classic IR with neural components: ingestion into an inverted index (BM25) and a vector index with shared metadata and permissions; query understanding (spelling, filters, intent); parallel lexical and semantic retrieval; fusion; reranking; optional generated answers with citations; caching; and evaluation with NDCG and click data. Latency budget matters: retrieval in tens of ms, reranking hundreds, generation streamed.
+@Q 10.4.5
+S: Keep computation and narration separate: SQL (or a reporting engine) computes every number deterministically and auditable; the LLM turns a small, structured result into readable text and highlights. Run it as a scheduled or on-demand job, store generated reports with the data snapshot they used, restrict which data each user can report on, and verify numbers in the output against the input.
+@Q 10.4.6
+S: A streaming API needs: an endpoint returning text/event-stream with a documented event protocol (metadata, deltas, extra data like sources, done, error); heartbeats; proxy settings that disable buffering; cancellation when the client disconnects (abort the provider call); persistence of the final message after streaming; errors after headers sent as in-band events; and a client parser that handles partial chunks and “stream ended without done”.
+@Q 10.4.7
+S: Put a provider-neutral interface in front of all model calls, with adapters per provider (roles, tools, structured output, streaming, usage, errors), configuration-driven routing per task (model and provider per use case), fallback chains with circuit breakers, normalised usage/cost logging, and an eval suite run per provider. Note that embeddings are not interchangeable: switching embedding providers is a migration, not a fallback.
+@Q 10.4.8
+S: User-specific memory is a store of durable facts and preferences per user, written deliberately (extraction after conversations, or explicit “remember this”), retrieved selectively (by similarity and recency) into the prompt, strictly scoped by user, visible and deletable by the user, and protected against injected or wrong memories. Decide retention, what never to store (secrets, sensitive categories), and how memories expire.

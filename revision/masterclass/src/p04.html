@@ -1,0 +1,516 @@
+<x-obj><ul><li>Design a normalised schema for an AI app and explain every key, constraint and index.</li><li>Write joins, aggregates, CTEs and window functions, and read an EXPLAIN ANALYZE plan.</li><li>Explain transactions, ACID, isolation levels, deadlocks and connection pooling with real failure cases.</li><li>Use Drizzle ORM and Drizzle Kit, and know when raw SQL is the better tool.</li></ul></x-obj>
+<x-pre><ul><li>Phase 3: repositories and parameterized queries.</li><li>A Postgres to practise on: Neon/Supabase free tier, or <code>docker run -e POSTGRES_PASSWORD=pw -p 5432:5432 pgvector/pgvector:pg17</code>.</li></ul></x-pre>
+
+<h2 class="sec"><span class="k">4.A</span>Lessons</h2>
+
+<x-lesson t="The relational model, with a real schema" tag="must">
+<x-def>A relational database stores data in <b>tables</b> (relations) of <b>rows</b> with typed <b>columns</b>. Tables connect through keys, and SQL describes <i>what</i> data you want, not how to fetch it.</x-def>
+<x-why>Structure plus constraints means the database itself refuses bad data (duplicate emails, orphaned rows, nulls where a value is required), and you can ask questions nobody planned for with joins and aggregates.</x-why>
+<x-impl><p>A schema for a document-chat + quiz app. Read every line; each constraint prevents a real bug.</p>
+<pre data-l="sql">CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE users (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         text UNIQUE,                         -- many NULLs allowed (guests)
+  password_hash text,
+  role          text NOT NULL DEFAULT 'user' CHECK (role IN ('user','admin')),
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE documents (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- FK: no orphan docs
+  filename    text NOT NULL,
+  sha256      text NOT NULL,                       -- for duplicate detection
+  status      text NOT NULL DEFAULT 'processing' CHECK (status IN ('processing','ready','failed')),
+  error       text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (user_id, sha256)                         -- same file twice per user → conflict
+);
+CREATE INDEX documents_user_created_idx ON documents (user_id, created_at DESC);
+
+CREATE TABLE chunks (
+  id          bigserial PRIMARY KEY,
+  document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  chunk_index int  NOT NULL,
+  page        int,
+  content     text NOT NULL,
+  embedding   vector(1536) NOT NULL,
+  UNIQUE (document_id, chunk_index)                -- re-running ingestion can't duplicate
+);
+
+CREATE TABLE conversations (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id    uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title      text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE messages (
+  id              bigserial PRIMARY KEY,           -- also a tiebreaker for ordering
+  conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  role            text NOT NULL CHECK (role IN ('user','assistant','tool')),
+  content         text NOT NULL,
+  metadata        jsonb NOT NULL DEFAULT '{}',     -- sources, token usage, model
+  created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX messages_conv_idx ON messages (conversation_id, id);
+
+-- many-to-many: which documents a conversation searches
+CREATE TABLE conversation_documents (
+  conversation_id uuid REFERENCES conversations(id) ON DELETE CASCADE,
+  document_id     uuid REFERENCES documents(id) ON DELETE CASCADE,
+  PRIMARY KEY (conversation_id, document_id)
+);</pre></x-impl>
+<x-dm><p>DocMind’s real schema is simpler and was created by hand-run SQL on Neon: <code>users</code>, <code>documents</code> (with <code>status</code> + <code>error</code>), <code>chunks</code> (<code>vector(3072)</code>, <b>no</b> user_id: ownership comes through the join to documents), <code>chat_messages</code> (its own <code>user_id</code>, because an “All documents” session has <code>document_id = 'all'</code>). There is <b>no sessions table</b>: a session is a <code>session_id</code> shared by message rows. And <b>no foreign keys anywhere</b>, so cleanup relies on code order (delete the document row first, then its chunks). Both are listed as known gaps. Messages are ordered by <code>created_at</code> without an id tiebreak (ISSUES #3).</p></x-dm>
+<x-mist><ul><li>Storing a list in a comma-separated text column instead of a join table.</li><li>No FK, then “orphan rows” after deletes (DocMind once had 65 orphan chunks).</li><li>Using <code>timestamp</code> instead of <code>timestamptz</code>.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Joins, grouping and window functions by example" tag="must">
+<x-def>A <b>join</b> combines rows from two tables on a condition. <b>GROUP BY</b> collapses rows into groups for aggregates. A <b>window function</b> computes across related rows but keeps every row.</x-def>
+<x-in><p>Data used below: users (1 Alex, 2 John, 3 Mira); documents (1 Alex “AI Basics”, 2 Alex “RAG Guide”, 3 John “Node.js Guide”).</p>
+<pre data-l="sql">-- INNER JOIN: only matching pairs → 3 rows (Mira disappears)
+SELECT u.name, d.title FROM users u JOIN documents d ON d.user_id = u.id;
+
+-- LEFT JOIN: every user, NULLs where no match → 4 rows (Mira, NULL)
+SELECT u.name, d.title FROM users u LEFT JOIN documents d ON d.user_id = u.id;
+
+-- count per user, including zero (count(d.id) ignores NULLs; count(*) would say 1 for Mira)
+SELECT u.name, count(d.id) AS docs FROM users u LEFT JOIN documents d ON d.user_id = u.id
+GROUP BY u.id, u.name ORDER BY docs DESC;
+
+-- WHERE filters rows before grouping; HAVING filters groups after
+SELECT user_id, count(*) FROM documents WHERE status = 'ready' GROUP BY user_id HAVING count(*) >= 2;
+
+-- window: latest document per user without losing the row
+SELECT * FROM (
+  SELECT d.*, row_number() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn FROM documents d
+) t WHERE rn = 1;
+
+-- CTE: name a step, read top to bottom
+WITH per_user AS (SELECT user_id, count(*) AS n FROM documents GROUP BY user_id)
+SELECT u.name, p.n FROM per_user p JOIN users u ON u.id = p.user_id WHERE p.n = (SELECT max(n) FROM per_user);</pre></x-in>
+<x-mist><ul><li><code>LEFT JOIN</code> then <code>WHERE d.status = 'ready'</code>: the WHERE removes the NULL rows and silently turns it into an inner join. Put the condition in the <code>ON</code>.</li><li>Selecting columns that aren’t grouped or aggregated.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Indexes: how they speed up reads and slow down writes" tag="must">
+<x-def>An index is a separate data structure (by default a B-tree) that keeps column values sorted with pointers to rows, so the database can find matches without reading the whole table.</x-def>
+<x-in><p>A B-tree is a shallow, balanced tree: finding a key in a million rows takes about 20 comparisons and a few page reads instead of reading every page. Composite index <code>(user_id, created_at DESC)</code> is sorted by user, then by date inside each user: perfect for “this user’s latest documents”, useless for “all documents from yesterday” (leftmost-prefix rule). Every INSERT/UPDATE/DELETE must also update every index, and indexes take disk and memory.</p></x-in>
+<x-vis><x-w w="indexscan"></x-w></x-vis>
+<x-real>Index foreign keys you filter or join on (Postgres does not create them automatically), columns in frequent WHERE/ORDER BY, and unique business keys. Vector columns need special indexes (HNSW/IVFFlat, Phase 6).</x-real>
+<x-mist><ul><li>Indexing every column “just in case”.</li><li>A function on the column defeats the index: <code>WHERE lower(email) = $1</code> needs an expression index on <code>lower(email)</code>.</li><li>Expecting an index on a low-selectivity column (a boolean) to help.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Transactions, ACID, isolation and deadlocks" tag="must">
+<x-def>A transaction groups statements so they succeed or fail as one unit. ACID: <b>Atomicity</b> (all or nothing), <b>Consistency</b> (constraints hold), <b>Isolation</b> (concurrent transactions don’t see each other’s half-done work), <b>Durability</b> (committed = survives a crash, via the write-ahead log).</x-def>
+<x-in><p><b>Isolation levels</b> (Postgres):</p><table><thead><tr><th>Level</th><th>What you see</th><th>Allows</th></tr></thead><tbody>
+<tr><td>Read committed (default)</td><td>each statement sees data committed before it started</td><td>non-repeatable reads, lost-update races in read-modify-write code</td></tr>
+<tr><td>Repeatable read</td><td>one snapshot for the whole transaction</td><td>serialization errors on conflicting writes (retry)</td></tr>
+<tr><td>Serializable</td><td>as if transactions ran one at a time</td><td>more serialization failures; you must retry</td></tr></tbody></table>
+<p><b>Deadlock:</b> T1 locks row A then wants B; T2 locks B then wants A. Postgres detects the cycle (after <code>deadlock_timeout</code>, 1 s by default) and aborts one with an error. Prevent by locking in a consistent order and keeping transactions short.</p>
+<pre data-l="sql">-- lost update fixed with an atomic statement instead of read-then-write
+UPDATE users SET credits = credits - 1 WHERE id = $1 AND credits > 0 RETURNING credits;
+-- or lock the row you will modify
+BEGIN; SELECT credits FROM users WHERE id = $1 FOR UPDATE; ... COMMIT;</pre></x-in>
+<x-an>A bank transfer: debit and credit are one envelope. Either both slips are in the envelope or it isn’t sent.</x-an>
+<x-real>Publishing a generated course: insert the course row, its modules and lessons, and mark it published in one transaction, so readers never see half a course.</x-real>
+<x-mist><ul><li>Calling an LLM inside an open transaction: a 10-second transaction holds locks and a pooled connection the whole time. Generate first, then write in a short transaction.</li><li>Using the pool directly (<code>pool.query</code>) for BEGIN/COMMIT: each call may use a different connection. Check out one client.</li></ul></x-mist>
+</x-lesson>
+
+<x-lesson t="Connection pooling" tag="must">
+<x-def>A pool keeps a set of open database connections and lends them to requests, instead of opening a new connection per query.</x-def>
+<x-why>Opening a Postgres connection costs a TCP + TLS handshake + authentication + a backend process on the server (tens of milliseconds, several MB of server memory). Postgres also has a hard <code>max_connections</code>.</x-why>
+<x-in><ol><li><code>pool.query()</code> borrows an idle client, runs the query, returns it automatically.</li><li><code>pool.connect()</code> gives you a client for a transaction; you must <code>release()</code> it.</li><li>When all clients are busy, new requests wait in a queue (<code>connectionTimeoutMillis</code> decides how long).</li><li>Serverless or many app instances → use a server-side pooler (PgBouncer, Neon’s pooled endpoint) so 50 instances × 10 = 500 app connections share far fewer real ones.</li></ol></x-in>
+<x-an>A taxi stand: cars wait at the stand and passengers take the next free one, instead of each passenger buying a car.</x-an>
+<x-dm>DocMind uses one <code>pg.Pool</code> shared by Drizzle; the Phase 8 plan adds <code>export const pool</code> so Mastra’s storage reuses the same pool instead of opening extra Neon connections.</x-dm>
+</x-lesson>
+
+<x-lesson t="Drizzle ORM, Drizzle Kit and migrations" tag="must">
+<x-def>Drizzle is a TypeScript-first ORM whose query builder looks like SQL and compiles to parameterized SQL. Drizzle Kit is its CLI that compares your schema file with the database and generates or applies migrations.</x-def>
+<x-impl><pre data-l="js">// db/schema.js
+import { pgTable, uuid, text, timestamp, integer, index, unique, vector } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  email: text('email').unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const documents = pgTable('documents', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  filename: text('filename').notNull(),
+  status: text('status', { enum: ['processing', 'ready', 'failed'] }).notNull().default('processing'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [index('documents_user_idx').on(t.userId, t.createdAt)]);
+
+export const chunks = pgTable('chunks', {
+  id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  chunkIndex: integer('chunk_index').notNull(),
+  content: text('content').notNull(),
+  embedding: vector('embedding', { dimensions: 1536 }).notNull(),
+}, (t) => [unique().on(t.documentId, t.chunkIndex)]);
+
+export const usersRelations = relations(users, ({ many }) => ({ documents: many(documents) }));
+export const documentsRelations = relations(documents, ({ one, many }) => ({
+  owner: one(users, { fields: [documents.userId], references: [users.id] }),
+  chunks: many(chunks),
+}));</pre>
+<pre data-l="js">// db/client.js + a repository
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { and, eq, desc, sql, count } from 'drizzle-orm';
+import pg from 'pg';
+import * as schema from './schema.js';
+export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+export const db = drizzle(pool, { schema });
+
+export const getDocumentForUser = (userId, id) =>
+  db.select().from(schema.documents)
+    .where(and(eq(schema.documents.id, id), eq(schema.documents.userId, userId)))
+    .limit(1).then((r) => r[0] ?? null);
+
+export const countPerUser = () =>
+  db.select({ userId: schema.users.id, n: count(schema.documents.id) })
+    .from(schema.users)
+    .leftJoin(schema.documents, eq(schema.documents.userId, schema.users.id))
+    .groupBy(schema.users.id);
+
+export async function replaceChunks(documentId, rows) {
+  await db.transaction(async (tx) => {           // tx is one connection: BEGIN ... COMMIT
+    await tx.delete(schema.chunks).where(eq(schema.chunks.documentId, documentId));
+    await tx.insert(schema.chunks).values(rows);
+    await tx.update(schema.documents).set({ status: 'ready' }).where(eq(schema.documents.id, documentId));
+  });                                            // a throw inside → ROLLBACK
+}
+
+// relational query API (uses the relations above)
+const withChunks = await db.query.documents.findFirst({ where: eq(schema.documents.id, someId), with: { chunks: true } });
+
+// raw SQL escape hatch, still parameterized
+const rows = await db.execute(sql`SELECT count(*) FROM chunks WHERE document_id = ${someId}`);</pre>
+<pre data-l="bash"># drizzle.config.js: { schema: './db/schema.js', out: './drizzle', dialect: 'postgresql', dbCredentials: { url } }
+npx drizzle-kit generate   # diff schema.js vs last snapshot → writes drizzle/0003_xxx.sql (review it!)
+npx drizzle-kit migrate    # applies pending SQL files, records them in a migrations table
+npx drizzle-kit push       # applies the diff directly, no files: fine for prototypes, risky for prod</pre></x-impl>
+<x-walk><ol><li>You add a column in schema.js.</li><li><code>generate</code> compares against the stored snapshot and writes an <code>ALTER TABLE ... ADD COLUMN</code> SQL file.</li><li>You review it (renames can look like drop + add!), commit it with the code.</li><li>CI/deploy runs <code>migrate</code> before the new code starts; the migrations table prevents re-running.</li></ol></x-walk>
+<x-dm>DocMind has no committed migrations: every table was created by SQL run in the Neon editor, with the SQL kept as comments in <code>schema.ts</code>. Moving to <code>drizzle-kit generate/migrate</code> needs a one-time baseline, otherwise Kit would try to re-create the existing tables. Both are in ISSUES (#28).</x-dm>
+<x-mist><ul><li>Using <code>push</code> on production data: no review, no history.</li><li>Not reviewing generated SQL; a renamed column becomes DROP + ADD and loses data.</li></ul></x-mist>
+</x-lesson>
+
+<h2 class="sec"><span class="k">4.1</span>Database fundamentals</h2>
+<x-q n="4.1" tag="must basic"><x-t>What is a relational database?</x-t><x-say>A database that stores data in tables of rows and typed columns, links tables through keys, enforces constraints, and is queried with SQL. Postgres, MySQL, SQLite.</x-say>
+<x-simple>The relational model (E. F. Codd, 1970) stores facts as rows in tables; each table has a fixed set of typed columns; relationships are expressed by storing keys, not pointers; and SQL lets you combine tables with joins at query time. The database enforces integrity with constraints and gives transactions with ACID guarantees. Because queries are declarative, the planner chooses how to execute them (which index, which join algorithm).</x-simple>
+<x-eg>An AI app: users, documents (user_id), chunks (document_id), messages (conversation_id). “All ready documents of user 7 with their chunk counts” is one SQL query, no code loops.</x-eg>
+<x-fu q="Name three relational databases and one difference.">PostgreSQL (rich types: JSONB, arrays, extensions like pgvector), MySQL (widely hosted, simpler feature set), SQLite (embedded in one file, no server).</x-fu>
+<x-no>“A relational database is any database with tables.” Constraints, joins and transactions are the point.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.2" tag="must basic"><x-t>What is a non-relational database?</x-t><x-say>A database that doesn’t use the table-and-join model: document stores (MongoDB), key-value (Redis, DynamoDB), wide-column (Cassandra), graph (Neo4j), and dedicated vector stores (Pinecone, Qdrant).</x-say>
+<x-simple>Non-relational (NoSQL) databases organise data by access pattern instead of normalised tables: document stores keep nested JSON per record (MongoDB), key-value stores map keys to blobs (Redis, DynamoDB), wide-column stores spread rows across many nodes (Cassandra), graph databases store nodes and edges (Neo4j), and vector databases index embeddings (Qdrant, Pinecone). They often trade joins and multi-record transactions for flexible schemas and horizontal scale.</x-simple>
+<x-eg>A MongoDB document for a blog post can embed its comments; reading the post is one lookup, but “all comments by user X across posts” is harder.</x-eg>
+<x-fu q="When is a document store a good fit?">When data is read and written as self-contained aggregates (a product with its variants), the schema varies per record, and cross-record joins are rare.</x-fu>
+<x-no>“NoSQL means no schema.” The schema moves into application code.</x-no>
+<x-ev>Breadth.</x-ev></x-q>
+<x-q n="4.3" tag="must basic"><x-t>What’s the difference between SQL and NoSQL?</x-t><x-say>SQL databases have a fixed schema, joins and strong transactions; good for related data with integrity rules. NoSQL trades some of that for flexible schemas, simple access patterns and easy horizontal scaling.</x-say><x-simple><p>The line is blurry now: Postgres has JSONB and vectors; MongoDB has multi-document transactions. Pick by access patterns and integrity needs.</p></x-simple>
+<x-eg>Users, documents, permissions and billing → SQL (relations, transactions). A cache of LLM responses → Redis. Event logs at huge write rates → a wide-column or log store.</x-eg><x-fu q="Which would you choose for an AI document app?">Postgres: users, documents, permissions and chats are relational, I need transactions, and pgvector keeps vectors next to the data they belong to.</x-fu>
+<x-no>“SQL can’t scale.” Postgres handles very large workloads with indexes, read replicas and partitioning; the decision is about data shape and consistency needs.</x-no>
+<x-ev>Reasoned choice.</x-ev></x-q>
+<x-q n="4.4" tag="must basic"><x-t>What are tables, rows and columns?</x-t><x-say>A table is a set of records of one kind; a row is one record; a column is one typed attribute every row has.</x-say>
+<x-simple>A table defines an entity type and its attributes (the schema): column names, types (text, integer, timestamptz, uuid, jsonb, vector) and constraints. Each row is one instance with a value (or NULL) for every column. Rows have no inherent order; ORDER BY is required for a guaranteed order. Good table design: one entity per table, one fact per column.</x-simple>
+<x-eg><code>documents</code>: columns id (uuid), user_id (uuid), filename (text), status (text CHECK in processing/ready/failed), created_at (timestamptz). Each upload is a row.</x-eg>
+<x-fu q="Why does row order without ORDER BY change?">The planner may read from different indexes or parallel workers, and updates move rows physically; SQL guarantees no order unless you ask.</x-fu>
+<x-no>“Rows come back in insertion order.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.5" tag="must basic"><x-t>What is a primary key?</x-t><x-say>A column (or set) that uniquely identifies each row; it’s NOT NULL and unique, and gets an index automatically.</x-say>
+<x-simple>The primary key is the row’s identity: unique, never NULL, ideally never changes. Postgres creates a unique B-tree index for it automatically. Choices: natural keys (an email) change and leak meaning; surrogate keys (identity integers or UUIDs) are stable. Composite primary keys fit join tables (<code>PRIMARY KEY (conversation_id, document_id)</code>).</x-simple>
+<x-eg><code>id uuid PRIMARY KEY DEFAULT gen_random_uuid()</code> lets the server or client generate ids without a round trip.</x-eg><x-fu q="UUID or serial?">Serial/identity is small and ordered; UUIDs can be generated anywhere and don’t reveal counts or allow guessing neighbours. UUIDv7 gives both uniqueness and time ordering.</x-fu>
+<x-no>Using email as the primary key and then needing to let users change their email.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.6" tag="must basic"><x-t>What is a foreign key?</x-t><x-say>A column that must match a primary (or unique) key in another table, so you can’t reference a row that doesn’t exist. ON DELETE CASCADE / SET NULL / RESTRICT decides what happens to children.</x-say>
+<x-simple>A foreign key constraint makes the database check, on every insert/update of the child and every delete/update of the parent, that the referenced row exists. ON DELETE behaviour: CASCADE (delete children), SET NULL, RESTRICT/NO ACTION (block). It turns “orphan rows” from a bug you discover months later into an immediate error. Postgres does not automatically index the referencing column; add an index if you join or delete by it.</x-simple>
+<x-code><pre data-l="sql">CREATE TABLE chunks (
+  id bigserial PRIMARY KEY,
+  document_id uuid NOT NULL REFERENCES documents(id) ON DELETE CASCADE
+);
+CREATE INDEX chunks_document_idx ON chunks (document_id);   -- FK columns aren't indexed automatically
+-- DELETE FROM documents WHERE id = $1;  → its chunks are deleted in the same statement</pre></x-code><x-dm>DocMind has none, so a deleted document could leave orphan chunks; the code deletes the row first, then chunks, and the worker cleans up if a document vanished mid-job.</x-dm>
+<x-fu q="Why might a team skip foreign keys?">Sharded or very write-heavy systems sometimes enforce relationships in code; for a normal app it’s usually a mistake.</x-fu>
+<x-no>“Foreign keys slow everything down, so skip them.”</x-no>
+<x-ev>Integrity.</x-ev></x-q>
+<x-q n="4.7" tag="must basic"><x-t>What are unique constraints?</x-t><x-say>A rule that no two rows share the same value (or combination) in given columns. Enforced by a unique index, so it also prevents race-condition duplicates.</x-say>
+<x-simple>A UNIQUE constraint (backed by a unique index) guarantees no two rows have equal values in the listed columns. It’s the only reliable way to prevent duplicates under concurrency: two transactions inserting the same email at the same moment can’t both succeed. NULLs are distinct by default in Postgres (many NULLs allowed), unless declared <code>NULLS NOT DISTINCT</code> (Postgres 15+). Partial unique indexes enforce uniqueness for a subset (<code>WHERE deleted_at IS NULL</code>).</x-simple>
+<x-eg><code>UNIQUE (user_id, sha256)</code> stops the same user uploading the same file twice; insert with <code>ON CONFLICT (user_id, sha256) DO NOTHING RETURNING *</code>.</x-eg><x-dm>DocMind detects duplicate emails through the UNIQUE constraint (Postgres error 23505 → 409), not by checking first.</x-dm>
+<x-fu q="How do you report a unique violation to the client?">Catch Postgres error code 23505 (unique_violation) and return 409 Conflict with a friendly message.</x-fu>
+<x-no>Checking “does it exist?” in code before inserting.</x-no>
+<x-ev>Practical integrity.</x-ev></x-q>
+<x-q n="4.8" tag="must basic"><x-t>What is database normalization?</x-t><x-say>Organising tables so each fact is stored once, removing duplication that causes update anomalies, by splitting data into related tables.</x-say>
+<x-simple>Normalisation removes redundancy by splitting data so each fact is stored in exactly one place. That prevents update anomalies (changing a user’s email in one row but not in another copy), insert anomalies (can’t store a product until it has an order) and delete anomalies (deleting the last order deletes the product’s info). The cost is more joins; the benefit is consistency.</x-simple>
+<x-eg>Storing <code>owner_email</code> on every document means changing an email requires updating many rows; storing only <code>user_id</code> keeps one source of truth.</x-eg>
+<x-fu q="How far should you normalise?">Usually to 3NF, then denormalise deliberately where measured read performance needs it.</x-fu>
+<x-no>“Normalisation means splitting everything into as many tables as possible.”</x-no>
+<x-ev>Design basics.</x-ev></x-q>
+<x-q n="4.9" tag="must solid"><x-t>Explain 1NF, 2NF and 3NF.</x-t><x-say>1NF: atomic values, no repeating groups. 2NF: 1NF and every non-key column depends on the whole key (matters for composite keys). 3NF: 2NF and no non-key column depends on another non-key column.</x-say>
+<x-simple>Put simply: 1NF: each cell holds one value and there are no repeating column groups (tag1, tag2…). 2NF: in a table with a composite key, every non-key column depends on the whole key, not part of it. 3NF: non-key columns depend only on the key, not on other non-key columns (“the key, the whole key, and nothing but the key”).</x-simple><x-eg>1NF violation: <code>tags = 'ai,rag'</code>. 2NF violation: in <code>(order_id, product_id) → product_name</code>, the name depends only on product_id. 3NF violation: <code>documents.owner_email</code> (depends on user_id, not on the document).</x-eg>
+<x-fu q="Fix the 1NF violation of tags stored as “ai,rag”.">A <code>tags</code> table and a <code>document_tags(document_id, tag_id)</code> join table (or, pragmatically in Postgres, a <code>text[]</code> column with a GIN index if tags are just labels).</x-fu>
+<x-no>Reciting definitions without an example.</x-no>
+<x-ev>Design vocabulary.</x-ev></x-q>
+<x-q n="4.10" tag="must basic"><x-t>What is denormalization?</x-t><x-say>Deliberately duplicating data to make reads faster or simpler, accepting the cost of keeping copies in sync, e.g. storing <code>message_count</code> on a conversation or the filename on each chunk.</x-say>
+<x-simple>Denormalisation adds redundant data on purpose: counters (<code>message_count</code>), copies of frequently joined fields, precomputed aggregates, or materialised views. It speeds up reads and simplifies queries but adds write work and the risk of copies drifting. Keep copies correct with transactions, triggers, or periodic recomputation, and document which field is the source of truth.</x-simple>
+<x-eg>Storing <code>filename</code> on each chunk avoids a join in search results, at the cost of updating chunks if a document is renamed.</x-eg>
+<x-fu q="What is a materialised view?">A stored query result that you refresh (<code>REFRESH MATERIALIZED VIEW</code>); good for expensive analytics that can be slightly stale.</x-fu>
+<x-no>“Denormalisation is bad design.” It’s a trade-off.</x-no>
+<x-ev>Trade-offs.</x-ev></x-q>
+<x-q n="4.11" tag="must basic"><x-t>What is an index?</x-t><x-say>An auxiliary sorted structure (usually a B-tree) that lets the database find rows by a column without scanning the table.</x-say>
+<x-simple>Without an index the database reads every row (sequential scan) to find matches. An index is a separate structure, usually a B-tree, storing the indexed column values in sorted order with pointers to rows (TIDs). Other index types: Hash (equality), GIN (arrays, JSONB, full-text), GiST (geometric, ranges), BRIN (huge naturally ordered tables), and pgvector’s HNSW/IVFFlat for vectors.</x-simple>
+<x-eg><code>CREATE INDEX documents_user_idx ON documents (user_id);</code> makes “this user’s documents” fast.</x-eg>
+<x-fu q="Does an index help a query that returns 80% of the table?">Usually not: reading most of the table sequentially is cheaper than jumping through the index, so the planner chooses a seq scan.</x-fu>
+<x-no>“Indexes store copies of whole rows.” (Only the indexed columns, plus INCLUDE columns if specified.)</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.12" tag="must basic"><x-t>How do indexes improve query performance?</x-t><x-say>The planner can jump to matching keys in O(log n) and read only those rows, and can return rows already in index order for ORDER BY and LIMIT, avoiding a sort.</x-say>
+<x-simple>A B-tree index lets the planner find the first matching key in a few page reads (the tree is shallow), then walk the sorted leaves for ranges, and fetch the matching rows. It can also return rows already sorted (no Sort step for ORDER BY + LIMIT), satisfy queries entirely from the index (index-only scans), and enforce uniqueness. The planner decides using statistics about how many rows will match.</x-simple>
+<x-eg>Finding 20 recent documents for one user among 10 million rows: with <code>(user_id, created_at DESC)</code> the database reads ~20 index entries instead of 10 million rows.</x-eg>
+<x-fu q="How do you know whether a query used an index?"><code>EXPLAIN ANALYZE</code>: look for Index Scan / Index Only Scan / Bitmap Index Scan nodes and the actual time.</x-fu>
+<x-no>“Adding an index always makes queries faster.”</x-no>
+<x-ev>Mechanism.</x-ev></x-q>
+<x-q n="4.13" tag="must basic"><x-t>Can indexes negatively affect performance?</x-t><x-say>Yes: every write updates every index, they use disk and cache memory, and too many can slow inserts badly. Unused indexes are pure cost.</x-say>
+<x-simple>Each index must be updated on every insert, on updates of indexed columns, and on deletes (vacuum), so write-heavy tables slow down with many indexes. Indexes consume disk and shared memory, compete for cache, and building them on large tables takes time and can block writes unless created <code>CONCURRENTLY</code>. Unused or duplicate indexes are pure overhead.</x-simple>
+<x-eg>A chunks table with an HNSW index: bulk inserting 100,000 embeddings is much slower than without it, so large backfills often build the index after loading.</x-eg>
+<x-fu q="How do you find unused indexes?"><code>pg_stat_user_indexes.idx_scan</code> near 0 over a representative period.</x-fu>
+<x-no>“Indexes only cost disk space.”</x-no>
+<x-ev>Trade-offs.</x-ev></x-q>
+<x-q n="4.14" tag="must solid"><x-t>What is a composite index?</x-t><x-say>An index on several columns, sorted by the first, then the second within it, etc. It serves queries that filter on a leftmost prefix of its columns.</x-say><x-eg><code>(user_id, created_at)</code> serves <code>WHERE user_id = $1 ORDER BY created_at</code>, but not <code>WHERE created_at > $1</code> alone.</x-eg><x-ev>Practical indexing.</x-ev></x-q>
+<x-q n="4.15" tag="must basic"><x-t>What is a database transaction?</x-t><x-say>A group of statements executed as one unit: all commit or all roll back.</x-say>
+<x-simple>A transaction groups statements between BEGIN and COMMIT so the database applies all or none of them. If any statement fails or you ROLLBACK, earlier changes in the transaction are undone. Other sessions don’t see the uncommitted changes. Postgres runs every single statement in its own implicit transaction if you don’t open one.</x-simple>
+<x-eg>Publishing a course: insert modules, insert lessons, set course status = published; if any insert fails, nothing is published.</x-eg>
+<x-fu q="What is a savepoint?">A marker inside a transaction you can roll back to without aborting the whole transaction (<code>SAVEPOINT s1; … ROLLBACK TO s1;</code>).</x-fu>
+<x-no>“Each query in my function is automatically in one transaction.” Not unless you use one client and BEGIN/COMMIT.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.16" tag="must basic"><x-t>Explain ACID properties.</x-t><x-say>Atomicity: all or nothing. Consistency: constraints hold before and after. Isolation: concurrent transactions behave as if separate (to a chosen degree). Durability: committed data survives crashes.</x-say>
+<x-simple>Atomicity: a transaction’s changes all happen or none do (implemented with the write-ahead log and rollback). Consistency: each transaction moves the database from one valid state to another, respecting constraints. Isolation: concurrent transactions don’t see each other’s intermediate states; the degree depends on the isolation level. Durability: once COMMIT returns, the change survives crashes because the WAL is flushed to disk.</x-simple>
+<x-eg>Transfer 100 from A to B: two UPDATEs; atomicity means you never lose 100 mid-way; durability means a power cut after COMMIT doesn’t undo it.</x-eg>
+<x-fu q="Which ACID property do many NoSQL stores relax?">Isolation and multi-record atomicity (often “eventual consistency” across nodes), in exchange for availability and scale.</x-fu>
+<x-no>Confusing ACID’s C with “consistency” in distributed systems (CAP).</x-no>
+<x-ev>Vocabulary.</x-ev></x-q>
+<x-q n="4.17" tag="must solid"><x-t>What is transaction isolation?</x-t><x-say>How much concurrent transactions can see of each other’s effects. Levels trade correctness for concurrency: read committed (Postgres default), repeatable read, serializable.</x-say>
+<x-eg>Read committed: in one transaction, two identical SELECTs can return different results if another transaction committed between them.</x-eg><x-fu q="Give a bug read committed allows.">Two requests read credits = 1, both decide it’s enough, both write 0: one purchase is free. Fix with an atomic UPDATE … WHERE credits > 0, SELECT … FOR UPDATE, or serializable + retry.</x-fu>
+<x-no>“Serializable means transactions run one after another.” They run concurrently; the database aborts ones that would break serial equivalence.</x-no>
+<x-ev>Concurrency depth.</x-ev></x-q>
+<x-q n="4.18" tag="should solid"><x-t>What is a database deadlock?</x-t><x-say>Two transactions each hold a lock the other needs, so neither can proceed. Postgres detects it and aborts one; the app should retry. Prevent with consistent lock order and short transactions.</x-say>
+<x-simple>Deadlocks need two or more transactions holding locks and waiting on each other in a cycle. Postgres checks for cycles after <code>deadlock_timeout</code> (1 s by default), aborts one transaction with SQLSTATE 40P01 and lets the other continue. Prevention: lock rows in a consistent order (e.g. by id), keep transactions short, avoid user or network waits inside transactions, and retry the aborted transaction.</x-simple>
+<x-eg>Two requests transfer money A→B and B→A at the same time: each locks its first account and waits for the second. Locking both rows ordered by id avoids it.</x-eg>
+<x-code><pre data-l="sql">BEGIN;
+SELECT id FROM accounts WHERE id IN ($1, $2) ORDER BY id FOR UPDATE;   -- consistent lock order
+UPDATE accounts SET balance = balance - $3 WHERE id = $1;
+UPDATE accounts SET balance = balance + $3 WHERE id = $2;
+COMMIT;</pre></x-code>
+<x-fu q="Is a deadlock a bug in Postgres?">No, it’s a design issue in the application’s locking pattern; the database just breaks the cycle.</x-fu>
+<x-no>“Deadlocks hang forever.”</x-no>
+<x-ev>Concurrency.</x-ev></x-q>
+<x-q n="4.19" tag="must basic"><x-t>What is connection pooling?</x-t><x-say>Reusing a fixed set of open database connections across requests instead of opening one per query.</x-say>
+<x-simple>A connection pool (pg.Pool, PgBouncer, a provider’s pooled endpoint) keeps N open connections. Requests borrow a connection, use it, and return it. When all are busy, requests wait in a queue up to a timeout. Configuration: max size (tune against the server’s <code>max_connections</code> divided by app instances), idle timeout, connection timeout. Server-side poolers in transaction mode let thousands of clients share few backends but break session features (prepared statements, SET, advisory locks across statements).</x-simple>
+<x-eg><code>new pg.Pool({ connectionString, max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000 })</code>.</x-eg>
+<x-fu q="Why not make the pool size 500?">Postgres uses a process per connection; hundreds of active connections thrash CPU and memory. Throughput usually peaks with a small pool.</x-fu>
+<x-no>“Opening a new connection per query is fine.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.20" tag="must basic"><x-t>Why should database connections be reused?</x-t><x-say>Opening them is slow (TCP, TLS, auth, a server process) and the server allows only a limited number. Reuse cuts latency and protects the database.</x-say>
+<x-simple>A new Postgres connection costs a TCP handshake, TLS negotiation, authentication, and a new backend process with its own memory; often 20–100 ms over the internet. Doing that per query multiplies latency and can exceed max_connections under load. Reusing connections also keeps prepared statement caches and server memory warm.</x-simple>
+<x-eg>Neon or Supabase across regions: a fresh connection can take longer than the query itself.</x-eg>
+<x-fu q="What happens in serverless functions?">Each instance may open its own connections, so use the provider’s pooled endpoint or an HTTP/WebSocket driver designed for serverless.</x-fu>
+<x-no>“Connections are free to open.”</x-no>
+<x-ev>Performance reasoning.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">4.2</span>PostgreSQL and SQL</h2>
+<x-q n="4.21" tag="must solid"><x-t>Why would you choose PostgreSQL for an AI application?</x-t><x-say>Reliable relational core for users, permissions and chats; JSONB for flexible metadata; pgvector for embeddings next to the data (filters and joins in one query); full-text search for hybrid retrieval; mature hosting and free tiers.</x-say>
+<x-eg>One query in DocMind joins chunks to documents, filters by owner and status, and orders by vector distance: something you can’t do in one call if vectors live in a separate system.</x-eg><x-fu q="When would you move vectors out?">Hundreds of millions of vectors, very high QPS, or needing features like built-in hybrid ranking at scale: a dedicated vector DB, kept in sync from Postgres.</x-fu>
+<x-no>“Postgres can’t do vectors, so you need Pinecone.”</x-no>
+<x-ev>Technology judgement.</x-ev></x-q>
+<x-q n="4.22" tag="must basic"><x-t>What’s the difference between WHERE and HAVING?</x-t><x-say>WHERE filters rows before grouping and can’t use aggregates. HAVING filters groups after GROUP BY and can.</x-say>
+<x-simple>Logical order of a SELECT: FROM/JOIN → WHERE (row filter) → GROUP BY → aggregates computed → HAVING (group filter) → SELECT → ORDER BY → LIMIT. That’s why WHERE can’t use <code>count(*)</code> (groups don’t exist yet) and why filtering rows in WHERE instead of HAVING is more efficient when possible.</x-simple>
+<x-eg><code>SELECT user_id, count(*) FROM documents WHERE status = 'ready' GROUP BY user_id HAVING count(*) > 5;</code></x-eg>
+<x-fu q="Can you use a column alias from SELECT in WHERE?">No, SELECT is evaluated after WHERE; repeat the expression or use a subquery/CTE.</x-fu>
+<x-no>“HAVING is just WHERE for joins.”</x-no>
+<x-ev>SQL basics.</x-ev></x-q>
+<x-q n="4.23" tag="must basic"><x-t>What’s the difference between INNER JOIN, LEFT JOIN and RIGHT JOIN?</x-t><x-say>INNER keeps only matching pairs. LEFT keeps every left row, with NULLs where the right has no match. RIGHT is the mirror. (FULL keeps both sides.)</x-say>
+<x-simple>A join builds rows from pairs of rows that satisfy the ON condition. INNER keeps only matches. LEFT keeps all left rows and fills right columns with NULL when nothing matches. RIGHT is LEFT with the tables swapped (rarely used). FULL keeps unmatched rows from both. The planner executes joins with nested loops, hash joins or merge joins depending on sizes and indexes.</x-simple>
+<x-eg>“Documents with their owner’s email”: INNER JOIN. “Every user with their document count, including zero”: LEFT JOIN.</x-eg><x-dm>DocMind’s vector search changed from LEFT JOIN to INNER JOIN documents during auth: a chunk with no document row has no owner, so it must never be returned.</x-dm>
+<x-fu q="Why can a LEFT JOIN turn into an INNER JOIN by accident?">A WHERE condition on a right-table column (<code>WHERE d.status = 'ready'</code>) removes the NULL rows; move it into the ON clause.</x-fu>
+<x-no>“RIGHT JOIN returns the right table only.”</x-no>
+<x-ev>SQL basics.</x-ev></x-q>
+<x-q n="4.24" tag="must basic"><x-t>What is a subquery?</x-t><x-say>A query nested inside another: in WHERE (<code>IN (SELECT …)</code>, <code>EXISTS</code>), in FROM as a derived table, or as a scalar in SELECT.</x-say>
+<x-simple>Subqueries can be scalar (one value), row lists for IN/EXISTS, or derived tables in FROM. Correlated subqueries reference the outer row and conceptually run per row (the planner often rewrites them into joins). EXISTS stops at the first match and handles NULLs safely; NOT IN with a subquery that can return NULL returns no rows, a classic bug.</x-simple><x-code><pre data-l="sql">SELECT * FROM users u WHERE NOT EXISTS (SELECT 1 FROM documents d WHERE d.user_id = u.id);</pre></x-code>
+<x-fu q="NOT IN vs NOT EXISTS?">Prefer NOT EXISTS: <code>x NOT IN (1, NULL)</code> is never true because comparison with NULL is unknown.</x-fu>
+<x-no>“Subqueries are always slow.”</x-no>
+<x-ev>SQL fluency.</x-ev></x-q>
+<x-q n="4.25" tag="must basic"><x-t>What are Common Table Expressions (CTEs)?</x-t><x-say>Named temporary result sets defined with WITH, used to break a complex query into readable steps; WITH RECURSIVE walks hierarchies.</x-say>
+<x-simple><code>WITH name AS (SELECT …)</code> defines a named result usable in the following query, like a variable for a query. Benefits: readability (steps top to bottom), reuse of the same intermediate result, and <code>WITH RECURSIVE</code> for trees and graphs. Since Postgres 12, simple CTEs are inlined (optimised like subqueries) unless marked <code>MATERIALIZED</code>. Data-modifying CTEs (<code>WITH deleted AS (DELETE … RETURNING *)</code>) can chain writes in one statement.</x-simple>
+<x-code><pre data-l="sql">-- RRF hybrid search reads as three named steps
+WITH vec AS (SELECT id, row_number() OVER (ORDER BY embedding &lt;=&gt; $1) r FROM chunks ORDER BY embedding &lt;=&gt; $1 LIMIT 40),
+     kw  AS (SELECT id, row_number() OVER (ORDER BY ts_rank_cd(tsv, q) DESC) r FROM chunks, websearch_to_tsquery($2) q WHERE tsv @@ q LIMIT 40)
+SELECT id, sum(1.0 / (60 + r)) AS score FROM (SELECT * FROM vec UNION ALL SELECT * FROM kw) u GROUP BY id ORDER BY score DESC LIMIT 6;</pre></x-code>
+<x-fu q="Write a recursive CTE for a comment thread."><code>WITH RECURSIVE t AS (SELECT * FROM comments WHERE id = $1 UNION ALL SELECT c.* FROM comments c JOIN t ON c.parent_id = t.id) SELECT * FROM t;</code></x-fu>
+<x-no>“CTEs are temporary tables stored on disk.”</x-no>
+<x-ev>Readable SQL.</x-ev></x-q>
+<x-q n="4.26" tag="must basic"><x-t>What are aggregate functions?</x-t><x-say>Functions that reduce many rows to one value: count, sum, avg, min, max, string_agg, array_agg, json_agg.</x-say>
+<x-simple>Aggregates collapse many rows into one value per group: count(*) counts rows, count(col) counts non-NULLs, sum/avg/min/max ignore NULLs, string_agg/array_agg/json_agg collect values (with ORDER BY inside to control order), and FILTER limits an aggregate to some rows: <code>count(*) FILTER (WHERE status = 'failed')</code>.</x-simple>
+<x-eg>One query for a dashboard: <code>SELECT count(*) AS total, count(*) FILTER (WHERE status = 'ready') AS ready, avg(chunk_count) FROM documents WHERE user_id = $1;</code></x-eg>
+<x-fu q="What does avg return on an empty set?">NULL (and count returns 0): use coalesce for display.</x-fu>
+<x-no>“count(column) and count(*) are always the same.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.27" tag="must basic"><x-t>What is GROUP BY?</x-t><x-say>It splits rows into groups with equal values in the given columns so aggregates are computed per group.</x-say>
+<x-simple>GROUP BY partitions rows by the listed expressions; each group produces one output row. Every selected column must be grouped or aggregated (Postgres allows other columns of a table when its primary key is grouped). ROLLUP/CUBE/GROUPING SETS produce subtotals.</x-simple>
+<x-eg>Token cost per user per day: <code>SELECT user_id, date_trunc('day', created_at) d, sum(input_tokens + output_tokens) FROM llm_calls GROUP BY 1, 2;</code></x-eg>
+<x-fu q="How do you get the top row per group?"><code>DISTINCT ON</code> in Postgres, or row_number() OVER (PARTITION BY …) and filter rn = 1.</x-fu>
+<x-no>Selecting a non-grouped column and expecting “any” value.</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.28" tag="must solid"><x-t>What is a window function?</x-t><x-say>A function computed over a set of rows related to the current row (a “window” defined by OVER (PARTITION BY … ORDER BY …)), without collapsing rows: row_number, rank, lag/lead, running sums.</x-say>
+<x-simple>The OVER clause defines a window: PARTITION BY splits rows into groups, ORDER BY orders them within the group, and an optional frame (ROWS BETWEEN …) limits which rows count. The function is evaluated per row with access to its window, so rows are not collapsed. Common ones: row_number/rank/dense_rank, lag/lead (previous/next row), running sums, moving averages, ntile.</x-simple><x-code><pre data-l="sql">SELECT user_id, created_at, sum(tokens) OVER (PARTITION BY user_id ORDER BY created_at) AS running_tokens
+FROM llm_calls;</pre></x-code>
+<x-fu q="rank vs dense_rank vs row_number?">For ties: row_number gives 1,2,3; rank gives 1,1,3; dense_rank gives 1,1,2.</x-fu>
+<x-no>“Window functions are the same as GROUP BY.”</x-no>
+<x-ev>Intermediate SQL.</x-ev></x-q>
+<x-q n="4.29" tag="must basic"><x-t>What’s the difference between UNION and UNION ALL?</x-t><x-say>UNION removes duplicate rows (extra sort/hash work). UNION ALL keeps everything and is faster. Use UNION ALL unless you need dedupe.</x-say>
+<x-simple>Both append the results of two SELECTs with the same column count and compatible types. UNION then removes duplicate rows, which needs a sort or hash over all rows; UNION ALL doesn’t. Use UNION ALL when duplicates are impossible or wanted (combining vector and keyword candidates before fusing scores), UNION when you need set semantics.</x-simple>
+<x-eg>In RRF, a chunk found by both searches must appear twice (once per list) so its two scores add up: that needs UNION ALL.</x-eg>
+<x-fu q="INTERSECT and EXCEPT?">Rows present in both queries, and rows in the first but not the second.</x-fu>
+<x-no>“UNION joins tables side by side.”</x-no>
+<x-ev>Precision.</x-ev></x-q>
+<x-q n="4.30" tag="must solid"><x-t>What does EXPLAIN ANALYZE do?</x-t><x-say>It runs the query and shows the actual plan: each node (Seq Scan, Index Scan, Hash Join, Sort), estimated vs actual rows, loops and timings. Big gaps between estimated and actual rows, or a Seq Scan on a large table, point to the problem.</x-say><x-code><pre data-l="sql">EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM documents WHERE user_id = '...' ORDER BY created_at DESC LIMIT 20;
+-- Limit (actual time=0.03..0.05 rows=20)
+--   -> Index Scan using documents_user_created_idx on documents (rows=20)</pre></x-code>
+<x-eg>A plan showing <code>Seq Scan on chunks (rows=1000000) Filter: document_id = …</code> with 900 ms is a missing index on chunks.document_id.</x-eg><x-fu q="Any danger?">It really executes the query: wrap writes in BEGIN … ROLLBACK.</x-fu>
+<x-no>Reading only the estimated cost and ignoring actual rows/time, or running EXPLAIN ANALYZE on a DELETE in production without a transaction.</x-no>
+<x-ev>Debugging skill.</x-ev></x-q>
+<x-q n="4.31" tag="must basic"><x-t>What are JSON and JSONB in PostgreSQL?</x-t><x-say>JSON stores the text as is; JSONB stores a parsed binary form: faster to query, supports GIN indexes and operators (<code>-></code>, <code>->></code>, <code>@></code>), but doesn’t keep key order or duplicate keys. Use JSONB.</x-say><x-code><pre data-l="sql">SELECT * FROM messages WHERE metadata @> '{"model": "flash-lite"}';
+CREATE INDEX ON messages USING gin (metadata);</pre></x-code>
+<x-eg>Storing per-message metadata: <code>{ "model": "flash-lite", "tokens": { "in": 812, "out": 140 }, "sources": [ … ] }</code> in a <code>metadata jsonb</code> column.</x-eg>
+<x-fu q="When should a JSONB field become a real column?">When you filter, join or constrain on it frequently, or need types and NOT NULL/foreign keys.</x-fu>
+<x-no>Putting everything in one JSONB column to avoid schema design.</x-no>
+<x-ev>Postgres features.</x-ev></x-q>
+<x-q n="4.32" tag="must basic"><x-t>What is the difference between DELETE, TRUNCATE and DROP?</x-t><x-say>DELETE removes chosen rows (WHERE), fires triggers, is logged per row. TRUNCATE empties the whole table fast. DROP removes the table itself. In Postgres all three are transactional.</x-say>
+<x-simple>DELETE removes rows matching WHERE, one by one: fires row triggers, respects foreign keys (cascades), returns RETURNING rows, and leaves dead rows for VACUUM. TRUNCATE removes all rows by swapping in empty storage: much faster, resets identity with RESTART IDENTITY, needs CASCADE when referenced by FKs, doesn’t fire row triggers. DROP removes the table definition, its indexes and data. All three are transactional in Postgres (rollback works inside BEGIN).</x-simple>
+<x-eg>Clearing a staging table before a nightly import: TRUNCATE. Removing one user’s data: DELETE … WHERE user_id = $1.</x-eg><x-dm>DocMind’s old <code>step2</code> learning script DROPs and <code>step3</code> DELETEs the chunks table; they must never be re-run against the live database.</x-dm>
+<x-fu q="Why might DELETE of millions of rows be slow?">Per-row work, WAL volume, cascades, index updates and locks; delete in batches or partition the table and drop partitions.</x-fu>
+<x-no>“TRUNCATE can’t be rolled back.” (In Postgres it can.)</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.33" tag="must solid"><x-t>How would you investigate a slow SQL query?</x-t><x-say>Reproduce with real parameters, run EXPLAIN (ANALYZE, BUFFERS), look for sequential scans, bad row estimates, sorts and nested loops over many rows; check indexes and statistics (ANALYZE); check pg_stat_statements for the worst queries; consider rewriting or adding an index; re-measure.</x-say><x-simple><p>Also rule out non-query causes: waiting for a lock, pool exhaustion, network distance (DocMind: Render in Oregon, Neon in Ohio, ~50–70 ms per query).</p></x-simple>
+<x-eg>A documents list endpoint went from 40 ms to 2 s after growth: EXPLAIN showed a seq scan + sort on 2M rows; adding <code>(user_id, created_at DESC)</code> brought it back to 3 ms.</x-eg>
+<x-fu q="What is pg_stat_statements?">An extension that records execution counts and total/mean time per normalised query, the fastest way to find which queries cost the most overall.</x-fu>
+<x-no>Adding random indexes before reading the plan.</x-no>
+<x-ev>Method.</x-ev></x-q>
+<x-q n="4.34" tag="must basic"><x-t>What is a migration?</x-t><x-say>A versioned script that changes the database schema (and sometimes data) from one version to the next, stored with the code and applied in order.</x-say>
+<x-simple>A migration is one step in the schema’s history: an “up” change (and sometimes a “down” to revert) with an id or timestamp. A migration tool records which steps ran in a table in the database, applies pending ones in order, and refuses to run twice. Data migrations (backfills) are kept separate from schema changes and run in batches.</x-simple>
+<x-eg><code>0004_add_documents_status.sql</code>: <code>ALTER TABLE documents ADD COLUMN status text NOT NULL DEFAULT 'ready';</code></x-eg>
+<x-fu q="Should migrations run automatically on deploy?">Commonly yes, as a release step before the new code starts; destructive or long ones are reviewed and run deliberately.</x-fu>
+<x-no>“A migration is a backup.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.35" tag="must basic"><x-t>Why should database schema changes be managed through migrations?</x-t><x-say>They’re reviewable, repeatable on every environment, ordered, tracked (no double application) and tied to the code that needs them. Manual changes drift between environments and get forgotten.</x-say>
+<x-simple>Without migrations, environments drift: local, staging and production end up with different columns, and nobody knows which SQL was run where. Migrations make schema changes code-reviewed, versioned with the code that needs them, repeatable for new developers and test databases, and safe to deploy in order (expand → migrate → contract).</x-simple>
+<x-eg>DocMind hand-ran SQL in the Neon editor and kept it as comments in schema.ts; it works for one person but is listed as debt.</x-eg>
+<x-fu q="How do you deploy a column rename with zero downtime?">Add the new column, write to both, backfill, switch reads, stop writing the old one, drop it later.</x-fu>
+<x-no>“I’ll just remember what I changed.”</x-no>
+<x-ev>Engineering discipline.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">4.3</span>Drizzle ORM</h2>
+<x-q n="4.36" tag="must basic"><x-t>What is an ORM?</x-t><x-say>Object-Relational Mapper: a library that maps tables to code objects and builds queries for you, so you work with typed functions instead of raw SQL strings.</x-say>
+<x-simple>An ORM maps tables to objects and rows to instances, generates SQL from method calls, and often manages relations, migrations and types. Spectrum: query builders (Knex, Kysely, Drizzle’s core API) stay close to SQL; full ORMs (Prisma, TypeORM, Sequelize) add more abstraction (relation loading, lifecycle hooks). Benefits: type safety, less boilerplate, safer parameterisation. Costs: leaky abstractions, hidden N+1 queries, harder tuning.</x-simple>
+<x-eg>Drizzle: <code>db.select().from(documents).where(eq(documents.userId, id))</code> produces <code>select … from "documents" where "documents"."user_id" = $1</code>.</x-eg>
+<x-fu q="What is the N+1 query problem?">Loading a list (1 query) then each item’s relation in a loop (N queries). Fix with a join or a batched IN query.</x-fu>
+<x-no>“With an ORM you don’t need to know SQL.”</x-no>
+<x-ev>Basics.</x-ev></x-q>
+<x-q n="4.37" tag="must basic"><x-t>Why use Drizzle instead of writing raw SQL everywhere?</x-t><x-say>Type safety from the schema (wrong column names fail at compile time), parameterization by default, composable query pieces, and a schema file that drives migrations, while staying close to SQL and thin at runtime.</x-say>
+<x-simple>Drizzle keeps you close to SQL (you can predict the query), types every column from your schema file (a typo or wrong type fails at compile time), always parameterises values, lets you compose conditions as values (<code>and(eq(...), ...)</code>), drives migrations from the same schema, and has almost no runtime overhead or code generation step. It still offers a <code>sql</code> template for anything it doesn’t model.</x-simple>
+<x-eg>DocMind’s <code>cosineDistance(chunks.embedding, vec)</code> is a typed helper producing <code>embedding <=> $1</code>, used inside an ordinary select with a join and where clause.</x-eg>
+<x-fu q="Drizzle vs Prisma?">Prisma has a separate schema language, generated client and powerful relation API but more abstraction; Drizzle is TypeScript-native, SQL-shaped and lighter.</x-fu>
+<x-no>“Drizzle is faster than SQL.” It generates SQL.</x-no>
+<x-ev>Tool reasoning.</x-ev></x-q>
+<x-q n="4.38" tag="must solid"><x-t>How does Drizzle interact with PostgreSQL?</x-t><x-say>You give it a driver (node-postgres pool, postgres.js, Neon serverless). Its query builder produces a SQL string plus parameters, sends them through the driver, and maps rows back to typed objects. No query engine or extra process in between.</x-say>
+<x-simple>You pass Drizzle a driver connection (e.g. a node-postgres Pool). Each builder call composes an AST; awaiting it renders SQL text plus a params array, sends it through the driver, receives rows, and maps column names to your schema’s property names (snake_case to camelCase) and types (timestamps to Date, numeric to string unless mapped). Transactions borrow one connection from the pool for their duration.</x-simple>
+<x-eg><code>.toSQL()</code> on a query shows exactly what will be sent: useful for debugging.</x-eg>
+<x-fu q="Does Drizzle manage the connection pool?">No, the driver does; Drizzle uses whatever client you give it.</x-fu>
+<x-no>“Drizzle stores data itself.”</x-no>
+<x-ev>Understanding of layers.</x-ev></x-q>
+<x-q n="4.39" tag="must basic"><x-t>What is Drizzle Kit?</x-t><x-say>Drizzle’s CLI: generate SQL migrations from schema changes, apply them, push schema directly, introspect an existing DB into a schema file, and Drizzle Studio for browsing data.</x-say>
+<x-simple>drizzle-kit reads <code>drizzle.config</code> (schema path, output folder, dialect, credentials). <code>generate</code> diffs the schema against the last snapshot and writes SQL migration files; <code>migrate</code> applies them; <code>push</code> syncs the DB directly; <code>pull</code> introspects an existing DB into a schema file (useful for baselining); <code>studio</code> opens a data browser.</x-simple>
+<x-eg>Baseline for DocMind: <code>drizzle-kit pull</code> or generate an initial migration and mark it as applied, so the next <code>generate</code> only contains the new change.</x-eg>
+<x-fu q="What’s in the drizzle folder?">Numbered SQL files plus a meta folder with JSON snapshots and a journal that tracks order.</x-fu>
+<x-no>“drizzle-kit runs at request time.”</x-no>
+<x-ev>Tooling.</x-ev></x-q>
+<x-q n="4.40" tag="must solid"><x-t>What’s the difference between push and migrations?</x-t><x-say><code>push</code> diffs schema vs the live database and applies changes immediately with no files: quick for prototyping. <code>generate</code> + <code>migrate</code> writes versioned SQL files you review, commit and apply the same way everywhere: right for production.</x-say>
+<x-simple>push compares your schema with the live database and runs whatever DDL makes them match, interactively, without leaving a record: great for local prototyping, dangerous for shared or production databases (accidental drops, no review, no reproducibility). generate + migrate produce committed SQL files that are reviewed, applied in order everywhere, and tracked in a migrations table.</x-simple>
+<x-eg>Prototype locally with push; once others or production use the DB, switch to migrations.</x-eg>
+<x-fu q="Can you mix them?">Only carefully: push on a DB managed by migrations makes the migration history lie about the real schema.</x-fu>
+<x-no>“push is just a faster migrate.”</x-no>
+<x-ev>Process maturity.</x-ev></x-q>
+<x-q n="4.41" tag="must solid"><x-t>What happens when you change a schema and generate a migration?</x-t><x-say>Drizzle Kit compares the new schema with its last snapshot, writes the SQL needed (CREATE/ALTER/DROP), saves a new snapshot, and records it in its journal. migrate then runs unapplied files and records them in a migrations table in the DB.</x-say>
+<x-eg>Rename <code>filename</code> to <code>name</code> in schema.js → generate asks “rename or drop+create?” → choose rename → SQL: <code>ALTER TABLE "documents" RENAME COLUMN "filename" TO "name";</code></x-eg><x-fu q="What can go wrong?">An ambiguous rename becomes drop + add (Kit asks interactively; read the SQL); a NOT NULL column on a populated table fails (next question).</x-fu>
+<x-no>Editing an already-applied migration file instead of writing a new one.</x-no>
+<x-ev>Process detail.</x-ev></x-q>
+<x-q n="4.42" tag="must basic"><x-t>How do you define relationships in Drizzle?</x-t><x-say>Foreign keys with <code>.references(() => users.id, { onDelete })</code> in the table definition (real DB constraints), and <code>relations()</code> declarations (one/many) for the relational query API’s <code>with:</code> loading. They are separate: relations alone create no constraint.</x-say>
+<x-simple>Two separate things: foreign keys declared on columns (<code>.references(() => users.id, { onDelete: 'cascade' })</code>) create real database constraints; <code>relations()</code> declarations tell Drizzle’s relational query API how tables connect (one/many) so it can load nested data with <code>with</code>. You usually want both: constraints for integrity, relations for convenient loading.</x-simple>
+<x-eg><code>db.query.users.findFirst({ where: eq(users.id, id), with: { documents: { where: eq(documents.status, 'ready') } } })</code>.</x-eg>
+<x-fu q="Many-to-many in Drizzle?">A join table with two references, and relations from each side to the join table.</x-fu>
+<x-no>“Declaring relations() creates foreign keys.”</x-no>
+<x-ev>Tool knowledge.</x-ev></x-q>
+<x-q n="4.43" tag="must basic"><x-t>How do you perform joins?</x-t><x-say>With the SQL-like builder: <code>db.select({...}).from(a).innerJoin(b, eq(b.aId, a.id))</code> (also leftJoin, rightJoin, fullJoin), or the relational API <code>db.query.a.findMany({ with: { b: true } })</code>.</x-say>
+<x-simple>Joins in the core API mirror SQL: <code>innerJoin</code>, <code>leftJoin</code>, <code>rightJoin</code>, <code>fullJoin</code> with an ON condition built from operators. Selected columns can be shaped into nested objects. For left joins, the joined table’s fields become nullable in the result type, which forces you to handle missing rows.</x-simple>
+<x-code><pre data-l="js">const rows = await db
+  .select({ id: documents.id, filename: documents.filename, owner: users.email, chunks: count(chunks.id) })
+  .from(documents)
+  .innerJoin(users, eq(users.id, documents.userId))
+  .leftJoin(chunks, eq(chunks.documentId, documents.id))
+  .where(eq(documents.userId, userId))
+  .groupBy(documents.id, users.email);</pre></x-code>
+<x-fu q="How would you see the generated SQL?">Call <code>.toSQL()</code> on the query or enable Drizzle’s logger.</x-fu>
+<x-no>Loading each relation in a loop (N+1).</x-no>
+<x-ev>Practical use.</x-ev></x-q>
+<x-q n="4.44" tag="must solid"><x-t>How would you handle database transactions using Drizzle?</x-t><x-say><code>await db.transaction(async (tx) => { ... })</code>: use <code>tx</code> for every statement inside; throwing (or <code>tx.rollback()</code>) rolls back; returning commits. Keep slow work like LLM calls outside.</x-say>
+<x-simple><code>db.transaction(async (tx) => { … })</code> checks out one connection, sends BEGIN, runs your callback with <code>tx</code> (a Drizzle instance bound to that connection), COMMITs if it resolves, ROLLBACKs if it throws (or you call <code>tx.rollback()</code>), and releases the connection. Nested <code>tx.transaction()</code> creates savepoints. Isolation level can be set via options.</x-simple>
+<x-eg>Ingestion’s “delete old chunks, insert new ones, mark ready” as one transaction so a crash never leaves a document half-indexed.</x-eg>
+<x-fu q="What if you use db instead of tx inside the callback?">That statement runs on another connection outside the transaction: it won’t roll back and can deadlock against the transaction’s own locks.</x-fu>
+<x-no>Calling external APIs inside the transaction.</x-no>
+<x-ev>Applied transactions.</x-ev></x-q>
+<x-q n="4.45" tag="must solid"><x-t>What problems can occur when adding a NOT NULL column to an existing populated table?</x-t><x-say>Existing rows have no value, so the ALTER fails, unless you give a default. Also, the running old code doesn’t write the new column, so inserts fail after the migration. Do it in steps: add nullable (or with a default), deploy code that writes it, backfill in batches, then add NOT NULL.</x-say>
+<x-eg><code>ALTER TABLE users ADD COLUMN plan text NOT NULL;</code> on a table with rows fails: “column contains null values”. <code>ADD COLUMN plan text NOT NULL DEFAULT 'free'</code> succeeds instantly in Postgres 11+ (the default is stored in the catalog, not written to every row).</x-eg><x-dm>DocMind added <code>documents.status</code> as <code>NOT NULL DEFAULT 'ready'</code>: old rows became ready, and the then-deployed code (which never wrote status) kept working. <code>user_id</code> was added nullable for the same reason.</x-dm>
+<x-fu q="What if the right value differs per row?">Add it nullable, deploy code that writes it, backfill in batches with UPDATE … WHERE id BETWEEN, then <code>SET NOT NULL</code> (consider adding a CHECK constraint NOT VALID first and validating it to avoid long locks).</x-fu>
+<x-no>“Just add it and update all rows in the same migration on a huge table.” That can lock the table for a long time.</x-no>
+<x-ev>Production-safe schema changes.</x-ev></x-q>
+<x-q n="4.46" tag="must solid"><x-t>When would you choose raw SQL over ORM methods?</x-t><x-say>For features the ORM doesn’t model well (window functions, recursive CTEs, vector operators, complex upserts, bulk operations), for performance-critical hand-tuned queries, and for migrations. Still parameterize (Drizzle’s <code>sql</code> template does).</x-say>
+<x-eg>Hybrid search with RRF (CTEs, window functions, UNION ALL, vector operators) is far clearer in raw SQL through Drizzle’s <code>sql</code> template than in builder calls.</x-eg>
+<x-fu q="How do you keep raw SQL safe and typed?">Use the sql template (values become parameters), type the result explicitly, and test it.</x-fu>
+<x-no>“Raw SQL is always unsafe.” Unsafe is string concatenation, not SQL itself.</x-no>
+<x-ev>Pragmatism.</x-ev></x-q>
+
+<h2 class="sec"><span class="k">4.4</span>SQL practice ladder</h2>
+<x-ex t="SQL ladder: from one table to window functions" tag="must solid">
+<x-prob>Tables: <code>users(id, name)</code>, <code>documents(id, user_id, title, status, created_at)</code>, <code>chunks(id, document_id, tokens)</code>, <code>llm_calls(id, user_id, input_tokens, output_tokens, created_at)</code>. Write each query, then reveal.</x-prob>
+<x-req><ol><li>Ready documents of user 7, newest first.</li><li>Number of chunks and total tokens per document, including documents with 0 chunks.</li><li>Users whose total tokens this month exceed 100,000.</li><li>Each user’s single most expensive day.</li><li>Documents stuck in processing for over 10 minutes.</li><li>For each user, the gap between consecutive uploads.</li></ol></x-req>
+<x-sol><pre data-l="sql">-- 1
+SELECT id, title, created_at FROM documents WHERE user_id = 7 AND status = 'ready' ORDER BY created_at DESC;
+-- 2
+SELECT d.id, d.title, count(c.id) AS chunks, coalesce(sum(c.tokens), 0) AS tokens
+FROM documents d LEFT JOIN chunks c ON c.document_id = d.id GROUP BY d.id, d.title;
+-- 3
+SELECT user_id, sum(input_tokens + output_tokens) AS total FROM llm_calls
+WHERE created_at >= date_trunc('month', now()) GROUP BY user_id HAVING sum(input_tokens + output_tokens) > 100000;
+-- 4
+WITH daily AS (
+  SELECT user_id, date_trunc('day', created_at) AS day, sum(input_tokens + output_tokens) AS t
+  FROM llm_calls GROUP BY 1, 2)
+SELECT DISTINCT ON (user_id) user_id, day, t FROM daily ORDER BY user_id, t DESC;
+-- 5
+SELECT id, title FROM documents WHERE status = 'processing' AND created_at &lt; now() - interval '10 minutes';
+-- 6
+SELECT user_id, created_at, created_at - lag(created_at) OVER (PARTITION BY user_id ORDER BY created_at) AS gap
+FROM documents;</pre></x-sol>
+<x-expl>2 needs LEFT JOIN + <code>count(c.id)</code> (not <code>count(*)</code>) to show zeros. 4 uses Postgres’s DISTINCT ON (row_number() works too). 5 is how you find jobs that died without marking failure.</x-expl>
+</x-ex>
+
+<h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
+<x-quiz id="qz-p04">
+<x-mcq a="2"><x-t>Users with 0 documents show a count of 1. Why?</x-t><x-o>INNER JOIN</x-o><x-o>Missing GROUP BY</x-o><x-o>count(*) counts the NULL-filled row; use count(d.id)</x-o><x-o>HAVING</x-o><x-why>A LEFT JOIN produces one row with NULLs; count(column) skips NULLs.</x-why></x-mcq>
+<x-mcq a="0"><x-t>Index <code>(user_id, created_at)</code>. Which query can use it fully?</x-t><x-o>WHERE user_id = $1 ORDER BY created_at DESC</x-o><x-o>WHERE created_at > now() - interval '1 day'</x-o><x-o>WHERE lower(title) = $1</x-o><x-o>ORDER BY title</x-o><x-why>Leftmost-prefix rule.</x-why></x-mcq>
+<x-mcq a="3"><x-t>Safest way to add a required column to a big live table?</x-t><x-o>ADD COLUMN x text NOT NULL</x-o><x-o>Drop and recreate the table</x-o><x-o>drizzle-kit push on production</x-o><x-o>Add nullable/with default → deploy writer → backfill → set NOT NULL</x-o><x-why>Expand, migrate, contract.</x-why></x-mcq>
+<x-mcq a="1"><x-t>Where should an LLM call go relative to a DB transaction?</x-t><x-o>Inside, so it’s atomic</x-o><x-o>Before it; then write results in a short transaction</x-o><x-o>It doesn’t matter</x-o><x-o>Inside, with SERIALIZABLE</x-o><x-why>Long transactions hold locks and pooled connections.</x-why></x-mcq>
+<x-mcq a="2"><x-t>Two concurrent “claim this email” requests both pass an “exists?” check. Fix?</x-t><x-o>Add a sleep</x-o><x-o>Check twice</x-o><x-o>UNIQUE constraint; handle the 23505 error</x-o><x-o>Use NoSQL</x-o><x-why>Let the database be the referee.</x-why></x-mcq>
+</x-quiz>
