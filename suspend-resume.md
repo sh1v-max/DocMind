@@ -435,7 +435,7 @@ CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout
 
 ## 9. What this phase deliberately does NOT cover
 
-- Mastra `createTool()`, a Mastra quiz agent, agents/tools inside workflows (Phase 2 of the brief, later).
+- Mastra `createTool()`, a Mastra quiz agent, agents/tools inside workflows (Phase 2 of the brief, later). **Agreed 2026-11-10 as "Phase 8b", after WF.7, not planned in detail yet:** (a) rebuild the existing document-chat agent in Mastra (same two tools via `createTool`, same system instruction) as a script (`npm run step9`, not a route) and run it on the same 9-question set the custom agent scored 9/9 on, to compare code size, model calls, answers and what the framework hides; (b) a small quiz agent with `listDocuments` (Kind A) and `createQuiz` with `requireApproval: true` (reuses `generateQuiz()`), to compare the agent's tool-approval pause with the workflow's `suspend()`. Kept out of the live chat at first: two "wait for yes" mechanisms live at once would fight over a typed "yes". Verified in the 1.82.0 bundled docs: `requireApproval` / `requireToolApproval`, the `tool-call-approval` stream chunk + `approveToolCall()` / `declineToolCall()` (needs storage), and Gemini via a `'google/…'` model string reading `GOOGLE_GENERATIVE_AI_API_KEY` (no provider package).
 - Mastra's server, playground (`mastra dev`), deployer, memory, observability, evals.
 - Moving `streamAgent`, the router or the tools to Mastra.
 - Saving quizzes or answers (still not persisted; a reload loses an open quiz, as today).

@@ -11,12 +11,21 @@ When an open item gets fixed, move it to "Fixed" with the date and the commit.
 
 | | Count |
 |---|---|
-| **Open** | **33**: bugs 7 · robustness 8 · known gaps 8 · slowness 3 · hygiene 7 |
+| **Open** | **35**: ⚠️ important 2 · bugs 7 · robustness 8 · known gaps 8 · slowness 3 · hygiene 7 |
 | **Fixed** | **44** app bugs, design problems and doc fixes, plus 12 testing/tooling traps and 5 environment problems |
 
 ---
 
 # Open
+
+## ⚠️ Important (next to build, details to be added)
+
+Both found on 2026-11-10 while reading the agent code. Neither is a crash: the answer looks fine, it's just built from part of the material, and the model doesn't know what it missed.
+
+| # | Issue | Where | Notes |
+|---|---|---|---|
+| 36 | **IMPORTANT. No real summary of a document.** "Summarize this PDF" is routed as a `document_question` (the example phrase `'summarize chapter 3'`), and the agent has no summary tool, so it does a normal similarity search: top 3 chunks (`SEARCH_TOP_K`, ~500 words each) per search, at most 2 rounds of tool calls (`AGENT_MAX_STEPS = 3`, the last call has no tools). A short PDF (≤ ~6 chunks) gets a good summary; a 50-chunk PDF gets one built from a few chunks that sound like "main points", with whole chapters never read | `router.service.ts` (`INTENT_EXAMPLES`), `agent.service.ts` (the loop), `tools/searchDocuments.tool.ts`, `config.ts` | Similarity search finds the parts that match a question; a summary needs the whole document (the quiz hit the same problem and uses `sampleChunks`). **Chosen fix: Option B, summarize once at upload.** The BullMQ worker already processes every chunk, so it also writes a summary (stuff the whole text if it fits, map-reduce if not) into a new `documents.summary` column (nullable, hand-run SQL on Neon). Then a summary question reads it (no extra cost at chat time) and `listDocuments` returns each file's summary too (helps #37). To decide: how a summary question reaches it (a tool, or `listDocuments`), what to do for documents uploaded before the column, the extra Gemini calls/tokens per upload against the free limits (#12) |
+| 37 | **IMPORTANT. "All documents" chat can't search each document fairly.** One `searchDocuments` call ranks the chunks of ALL the user's ready documents together and returns the top 3 (`searchSimilar` with no `documentId`), so one file that matches well can push the others out entirely. The tool only takes `{ query }` (scope comes from code, on purpose), so the model can't aim a search at one file ("what does report B say…"). With at most 2 rounds of tool calls, a question touching 3–4 files can't get a search per file. And there's no way to pick a subset (2 of 5 files): it's one document or all | `tools/searchDocuments.tool.ts`, `repositories/chunks.repository.ts` (`searchSimilar`), `agent.service.ts` (scope + loop), `config.ts` | Ideas, none chosen yet: an optional `filename`/`documentId` argument checked against the user's own documents in code (the model picks *which of yours*, code still decides *whose*); top-k per document instead of overall (e.g. best 1–2 chunks from each file); the per-document summaries from #36 so the agent first sees what each file is about; the multi-select design discussed on 2026-09-29 (`session_documents` join table + `inArray`). Watch: more searches = more embedding calls and a bigger prompt |
 
 ## Bugs (behaviour is wrong today)
 
