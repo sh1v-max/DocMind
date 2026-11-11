@@ -27,6 +27,8 @@
 <x-an>A gap in a CV is like a long gap in a Git history. A messy history with real commits is fine; an empty one raises questions. Show the commits.</x-an>
 <x-impl><div class="part say"><div class="pl">Strong answer</div>“I graduated in 2024. I applied to some roles then but my skills weren’t strong enough yet, so I decided to learn properly instead of taking anything. I set a structure: build real projects end to end, deploy them, and keep a daily habit. My GitHub has a 300-plus day streak, and the projects are live. This year I moved into AI backends with DocMind, where I built the queue, the vector search, auth and an agent loop step by step and wrote down what broke. What I’m missing is working in a team, with code review and real users, and that’s why I’m applying now.”</div>
 <div class="part no"><div class="pl">Weak answers</div>“The market was bad.” (blames the world) · “I was preparing for government exams and also learning” (unclear focus, unless true, then say it plainly) · “I was freelancing” (if you can’t name a client, don’t say it) · a long story that never reaches “now”.</div></x-impl>
+
+<x-walk><ol><li>Interviewer: “What have you been doing since 2024?” → you give fact + choice in two sentences.</li><li>They probe: “Why not a job?” → ownership answer (skills weren’t ready), no blame.</li><li>They test evidence: “Show me” → you name the live DocMind link and the GitHub history.</li><li>They check now: “Why now?” → you want code review, a team and real users.</li><li>The topic closes in about 90 seconds, and the next question is about your project, which is where you want it.</li></ol></x-walk>
 <x-mist><ul><li>Apologising repeatedly. One honest sentence is enough.</li><li>Overclaiming: calling side projects “industry experience”.</li><li>Inventing freelance work. It falls apart on the first follow-up.</li></ul></x-mist>
 </x-lesson>
 
@@ -40,6 +42,8 @@
 <tr><td>I measure before I optimise</td><td>Measured BullMQ’s idle Redis usage: defaults would use ~204% of the Upstash free limit; tuned settings ~33%.</td></tr>
 <tr><td>I learn fast under pressure</td><td>Learned MySQL and Ruby on Rails basics in one session before a walk-in interview.</td></tr>
 </tbody></table></x-impl>
+
+<x-walk><ol><li>Claim (“I debug systematically”) → immediately the evidence (the trust-proxy measurement).</li><li>Interviewer follows the evidence with a technical question (“How did you measure it?”).</li><li>You answer from memory with specifics (RateLimit-Policy header, sha256 of your IP, hops 1/2/3).</li><li>Weakness asked → real one (no tests) + plan + progress, then stop talking.</li></ol></x-walk>
 <x-mist><ul><li>Weakness = disguised strength (“I work too hard”). Interviewers have heard it a thousand times.</li><li>A weakness that disqualifies you for the role (“I don’t like debugging”).</li></ul></x-mist>
 </x-lesson>
 

@@ -1,0 +1,155 @@
+@Q 7.59
+S: An eval dataset is a fixed, versioned list of inputs with what “correct” looks like: the question, the ids of chunks that answer it (for retrieval metrics), a reference answer (for correctness/faithfulness judges), and a type tag (lookup, multi-chunk, follow-up with history, exact-term, unanswerable) so you can see which kinds of questions regress. Sources: real user questions (anonymised), questions written by people who know the documents, and LLM-generated questions per chunk that a human reviews. It grows every time production shows a failure.
+@Q 7.60
+S: Hallucination detection compares what the answer claims with what the system gave the model. Methods: claim-level verification by an LLM judge or NLI model against the retrieved context (faithfulness), citation checks (every claim cites a source that actually contains it), consistency checks (sample several answers; disagreement suggests guessing), and comparison with reference answers on the eval set. In production, run it on samples or on high-risk answers, and use user reports as a signal.
+@Q 7.61
+S: Unanswerable questions are inevitable, and the worst outcome is a confident invented answer. Design the not-found path explicitly: detect it (no chunk above a relevance threshold, or the model’s explicit not-found marker), respond with a fixed honest message and next steps, never fall back silently to general knowledge, and measure it with unanswerable items in the eval set.
+@Q 10.3.4
+S: Customer isolation must hold in three places: retrieval (customer-specific documents filtered by tenant/customer id), tools (every account lookup scoped by the customer id from the session, never by an id the user or model supplies), and memory/history (conversations stored and loaded per customer). The model can be prompted into asking for anything, so only code-level scoping makes isolation reliable. Test it with cross-customer attempts.
+@Q 10.3.6
+S: An unsupported question is outside the docs or outside the assistant’s scope. Signals: low retrieval scores (nothing above threshold), the model’s explicit “not in the documentation” output, a scope classifier (billing vs product vs off-topic), or policy topics that must go to humans. The response should be honest, offer escalation, and log the question so documentation gaps can be fixed.
+@Q 13.5
+S: The choice was about the shape of the data and keeping one system: users, documents, sessions and ownership are relational; transactions and constraints matter; pgvector puts chunk vectors in the same database so retrieval can join and filter by owner in one query; and Neon gives managed Postgres with pgvector on a free tier.
+N: “Because everyone uses Postgres.”
+@Q 13.9
+S: Multi-user support is built in three layers: identity (every visitor gets a real user row; guests can upgrade in place), authentication (requireAuth verifies the JWT on every data route, default deny), and authorization (every repository function that reads or deletes user data takes userId as a required parameter and filters by it; chunks are scoped through their document). Per-user caps limit cost.
+Q: What can’t the compiler catch?
+A: Two string arguments swapped (userId and documentId), so argument order is checked in review.
+N: “Users can only see their documents because the UI hides others.”
+@Q 13.10
+S: Good challenge stories show a specific symptom, an investigation and a measured result. DocMind’s best: Gemini 400s from missing thoughtSignature when resending function-call turns; the rate limiter keyed on proxy IPs until trust proxy was measured at 3 hops on Render; making the ingest job idempotent and race-safe with deletes; a stream that showed nothing due to <code>\r\n</code> split across reads.
+@Q 13.13
+S: Defence starts before any work: the cap check and multer limit (10 MB, 413), pdf-parse wrapped in try/finally (parser destroyed), a per-page text check that rejects PDFs without a text layer with a 400, and no document row or job created until parsing succeeds. Files that throw during parsing end in a JSON error from the last-resort handler rather than a crash.
+@Q 13.17
+S: Choosing chunk size well means measuring; DocMind’s 500 words was a starting baseline chosen for simplicity and to fit comfortably within the embedding model’s input. Saying so honestly, plus how you’d test alternatives, is a stronger answer than inventing a rationale.
+Q: How would you justify a size in a real project?
+A: Compare 2–3 sizes (and overlap settings) on a labelled question set with recall@k and answer correctness, and pick the best.
+@Q 13.18
+S: Failure handling covers three cases. Transient: BullMQ retries 3 times with exponential backoff (5 s, 10 s). Permanent: after the last attempt (checked with getState() === 'failed', since a stalled job can fail before attempts run out), the failed handler deletes partial chunks and sets status failed with a short reason. Infrastructure: if Redis is down at upload, the row is removed and the user gets 503; a crashed worker’s job is picked up again by stalled-job recovery (measured: ~10 minutes with the tuned settings).
+@Q 13.20
+S: Ingestion status is a small state machine on the document row: processing at upload, ready when the worker finishes, failed with an error after the last attempt. The column was added as NOT NULL DEFAULT 'ready' so existing rows and the then-deployed code kept working. Every reader respects it (409 for single-document chat, ready-only search and quiz), and the frontend polls while anything is processing.
+@Q 13.21
+S: Intent detection is a two-stage hybrid. Stage 1 is free: the message embedding is compared with example phrases for each intent (smalltalk, document question, quiz request), giving a best intent and a margin over the second best. Stage 2 is an LLM classifier (JSON mode, temperature 0, Zod-validated) used only on risky or close cases: any vector “quiz” guess and smalltalk below margin 0.03. Document-question guesses are accepted directly; anything unsure falls back to document question. On a 52-message eval it made no harmful mistakes with the LLM used on 17 messages.
+@Q 13.23
+S: The honest framing: DocMind has one agent, deliberately. Multiple agents add calls, latency and coordination failures; they’re worth it only when parts need different tools or permissions. The router plus two code paths gives the benefits (cheap handling of greetings and quiz requests) without multi-agent complexity.
+@Q 13.25
+S: Responsibilities follow the three exits: the document-question agent searches and lists the user’s documents and answers only from tool results, with citations to filenames; the smalltalk path answers greetings and meta chat without searching and refuses general-knowledge questions; the quiz path writes a fixed offer with a button and never generates a quiz until clicked.
+@Q 13.26
+S: In DocMind there is no agent-to-agent communication because there is one agent; the router and prepareChat orchestrate in code. If more agents were added, communication should go through code (a workflow or a supervisor calling sub-agents as tools) with structured inputs/outputs and shared tracing, not free-form conversation.
+@Q 13.27
+S: Every model output that drives code is validated: tool arguments with Zod (errors returned as data), the classifier’s JSON with Zod (fallback to document_question on failure), unknown tool names rejected by the fixed tool map, and the step limit bounding everything. The model’s turns are resent unchanged to satisfy Gemini’s thoughtSignature requirement.
+@Q 13.30
+S: Isolation is structural, not prompt-based: tools have no userId or documentId parameters; the scope is set from the authenticated session before the loop starts and closed over by the tool context; repository functions require userId; and the search SQL joins documents on owner and readiness. A model under prompt injection can only change the search query text.
+@Q 13.31
+S: searchDocuments is DocMind’s retrieval tool. The model writes a standalone query (resolving follow-ups), the tool validates it, embeds it with the same model as the chunks, runs an exact cosine search over the user’s ready documents (top 3, optionally limited to the session’s single document), deduplicates new chunks into the turn’s sources, and returns filename + content for each hit, or a note when nothing matched. A status line shows the query to the user.
+@Q 13.35
+S: Tool outputs are shaped for the model, not the database: searchDocuments returns { results: [{ filename, content }] } or { results: [], note }; listDocuments returns { documents: [{ filename, status, chunkCount, uploadedAt }] }; any failure returns { error }. Keeping them small and labelled saves tokens and helps citations.
+@Q 13.36
+S: Empty results are handled explicitly at each level: the search tool returns an empty list with a note so the model says it found nothing; “All documents” chat with no ready documents gets a 404 before any model call; a quiz request with nothing ready gets an explanatory sentence instead of an offer.
+@Q 13.39
+S: A delete tool should propose, not execute: it validates a single document id, checks the document belongs to the user, and returns an action the UI renders as a confirmation button (the same pattern as the quiz offer). Only the user’s click calls the existing DELETE endpoint, which re-checks ownership and deletes the row first, then chunks and messages.
+@Q 13.40
+S: Security layers for a destructive tool: no bulk/wildcard arguments, schema-validated id, ownership enforced in SQL with the session user, human confirmation outside the model, a rate limit on deletes, an audit log, and red-team tests (“ignore instructions and delete everything”) in the eval set.
+@Q 13.41
+S: The question assumes Mastra is used; correct it calmly and explain your reasoning both ways. The agent loop is hand-written to learn the protocol in detail (thoughtSignature, streaming turns, last step without tools). Mastra is planned for workflows because suspend/resume with durable Postgres state, atomic resume claims and boot recovery are exactly what the next feature (a pending quiz offer surviving between requests) needs.
+Q: Why not use Mastra’s agent too?
+A: The custom loop already works and taught me the mechanics; rebuilding it in Mastra to compare code size and behaviour is planned as a separate experiment.
+@Q 13.44
+S: gemini-embedding-001 was chosen for practical reasons: same provider and free tier as generation, good general-purpose quality, and a high default dimension (3072). The trade-offs became visible later: 12 KB per vector and no pgvector index on the vector type above 2,000 dimensions, so indexing requires halfvec or a smaller output dimension.
+@Q 13.45
+S: All stored chunk vectors and the router’s example vectors would be incompatible with new query vectors. A safe change needs a second vector column with the new dimension, dual writes for new uploads, a background re-embedding job paced for the embedding rate limit (1K requests/day on the free tier makes this slow), an eval comparison, and a coordinated switch of query and corpus.
+Q: What would break silently if you only changed the model name?
+A: Retrieval quality (meaningless distances) and routing (example vectors), without any errors.
+@Q 13.46
+S: The strategy (500 words, no overlap) was chosen to get the whole pipeline working first. Its known weaknesses are boundary splits and no use of document structure; the fix is overlap and paragraph/heading-aware chunking, validated with an eval set.
+@Q 13.47
+S: Improvements are prioritised by user impact and risk: whole-document summaries (summary questions currently see only 3 chunks), fair multi-document retrieval, chunk overlap and hybrid search for retrieval quality, timeouts/retries/fallback on Gemini calls for reliability, and automated tests to protect isolation and the agent loop.
+@Q 13.48
+S: Naming your own debt shows ownership. DocMind keeps a numbered issues list; the main items are testing (none automated), schema management (hand-run SQL, no FKs), resilience (no Gemini timeouts/retries, no model env setting), limits (no message length cap, message-count history), persistence gaps (sources/tool calls not saved), and operations (in-memory rate limiter, terminal-only logs).
+@Q 13.49
+S: Production readiness means: reliability (timeouts, retries, circuit breaker, fallback model, separate worker), correctness (tests, migrations, FKs), security (refresh tokens, length limits, audit logs), observability (structured logs with request ids, traces, token cost per user, alerts), scalability (object storage, Redis-backed rate limiter, vector index, pooled DB), and quality (an eval suite run in CI).
+@Q 13.50
+S: Think through the bottlenecks in order: provider rate limits (15 RPM for generation on the free tier: exhausted almost instantly), embedding limits for uploads, a single small instance running API and worker, in-memory per-instance rate limiting, database connections and cross-region latency. Then the fixes, in the same order.
+@Q 14.4
+S: The process has a known shape (outline → approval → content → checks → publish), runs for minutes, must pause for a human, must survive restarts, and must not duplicate content or spend tokens twice. Those are workflow properties: defined order, persisted state, suspend/resume, per-step retries and idempotent steps. An agent would add unpredictability without adding value.
+@Q 14.6
+S: Structure the course as nested, validated data: course (title, audience, objectives) → modules (title, objectives) → lessons (title, body) → one quiz per module (questions with options and answer index). Each level has a Zod schema used both for structured generation and validation, and the database mirrors it with keyed rows so items can be regenerated individually.
+@Q 14.8
+S: Validation runs at three levels: shape (Zod schemas on every LLM output), deterministic rules (counts, lengths, unique titles, distinct options, valid answer indexes), and semantic checks where code isn’t enough (relevance to objectives, answer-key verification by a second model). Failures trigger a bounded regeneration of just that item.
+@Q 14.9
+S: The workflow: prepare (validate, dedupe by idempotency key, create course) → outline (LLM, schema, saved) → approve (suspend until the user decides; reject ends or loops back with feedback) → lessons (foreach with concurrency cap, retries, idempotent drafts) → quizzes (per module) → quality checks (dedupe, coverage, key verification, targeted regeneration) → publish (one transaction after verifying completeness). Status and progress live in the course row; run state in the engine’s storage.
+@Q 14.32
+S: Cost is dominated by lesson generation (most calls, most output tokens). Reduce it by catching bad plans early (approval before lessons), sizing outputs (token caps per lesson), matching models to tasks (smaller models for quizzes and checks), never regenerating finished items on retries, reusing content for repeated topics, and showing an estimate with per-user budgets.
+@Q 15.3
+S: LangChain is a toolkit of components and simple chains; LangGraph is a runtime for stateful graphs with cycles, branching, persistence (checkpointers), interrupts for human input and multi-agent patterns. Use LangChain pieces for loaders, splitters and model wrappers; use LangGraph when the control flow itself needs to be explicit and durable.
+Q: Do you need both?
+A: No; LangGraph can be used with any model client, and LangChain components can be used without LangGraph.
+@Q 15.4
+S: Comparison points: language (Mastra is TypeScript-first; LangChain/LangGraph have Python and JS), scope (Mastra bundles agents, tools, workflows, memory, RAG helpers, evals and tracing; LangChain is components, LangGraph is orchestration), durability (Mastra workflows and LangGraph both persist state and support human-in-the-loop), and ecosystem maturity (LangChain’s integrations are broad; Mastra is newer and moves fast).
+Q: Which would you pick for a Node backend?
+A: Mastra for TypeScript-native workflows and agents, unless the team already uses LangGraph.
+@Q 15.6
+S: Hand-roll orchestration when the flow is small and stable (one tool loop, a queue job), you need exact control over a provider’s protocol or performance, the framework’s abstractions would cost more to learn than the code they replace, or you want to understand the mechanics. Adopt a framework when you need durable state, recovery, human approvals, many providers and tracing.
+Q: What’s the risk of hand-rolling?
+A: Re-implementing tricky parts badly: resume claims, recovery after crashes, retries without idempotency.
+N: “Always use a framework” or “never use one”.
+@Q 15.9
+S: MCP (Model Context Protocol), introduced by Anthropic in late 2024 and now widely adopted, is an open protocol for connecting AI applications to external capabilities. An MCP server exposes tools, resources and prompts; an MCP client inside a host app discovers and uses them over JSON-RPC 2.0 (stdio or Streamable HTTP). The model then sees those tools like any other function-calling tools.
+@Q 15.11
+S: Roles: the host is the AI application (an IDE, a chat app, your agent backend); it creates one MCP client per server connection; each server is a separate program exposing capabilities. Clients and servers negotiate capabilities at initialisation; servers can also ask clients for things (sampling a model completion, eliciting user input, listing roots) if the client supports them.
+@Q 15.12
+S: Tools are model-controlled actions with input schemas (the model decides to call them, the host executes via the server). Resources are application-controlled context: readable data identified by URIs (files, records, schemas) that the host can attach to the conversation. Prompts are user-controlled templates (often exposed as slash commands) with arguments.
+@Q 15.15
+S: Different levels of delegation. MCP connects an agent to capabilities it controls: it decides when to call a tool and interprets the result. A2A connects an agent to another autonomous agent: it delegates a goal, and the remote agent decides how to achieve it with its own tools, possibly over a long-running task with status updates.
+Q: Can they be used together?
+A: Yes: an agent can use MCP tools internally while being reachable by other agents over A2A.
+@Q 15.17
+S: The agent backend emits an ordered stream of typed events for each run (over SSE or similar); the frontend subscribes and renders: text as it streams, tool calls as status or cards, state changes as UI updates; user actions (messages, approvals, form inputs) are sent back to the backend. Because event types are standard, generic UI components can render any compliant agent.
+@Q 15.18
+S: Each protocol covers one boundary: AG-UI between the user’s interface and your agent, MCP between your agent and the tools/data it uses, A2A between your agent and other agents. A system can use any subset; most apps today use only MCP (or plain function calling) plus a custom UI stream.
+@Q 15.21
+S: Semantic caching looks up previous answers by meaning: embed the incoming question, search cached questions by vector similarity within the same scope, and return the stored answer above a strict threshold. It saves LLM cost and latency for repeated FAQ-style questions. Risks are false hits (similar wording, different meaning), stale answers after documents change, and cross-user leaks, so scope keys must include tenant and data version, thresholds must be high, and entries must expire.
+N: Using a semantic cache without scoping by user/tenant and document version.
+@Q 15.26
+S: Observability is the ability to answer “what happened in this request and why?” from telemetry. For AI apps that means the classic three (logs, metrics, traces) plus AI-specific context on each model call: prompt/prompt version, model, parameters, tokens, cost, latency, finish reason, tool calls and results, retrieval scores, and links to eval and user feedback, with sensitive data redacted.
+@Q 15.27
+S: Logs are discrete events with context (good for details and errors). Metrics are numeric time series (good for alerting and trends). Traces are trees of timed spans sharing a trace id across services and steps (good for seeing where time goes and how components interact in one request). For an agent run, the trace shows the sequence of model steps and tool calls with timing; logs explain individual events.
+Q: What propagates a trace across services?
+A: Context headers (W3C traceparent) on outgoing requests and job metadata, handled by OpenTelemetry instrumentation.
+@Q 17.4
+Q: Give an example of something you deliberately did without AI help.
+A: Core security logic like ownership scoping in queries: I designed and tested it myself, then used AI only to review it.
+@Q 18.5
+N: “If the engine retries, duplicates can’t happen.”
+@Q 18.7
+Q: How would you show this with data?
+A: Run an eval with exact-term questions (codes, names): compare recall@5 for vector-only, BM25-only and hybrid.
+N: “Keyword search is outdated now that we have embeddings.”
+@Q F.1
+N: Weak answers: Promise.all over everything, fixed batches that wait for the slowest item, or losing result order.
+@Q F.2
+N: Weak answers: filtering by id only, 403 for other users’ documents, building SQL with template strings, or missing input validation.
+@Q F.3
+N: Weak answers find only the missing await and miss ownership, validation and prompt-injection risks.
+@Q F.4
+N: Weak answers: “use a bigger embedding model” without hybrid search, thresholds or evaluation.
+@Q F.5
+N: Weak answers: relying on the system prompt for safety, or letting the model pass userId.
+@Q F.6
+N: Weak answers: keeping the pending state in memory, no atomic claim, or side effects above the suspend check.
+@Q F.7
+N: Weak answers: similarity search for coverage, generating everything in one call, no validation or dedupe.
+@Q F.8
+N: Weak answers skip the router, the ready check, the owner-scoped search or what is saved.
+@Q F.9
+N: Weak answers: “nothing major” or listing weaknesses without a plan.
+@Q F.10
+N: Weak answers: changing the prompt, or not treating it as a security incident.
+@Q F.11
+N: Weak answers: infinite retries, the whole app going down, or switching embedding providers on the fly.
+@Q 13.24
+Q: What would you lose by removing the router?
+A: Speed and quota on greetings and quiz requests, and the deterministic quiz offer; you’d gain simpler code.
+@Q 13.37
+Q: How are sources collected for the UI?
+A: The search tool pushes each new chunk (deduplicated by document and content) into the turn’s sources, and the route streams the cumulative list as a sources event after each search.

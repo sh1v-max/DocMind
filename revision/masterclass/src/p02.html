@@ -89,6 +89,8 @@ const orig = { user: { name: 'A' }, tags: ['x'] };
 const shallow = { ...orig };        // new outer object, SAME inner user/tags
 shallow.user.name = 'B';            // orig.user.name is now 'B' too!
 const deep = structuredClone(orig); // copies nested objects (not functions)</pre></x-impl>
+
+<x-walk><ol><li><code>filter</code> walks the 3 chunks and keeps 2 with distance &lt; 0.4 → new array; the original is unchanged.</li><li><code>map</code> turns those 2 objects into 2 strings.</li><li><code>reduce</code> starts with <code>{}</code>; chunk 1 sets a = 480; chunk 2 sets b = 120; chunk 3 adds 500 to a → <code>{ a: 980, b: 120 }</code>.</li><li><code>{ doc, ...rest } = chunks[0]</code> creates a variable doc and a new object rest with the other two keys.</li><li><code>{ ...orig }</code> creates a new outer object, but <code>shallow.user</code> is the same object as <code>orig.user</code>, so changing its name changes both; <code>structuredClone</code> copies the nested object too.</li></ol></x-walk>
 <x-mist><ul><li>Forgetting <code>reduce</code>’s initial value (crashes on an empty array).</li><li>Using <code>JSON.parse(JSON.stringify(x))</code> as deep copy: it drops <code>undefined</code>, functions, and turns Dates into strings.</li><li><code>forEach</code> with an async callback doesn’t wait.</li></ul></x-mist>
 </x-lesson>
 
@@ -213,13 +215,12 @@ NaN === NaN        // false → Number.isNaN</pre></x-code>
 <x-q n="2.7" tag="must basic"><x-t>What is type coercion?</x-t>
 <x-say>Automatic conversion of a value from one type to another, for example to string with <code>+</code> or to number with <code>-</code>, or to boolean in an <code>if</code>. Explicit conversion is <code>Number(x)</code>, <code>String(x)</code>, <code>Boolean(x)</code>.</x-say>
 <x-simple>Coercion happens implicitly in three places: string concatenation (<code>+</code> with any string converts the other side to a string), numeric operators (<code>- * / %</code>, unary <code>+</code>, comparisons) convert to numbers, and boolean contexts (<code>if</code>, <code>&&</code>, <code>||</code>, <code>!</code>) convert to true/false. Objects are converted via <code>valueOf</code>/<code>toString</code> (or <code>Symbol.toPrimitive</code>). Explicit coercion (<code>Number()</code>, <code>String()</code>, <code>Boolean()</code>, <code>parseInt(x, 10)</code>) is clearer and is what you use at API boundaries.</x-simple>
+<x-eg>Pagination bug: <code>offset = req.query.page * 20</code> works by accident, but <code>req.query.page + 1</code> gives "21". Validate and convert at the boundary with Zod.</x-eg>
 <x-code><pre data-l="js">'3' * '4'   // 12
 '3' + 4     // '34'
 [] + {}     // '[object Object]'
 if ('0') {} // runs: non-empty string is truthy
 Number('')  // 0   — careful with empty form fields</pre></x-code>
-<x-eg>Pagination bug: <code>offset = req.query.page * 20</code> works by accident, but <code>req.query.page + 1</code> gives "21". Validate and convert at the boundary with Zod.</x-eg>
-
 <x-fu q="Number(&#x27;&#x27;) vs parseInt(&#x27;&#x27;)?"><code>Number('')</code> is 0, <code>parseInt('', 10)</code> is NaN. <code>Number('12px')</code> is NaN while <code>parseInt('12px', 10)</code> is 12. Choose deliberately, or let Zod’s <code>z.coerce.number()</code> plus constraints decide.</x-fu>
 <x-no>Saying coercion is “random”. It follows exact spec rules; they’re just easy to forget.</x-no>
 <x-ev>Practical awareness.</x-ev></x-q>
@@ -311,6 +312,7 @@ const hiAsha = greet.bind(u, 'Hi'); hiAsha('?');  // 'Hi, Asha?'  (partial appli
 <x-q n="2.15" tag="must solid"><x-t>What is prototypal inheritance?</x-t>
 <x-say>Objects link to a prototype object. When a property isn’t found on the object, JavaScript looks it up on the prototype, then that one’s prototype, up to Object.prototype. Classes are syntax on top of this.</x-say>
 <x-simple>Every object has an internal <code>[[Prototype]]</code> link (read with <code>Object.getPrototypeOf</code>). Property reads walk this chain until found; writes always go to the object itself (shadowing the prototype’s property). Functions created with <code>new</code> get their instance’s prototype from <code>Constructor.prototype</code>, which is how methods are shared by all instances without copying. <code>class</code> and <code>extends</code> set up exactly these links; <code>super.method()</code> calls the method found on the parent prototype.</x-simple>
+<x-eg>Custom error classes for an API (NotFoundError, ValidationError) are prototypal inheritance in practice: the error handler checks <code>instanceof</code> to pick the status code.</x-eg>
 <x-code><pre data-l="js">class HttpError extends Error {
   constructor(status, msg) { super(msg); this.status = status; }
 }
@@ -318,8 +320,6 @@ const e = new HttpError(404, 'Not found');
 Object.getPrototypeOf(e) === HttpError.prototype;            // true
 Object.getPrototypeOf(HttpError.prototype) === Error.prototype; // true
 e instanceof Error;  // true: walks the chain</pre></x-code>
-<x-eg>Custom error classes for an API (NotFoundError, ValidationError) are prototypal inheritance in practice: the error handler checks <code>instanceof</code> to pick the status code.</x-eg>
-
 <x-fu q="Why put methods on the prototype instead of in the constructor?">One shared function for all instances instead of one copy per instance: less memory, and changes to the prototype apply to all instances.</x-fu>
 <x-no>“JavaScript classes copy methods into each object.”</x-no>
 <x-ev>Whether you know what <code>class</code> really does.</x-ev></x-q>
@@ -520,11 +520,10 @@ const [user, docs] = await Promise.all([pUser, pDocs]);</pre></x-code>
 <x-say>Concurrency is dealing with many tasks at once by interleaving them (one thread switching while tasks wait). Parallelism is doing many tasks at the exact same moment on multiple cores. Node’s JS is concurrent on one thread; worker threads and libuv’s thread pool add parallelism.</x-say>
 <x-simple>Concurrency is about structure: several tasks in progress over the same period, interleaved. Parallelism is about execution: several tasks running at the same instant on different CPU cores. Node’s main thread gives concurrency (many requests waiting on I/O at once); true parallelism comes from the OS doing I/O, libuv’s thread pool, worker threads, or multiple processes. For I/O-bound servers concurrency is what matters; for CPU-bound work you need parallelism.</x-simple>
 <x-eg>100 simultaneous LLM requests on one Node process: concurrent (all waiting) but not parallel. Hashing 100 passwords with bcrypt: runs in parallel on libuv’s 4 pool threads.</x-eg>
-<x-an>One waiter serving ten tables (concurrency) versus ten waiters (parallelism).</x-an>
-
 <x-fu q="Can concurrency without parallelism still have race conditions?">Yes: between awaits other code runs, so read-then-write across an await can interleave with another request.</x-fu>
 <x-no>Using the terms interchangeably.</x-no>
-<x-ev>Precise terms.</x-ev></x-q>
+<x-ev>Precise terms.</x-ev>
+<x-an>One waiter serving ten tables (concurrency) versus ten waiters (parallelism).</x-an></x-q>
 
 <h2 class="sec"><span class="k">2.3</span>Event loop and Node.js runtime</h2>
 
@@ -632,13 +631,14 @@ parentPort.postMessage(expensiveParse(workerData));</pre></x-code>
 
 <x-q n="2.44" tag="must solid"><x-t>Why can a CPU-intensive operation block a Node.js server?</x-t>
 <x-say>Because all requests share one JS thread. While a callback is computing, the stack is never empty, so the event loop can’t run any other callback: every other request waits, timeouts fire, health checks fail.</x-say>
+<x-simple>Node runs all your JavaScript callbacks on one thread. A CPU-heavy computation is one long synchronous function call: until it returns, the call stack never empties, so the event loop can’t reach the poll phase to accept new connections, can’t run timers, and can’t resume any awaiting handler. Every concurrent request’s latency grows by the duration of that computation, health checks fail, and under load the effect compounds. That’s why CPU-heavy work goes to worker threads, a separate service, or a queue.</x-simple>
+<x-eg>Parsing a 50 MB JSON upload with <code>JSON.parse</code> can take hundreds of ms; a regex with catastrophic backtracking (ReDoS) on user input can take seconds. During that time health checks time out and the platform may restart the instance.</x-eg>
 <x-code><pre data-l="js">app.get('/slow', (req, res) => {
   const end = Date.now() + 5000; while (Date.now() &lt; end) {}  // 5 s of CPU
   res.send('done');            // meanwhile /health doesn't answer either
 });</pre></x-code>
-<x-eg>Parsing a 50 MB JSON upload with <code>JSON.parse</code> can take hundreds of ms; a regex with catastrophic backtracking (ReDoS) on user input can take seconds. During that time health checks time out and the platform may restart the instance.</x-eg>
 <x-fu q="How do you fix it?">Move the work off the main thread (worker_threads, a job queue with separate workers), break it into chunks with setImmediate between them, or use async/streaming APIs.</x-fu>
-
+<x-fu q="How can you detect this in production?">Event-loop lag metrics (monitorEventLoopDelay), CPU at 100% on one core, and request latency rising for all endpoints at once; a CPU profile (--cpu-prof or clinic flame) shows the hot function.</x-fu>
 <x-no>“It only slows down that one request.”</x-no>
 <x-ev>Production reasoning.</x-ev></x-q>
 
@@ -661,10 +661,10 @@ tick
 promise 1
 promise 2
 tick inside promise
-timeout        (usually before immediate here; not guaranteed in the main module)
-immediate</pre>
-<p><b>Why:</b> <code>start</code>, <code>end</code> are synchronous. The stack empties: Node drains nextTick (<code>tick</code>), then the promise queue: <code>promise 1</code> runs and adds a nextTick; its <code>.then</code> queues <code>promise 2</code>, which also runs because Node finishes the current microtask queue first. Then the nextTick queue is checked again: <code>tick inside promise</code>. Then the loop: timers phase (<code>timeout</code>, if 1 ms has passed, which is typical) and check phase (<code>immediate</code>).</p></x-sol>
-<x-mist><ul><li>Putting <code>timeout</code> before promises.</li><li>Not knowing nextTick beats promises in CommonJS.</li><li>Claiming the timeout/immediate order is guaranteed in the main module.</li></ul></x-mist>
+immediate      (these last two can swap: in the main module the order is not guaranteed;
+timeout         on Node 22 this file printed immediate first in 4 of 5 runs)</pre>
+<p><b>Why:</b> <code>start</code>, <code>end</code> are synchronous. The stack empties: Node drains nextTick (<code>tick</code>), then the promise queue: <code>promise 1</code> runs and adds a nextTick; its <code>.then</code> queues <code>promise 2</code>, which also runs because Node finishes the current microtask queue first. Then the nextTick queue is checked again: <code>tick inside promise</code>. Then the loop: <code>timeout</code> runs in the timers phase only if its 1 ms has already elapsed when the loop starts; otherwise the check phase runs <code>immediate</code> first and the timer fires on the next turn. Running this file 5 times on Node 22 gave immediate-then-timeout 4 times and the reverse once, so say “not guaranteed” in an interview.</p></x-sol>
+<x-mist><ul><li>Putting <code>timeout</code> before promises.</li><li>Not knowing nextTick beats promises in CommonJS.</li><li>Claiming either order of timeout/immediate is guaranteed in the main module (only inside an I/O callback is immediate always first).</li></ul></x-mist>
 </x-ex>
 <x-ex t="Three more predictions" tag="must solid">
 <x-prob>Predict each output, then reveal.</x-prob>

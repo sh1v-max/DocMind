@@ -244,6 +244,8 @@ app.post('/auth/refresh', async (req, res) => {
   res.json({ token: jwt.sign({}, JWT_SECRET, { subject: rows[0].user_id, expiresIn: '15m' }) });
 });</pre></x-impl>
 <x-dm><p>DocMind uses <b>only</b> access tokens: 7 days for registered users, 30 days for guests (an expired guest token means lost files), HS256 with the algorithm pinned, Bearer header in <code>localStorage</code> (Vercel and Render are different sites, so an API cookie would be third-party). No refresh tokens or server-side logout yet: listed as a known gap. That’s why answers are rendered with react-markdown and no raw HTML: a token in localStorage is readable by any XSS.</p></x-dm>
+
+<x-walk><ol><li>Login succeeds → server creates a refresh token (random 32 bytes), stores sha256(token) with an expiry, sets it as an httpOnly cookie scoped to /auth/refresh, and returns a 15-minute access JWT.</li><li>Client calls APIs with the access token until one returns 401 (expired).</li><li>Client calls /auth/refresh; the browser sends the cookie automatically.</li><li>Server hashes the cookie value and runs <code>DELETE … WHERE token_hash = $1 AND expires_at &gt; now() RETURNING user_id</code>: one row means valid and now consumed.</li><li>Server stores a new refresh token (rotation), sets the new cookie, returns a new access token; the client retries the original request.</li><li>If an old refresh token is replayed, the DELETE finds nothing → 401; with reuse detection you’d also revoke the user’s other tokens.</li></ol></x-walk>
 <x-mist><ul><li>Using <code>jwt.decode()</code> to “check” a token. It doesn’t verify anything.</li><li>Not pinning <code>algorithms</code> (historic “alg: none” and RS/HS confusion attacks).</li><li>Putting roles in a long-lived token and expecting role changes to apply immediately.</li></ul></x-mist>
 </x-lesson>
 
@@ -282,6 +284,8 @@ app.post('/auth/refresh', async (req, res) => {
 <x-eg>While request A waits 3 s for an LLM, requests B to Z are parsed, queried and answered.</x-eg>
 
 <x-fu q="Is file I/O truly non-blocking in Node?">From your code’s view yes, but internally it runs on libuv’s thread pool because portable async file APIs are limited; network I/O uses the OS’s async mechanisms directly.</x-fu>
+
+<x-no>“Non-blocking means multi-threaded.”</x-no>
 <x-ev>Core concept.</x-ev></x-q>
 
 <x-q n="3.4" tag="must basic"><x-t>What is the difference between Node.js and browser JavaScript?</x-t>
@@ -390,6 +394,7 @@ export const env = Env.parse(process.env);   // crash at boot, not at the first 
 
 <x-q n="3.14" tag="must solid"><x-t>How would you handle file uploads in Node.js?</x-t>
 <x-say>Use multipart/form-data with a parser like multer or busboy, enforce size and type limits early, store the file in object storage (not the DB), save metadata in a table, and process it in a background job.</x-say>
+<x-simple>Uploads arrive as multipart/form-data: the body contains parts separated by a boundary, each with headers and bytes. A streaming parser (busboy, which multer uses) reads parts as they arrive, enforces limits (file size, number of files, field sizes) while reading, and either buffers the file in memory or writes it to disk/storage. After parsing: verify the real type (magic bytes), compute a hash, store the object, record metadata, and process asynchronously. Direct-to-storage uploads with presigned URLs skip your server entirely for large files.</x-simple>
 <x-code><pre data-l="js">import multer from 'multer';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 app.post('/upload', requireAuth, checkQuota, upload.single('file'), async (req, res) => {
@@ -449,6 +454,8 @@ app.use((req, res, next) =&gt; {
 });</pre></x-code>
 
 <x-fu q="How do you pass data from middleware to a handler?">Attach it to <code>req</code> (e.g. req.user) or <code>res.locals</code>.</x-fu>
+
+<x-no>“Middleware only runs before routes.” (Error handlers and 404 handlers are middleware after routes.)</x-no>
 <x-ev>Core Express concept.</x-ev></x-q>
 
 <x-q n="3.19" tag="must basic"><x-t>What happens when you call next()?</x-t>
@@ -488,6 +495,7 @@ app.use('/admin', requireAuth, admin);</pre></x-code>
 
 <x-q n="3.22" tag="must basic"><x-t>Why does Express have a particular middleware execution order?</x-t>
 <x-say>Because middleware is just a list processed top to bottom, and each step may depend on earlier ones: auth needs the parsed headers, validation needs the parsed body, routes need the authenticated user. Order is how you express those dependencies.</x-say>
+<x-simple>Express keeps one ordered list of layers per app/router; each request walks it top to bottom and stops at the first layer that sends a response. Order therefore encodes dependencies (parse before validate, authenticate before authorize, routes before 404, everything before the error handler) and policy (public routes before a global auth middleware, CORS before anything that can reject). Getting the order wrong silently changes behaviour without any error.</x-simple>
 <x-eg><code>app.use(requireAuth); app.use(cors());</code>: the browser’s preflight OPTIONS (which never carries the token) is rejected with 401 before CORS headers are set, so every cross-origin call fails with a confusing CORS error.</x-eg>
 <x-dm>DocMind mounts the public auth router, then <code>app.use(requireAuth)</code>, then every data router: a router added later is protected by default (“default deny”). cors() must stay above requireAuth.</x-dm>
 
@@ -527,6 +535,8 @@ a single generic 401 message, and no database lookup unless you need fresh user 
 <x-say><code>req.params</code> holds named path segments, <code>req.query</code> the parsed query string (all strings), <code>req.body</code> the parsed body, which is only present if a body parser like express.json() ran.</x-say>
 <x-simple><code>req.params</code> is filled by the router from named segments (always strings). <code>req.query</code> is parsed from the URL’s query string by Express’s query parser (strings, or arrays/objects for repeated or bracketed keys like <code>?tag=a&amp;tag=b</code>); in Express 5 it’s a getter you can’t reassign. <code>req.body</code> is undefined until a body-parsing middleware runs (<code>express.json()</code>, <code>express.urlencoded()</code>, multer for multipart).</x-simple>
 <x-eg><code>GET /users/7/docs?page=2</code> → <code>req.params.userId === '7'</code>, <code>req.query.page === '2'</code>, <code>req.body === undefined</code>.</x-eg>
+
+<x-fu q="Why are all query values strings?">The query string is text; Express parses it into strings/arrays/objects but doesn’t convert types, so you validate and coerce (z.coerce.number()).</x-fu>
 <x-no>Treating query values as numbers without converting them.</x-no>
 <x-ev>Basics.</x-ev></x-q>
 
@@ -558,7 +568,6 @@ app.use(cors({
 
 <x-q n="3.29" tag="must basic"><x-t>What is rate limiting?</x-t>
 <x-say>Limiting how many requests a client (IP, user or API key) can make in a time window, returning 429 when exceeded. It protects against abuse, brute force and runaway costs.</x-say>
-<x-an>A nightclub door: only so many people per hour; everyone else waits outside.</x-an>
 <x-simple><p>Algorithms: fixed window (simple, bursts at edges), sliding window, token bucket (allows short bursts, smooth average). With several server instances, keep counters in a shared store like Redis.</p></x-simple>
 <x-eg>Login endpoint: 5 attempts per 15 minutes per IP + email; chat: 20 messages per minute per user; a daily token budget per user for LLM cost.</x-eg>
 <x-code><pre data-l="js">import rateLimit from 'express-rate-limit';
@@ -571,10 +580,10 @@ export const chatLimiter = rateLimit({
   store: new RedisStore({ sendCommand: (...args) =&gt; redis.call(...args) }),
 });</pre></x-code>
 <x-dm>DocMind: one shared counter per IP for /auth/guest, /register and /login (20 per 15 min), in memory, so it resets on every restart. Behind Render + Cloudflare the right <code>trust proxy</code> value was 3, found by measuring.</x-dm>
-
 <x-fu q="Why does the proxy setting matter for IP-based limits?">Behind proxies req.ip is the proxy’s address unless <code>trust proxy</code> is set to the right number of hops; wrong values either merge all users into one bucket or let clients spoof X-Forwarded-For.</x-fu>
 <x-no>Rate limiting by IP only (many users share an IP; one attacker uses many).</x-no>
-<x-ev>Protection mindset.</x-ev></x-q>
+<x-ev>Protection mindset.</x-ev>
+<x-an>A nightclub door: only so many people per hour; everyone else waits outside.</x-an></x-q>
 
 <x-q n="3.30" tag="must solid"><x-t>How would you implement pagination?</x-t>
 <x-say>Offset/limit for small or admin lists; cursor (keyset) pagination for large or live lists: order by a unique, stable key and ask for rows after the last one seen. Always cap the page size.</x-say>
@@ -601,6 +610,7 @@ ORDER BY created_at DESC, id DESC LIMIT 20;</pre></x-code>
 
 <x-q n="3.32" tag="must solid"><x-t>How would you structure a large Express application?</x-t>
 <x-say>By layer and feature: routes (thin, HTTP only) → services (business rules) → repositories (data access), plus middleware, schemas, config and a composition root (app.js builds the app, index.js starts it so tests can import the app without listening).</x-say>
+<x-simple>Structure by responsibility and by feature. Layers: routes (HTTP), services (business rules), repositories (data access), plus middleware, schemas, config, workers and a composition root. Group by feature (documents, chat, auth) when the app grows so related code lives together. Keep app creation separate from listening so tests can import the app. Rules that prevent decay: no SQL outside repositories, no req/res in services, dependencies injected or imported one way only, and new features get their own files instead of growing a central one.</x-simple>
 <x-code><pre data-l="text">src/
   app.js            builds express app (no listen)
   index.js          env check, listen, graceful shutdown
@@ -710,6 +720,7 @@ export const getForUser = (userId, id) =&gt; db.select().from(documents).where(a
 
 <x-q n="3.42" tag="must solid"><x-t>Where should tokens be stored?</x-t>
 <x-say>Trade-off. An httpOnly, Secure, SameSite cookie can’t be read by JavaScript (protects against XSS theft) but needs CSRF protection and works best on the same site. localStorage or memory is simple for cross-site APIs but readable by any XSS. A common pattern: access token in memory, refresh token in an httpOnly cookie.</x-say>
+<x-simple>The choice is about which attacks you’re more exposed to and what your deployment allows. localStorage/sessionStorage: easy, works cross-site with Bearer headers, immune to CSRF, but readable by any script (XSS steals it). httpOnly cookies: not readable by scripts, sent automatically (so CSRF must be handled with SameSite and/or tokens), and awkward across different sites (third-party cookies are blocked by many browsers). In memory only: lost on refresh, so combined with a refresh-token cookie. Native apps use secure OS storage.</x-simple>
 <x-eg>SPA on the same site as the API: access token in memory + refresh token in an httpOnly SameSite=Strict cookie. Mobile app: the OS secure storage (Keychain/Keystore).</x-eg>
 <x-dm>DocMind chose localStorage because Vercel and Render are different sites (an API cookie would be third-party), and compensated by rendering answers with no raw HTML.</x-dm>
 
@@ -728,6 +739,7 @@ export const getForUser = (userId, id) =&gt; db.select().from(documents).where(a
 
 <x-q n="3.44" tag="must solid"><x-t>How would you implement role-based access control?</x-t>
 <x-say>Store roles (or permissions) per user, load them on the request (token claim or DB lookup), and check them in middleware or the service: <code>requireRole('admin')</code>. Combine with ownership checks for row-level access.</x-say>
+<x-simple>RBAC assigns users roles (admin, editor, viewer), roles grant permissions (document:delete, billing:read), and checks ask “does this user have permission X?”. Store roles in a table (user_roles), load them at login (into the token for short-lived tokens) or per request, check permissions in middleware for route-level rules and in services/queries for resource-level rules (owner or role). Prefer checking permissions over role names so roles can change without code changes.</x-simple>
 <x-code><pre data-l="js">const requireRole = (...roles) => (req, res, next) =>
   roles.includes(req.user.role) ? next() : next(new HttpError(403, 'Forbidden'));
 app.delete('/admin/users/:id', requireAuth, requireRole('admin'), deleteUser);</pre></x-code>
@@ -762,6 +774,7 @@ app.delete('/admin/users/:id', requireAuth, requireRole('admin'), deleteUser);</
 
 <x-q n="3.48" tag="must basic"><x-t>What is bcrypt?</x-t>
 <x-say>A password hashing function with a built-in random salt and a cost factor that makes each hash deliberately slow (e.g. 10 rounds ≈ tens of milliseconds), so brute-forcing leaked hashes is expensive.</x-say>
+<x-simple>bcrypt (based on the Blowfish cipher’s expensive key setup) generates a random 128-bit salt, runs 2^cost iterations of key expansion, and outputs a string containing the version, cost, salt and hash, so verifying needs only the string. Increasing cost by 1 doubles the work, which lets you keep up with faster hardware. Limits: only the first 72 bytes of the password are used, and it isn’t memory-hard (Argon2id resists GPU attacks better).</x-simple>
 <x-eg>Cost 10 → about 2^10 rounds; each +1 doubles the time. Pick the highest cost that keeps login under ~100–250 ms on your server.</x-eg>
 <x-fu q="Any limits?">It only uses the first 72 bytes of the password, so cap passwords at 72 bytes (DocMind does). Use the async API so hashing runs on the thread pool, not the event loop.</x-fu>
 
@@ -782,6 +795,7 @@ pool.query('SELECT * FROM users WHERE email = $1', [email]);</pre></x-code>
 
 <x-q n="3.50" tag="must basic"><x-t>How do parameterized queries prevent SQL injection?</x-t>
 <x-say>The SQL text and the values are sent separately. The database parses the query structure first, then binds values as data, so a value can never become SQL syntax.</x-say>
+<x-simple>With a parameterized query, the driver sends the SQL text with placeholders ($1, $2) and the values separately (the extended query protocol in Postgres). The server parses and plans the statement before seeing the values, so the values can only ever be data of the declared type; quote characters inside them are just characters. String concatenation, by contrast, lets the value change the parse tree.</x-simple>
 <x-eg><code>SELECT * FROM users WHERE email = $1</code> with <code>["x' OR '1'='1"]</code>: Postgres looks for a user whose email is literally that string and finds none.</x-eg>
 <x-fu q="What can’t be parameterized?">Identifiers like table or column names and ORDER BY direction. Use an allow-list for those.</x-fu>
 <x-fu q="How do you safely allow a client-chosen sort column?">Map allowed values to known identifiers in code: <code>const col = { created: 'created_at', title: 'title' }[req.query.sort] ?? 'created_at'</code>.</x-fu>
@@ -906,6 +920,8 @@ container.innerHTML = DOMPurify.sanitize(markdownToHtml(answer));
 }
 async function onDocumentChanged(userId) { await redis.del(`docs:${userId}:v1`); }   // invalidate on write</pre></x-code>
 <x-fu q="What should never be cached?">Anything without the user/tenant in the key when it’s user-specific, and data that must be strongly consistent (balances, permissions) unless invalidation is exact.</x-fu>
+
+<x-no>Caching user-specific data under a global key, or caching with no invalidation and no TTL.</x-no>
 <x-ev>Performance.</x-ev></x-q>
 
 <x-q n="3.63" tag="must basic"><x-t>What is Redis, and when would you use it?</x-t>
@@ -943,6 +959,7 @@ new Worker('ingest', async (job) =&gt; {
 
 <x-q n="3.66" tag="must solid"><x-t>Why should long-running operations not necessarily execute inside an HTTP request?</x-t>
 <x-say>Requests time out (proxies often at 30–100 s), the user can’t leave the page, a crash loses the work, and long requests tie up connections. A job queue gives retries, progress tracking and horizontal scaling.</x-say>
+<x-simple>HTTP requests have limited lifetimes (proxy and load-balancer timeouts, client patience, deploys that kill in-flight requests) and they tie up resources while open. Long operations inside them fail unpredictably and can’t be retried safely by the client because the outcome is unknown. A background job decouples acceptance (fast, returns an id) from execution (durable, retried, observable, scalable separately), and the client tracks progress.</x-simple>
 <x-eg>Embedding a 200-chunk PDF one call per chunk at ~300 ms each is about 60 s: longer than many proxy timeouts, and a deploy mid-request loses the work. Queued, the upload answers 202 in ~2 s.</x-eg>
 <x-dm>DocMind’s upload went from waiting for every embedding call to returning 202 in ~2 s, with ready in ~5 s.</x-dm>
 <x-fu q="When is doing it inline fine?">When it’s fast (under a second or two), cheap to repeat, and the user needs the result immediately.</x-fu>

@@ -65,12 +65,16 @@ const rows = await db.select({ content: chunks.content, distance })
 <p><b>IVFFlat</b>: k-means splits vectors into <code>lists</code> clusters at build time. A query finds the nearest cluster centroids and scans only the <code>probes</code> closest lists. Build it after the data exists (centroids come from the data).</p>
 <p><b>Filtering pitfall:</b> with an ANN index, Postgres takes the index’s top candidates and <i>then</i> applies <code>WHERE user_id = …</code>. If most candidates belong to other users, you get fewer than 5 rows (or none). Fixes: pgvector 0.8+ iterative index scans (<code>SET hnsw.iterative_scan = relaxed_order</code>), partial indexes or partitions per tenant, higher ef_search, or exact search when a user has few vectors.</p></x-in>
 <x-dm>DocMind has <b>no vector index</b>: every search is an exact scan over the user’s chunks (fine at its size). ISSUES #23 records two traps for later: the ANN filter order above, and that pgvector indexes support at most 2,000 dimensions for <code>vector</code>, so 3072-dim embeddings would need <code>halfvec</code> (up to 4,000) or shorter output dimensions before an index.</x-dm>
+
+<x-walk><ol><li>The query vector arrives as a string <code>'[0.01, …]'</code> and is cast to vector.</li><li>Without an index: Postgres joins chunks to documents, filters by user and status, computes <code>&lt;=&gt;</code> for each remaining row, sorts, returns 5. Exact, linear in the user’s rows.</li><li>With HNSW: the planner sees <code>ORDER BY embedding &lt;=&gt; $1 LIMIT 5</code> and uses the index to fetch candidates nearest the query, then applies the WHERE filters to them; with iterative scans enabled it keeps scanning until 5 rows pass.</li><li><code>hnsw.ef_search</code> sets how many candidates the graph search keeps: higher = better recall, slower.</li><li>Deleting a document cascades its chunks; the index entries are cleaned up by vacuum.</li></ol></x-walk>
 <x-mist><ul><li>Creating IVFFlat on an empty table.</li><li>Forgetting the user filter on vector search (a data leak).</li><li>Assuming an index makes results exact: ANN trades a little recall for speed.</li></ul></x-mist>
 </x-lesson>
 
 <x-lesson t="Changing the embedding model safely" tag="should">
 <x-def>Vectors from different models live in different spaces. Switching models means re-embedding every chunk, and query and corpus must always use the same model.</x-def>
 <x-impl><ol><li>Add a new column (or table) <code>embedding_v2 vector(N)</code> and record <code>embedding_model</code> per row.</li><li>New uploads: write both v1 and v2 (dual write).</li><li>Backfill old chunks with a background job: batched, rate-limited, idempotent (skip rows that already have v2), resumable, with progress.</li><li>Build the new index.</li><li>Evaluate retrieval quality on your labelled set with v2 before switching.</li><li>Switch reads to v2 behind a flag (both query embedding and column together); keep v1 for rollback.</li><li>Drop v1 when confident.</li></ol></x-impl>
+
+<x-walk><ol><li>Day 1: <code>ALTER TABLE chunks ADD COLUMN embedding_v2 vector(768)</code> (nullable, instant).</li><li>Deploy: new uploads write both columns.</li><li>Backfill job: batches of 100 rows WHERE embedding_v2 IS NULL, rate-limited, resumable.</li><li>When the count of NULLs reaches 0: build the HNSW index on embedding_v2.</li><li>Run the retrieval eval with v2 queries against v2 vectors; compare recall@k with v1.</li><li>Flip a flag: queries embed with v2 and search embedding_v2. Keep v1 for a week for rollback.</li><li>Drop embedding_v1 and stop dual writes.</li></ol></x-walk>
 <x-mist><ul><li>Re-embedding in place: mid-migration, half the rows are in a different space and search quality collapses.</li><li>Changing only the query model.</li></ul></x-mist>
 </x-lesson>
 
@@ -93,7 +97,10 @@ const rows = await db.select({ content: chunks.content, distance })
 <x-fu q="Why do some models want a prefix like “query:” or a task type?">They were trained with different roles for queries and documents; the hint puts each into the right part of the space.</x-fu>
 <x-no>“It averages word vectors from a dictionary.” (That was older word2vec-style; modern models are contextual.)</x-no>
 <x-ev>Intuition.</x-ev></x-q>
-<x-q n="6.4" tag="must basic"><x-t>What does embedding dimensionality mean?</x-t><x-say>The number of values in each vector (e.g. 768, 1536, 3072). More dimensions can capture finer distinctions but cost more storage, memory and compute per comparison.</x-say><x-eg>1M chunks × 3072 dims × 4 bytes ≈ 12 GB of raw vectors; at 768 dims ≈ 3 GB.</x-eg>
+<x-q n="6.4" tag="must basic"><x-t>What does embedding dimensionality mean?</x-t><x-say>The number of values in each vector (e.g. 768, 1536, 3072). More dimensions can capture finer distinctions but cost more storage, memory and compute per comparison.</x-say>
+<x-simple>Dimensionality is the length of each vector, fixed by the model (some let you request a shorter output). Each extra dimension adds capacity to separate meanings, but also storage (4 bytes per float32 dimension), memory for indexes, and compute per comparison. Dimension doesn’t depend on input length: a word and a page both become, say, 1,536 numbers.</x-simple><x-eg>1M chunks × 3072 dims × 4 bytes ≈ 12 GB of raw vectors; at 768 dims ≈ 3 GB.</x-eg>
+
+<x-fu q="Can you just cut a vector to fewer dimensions?">Only if the model was trained for it (Matryoshka-style models like many current ones); truncating other models’ vectors degrades quality badly. Re-normalise after truncating.</x-fu>
 <x-no>“Dimension = number of words the model knows.”</x-no>
 <x-ev>Cost awareness.</x-ev></x-q>
 <x-q n="6.5" tag="must solid"><x-t>Does a larger embedding dimension always mean better results?</x-t><x-say>No. Quality depends on the model and on your data; a good 768-dim model can beat a weaker 3072-dim one. Many modern models support shorter outputs (Matryoshka-style) with a small quality loss and big savings. Measure on your own retrieval eval.</x-say>
@@ -108,13 +115,15 @@ const rows = await db.select({ content: chunks.content, distance })
 <x-fu q="What does that mean for RAG?">Similar ≠ relevant or correct; reranking and the LLM’s reading of the text still matter.</x-fu>
 <x-no>“Similar embeddings means identical meaning.”</x-no>
 <x-ev>Basics.</x-ev></x-q>
-<x-q n="6.7" tag="must basic"><x-t>What is cosine similarity?</x-t><x-say>The cosine of the angle between two vectors: dot product divided by the product of their lengths. 1 = same direction, 0 = unrelated (orthogonal), −1 = opposite. It ignores vector length.</x-say>
-<x-simple>Cosine similarity measures the angle between vectors: 1 means same direction, 0 orthogonal, −1 opposite. Because it divides by both lengths, it ignores magnitude, which for text embeddings usually reflects things like length or frequency rather than meaning. Scores are model-specific: one model’s 0.8 is not another’s.</x-simple><x-code><pre data-l="js">const cosine = (a, b) => {
+<x-q n="6.7" tag="must basic"><x-t>What is cosine similarity?</x-t>
+<x-say>The cosine of the angle between two vectors: dot product divided by the product of their lengths. 1 = same direction, 0 = unrelated (orthogonal), −1 = opposite. It ignores vector length.</x-say>
+<x-simple>Cosine similarity measures the angle between vectors: 1 means same direction, 0 orthogonal, −1 opposite. Because it divides by both lengths, it ignores magnitude, which for text embeddings usually reflects things like length or frequency rather than meaning. Scores are model-specific: one model’s 0.8 is not another’s.</x-simple>
+<x-eg>In DocMind’s first experiment: “The cat sat on the mat” vs “A kitten was resting on the rug” = 0.7628; vs a stock-market sentence = 0.5879.</x-eg>
+<x-code><pre data-l="js">const cosine = (a, b) => {
   let dot = 0, na = 0, nb = 0;
   for (let i = 0; i &lt; a.length; i++) { dot += a[i] * b[i]; na += a[i] ** 2; nb += b[i] ** 2; }
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 };</pre></x-code>
-<x-eg>In DocMind’s first experiment: “The cat sat on the mat” vs “A kitten was resting on the rug” = 0.7628; vs a stock-market sentence = 0.5879.</x-eg>
 <x-fu q="Why is 0.59 “unrelated” but not 0?">Embedding spaces aren’t uniformly spread; most texts share some direction (language, style), so unrelated pairs often score well above 0. Compare relative ranks.</x-fu>
 <x-no>“Cosine similarity is a probability.”</x-no>
 <x-ev>Core metric.</x-ev></x-q>
@@ -136,6 +145,7 @@ const rows = await db.select({ content: chunks.content, distance })
 <x-no>“They’re interchangeable for all models.”</x-no>
 <x-ev>Precision.</x-ev></x-q>
 <x-q n="6.11" tag="must basic"><x-t>Why should the same embedding model generally be used for ingestion and query embedding?</x-t><x-say>Each model has its own vector space. A query from model B compared with chunks from model A gives meaningless distances.</x-say>
+<x-simple>An embedding model defines its own space; similarity is only meaningful between vectors produced by that model with the same settings (version, output dimension, task type). Queries and documents must therefore be embedded by the same model, or retrieval silently returns nonsense with no error.</x-simple>
 <x-eg>Ingesting with model A and embedding queries with model B is like plotting cities with one map projection and searching with another: coordinates look valid but point to the wrong places.</x-eg><x-fu q="Any exception?">Some models use different task types or prefixes for queries vs documents (“query:” / “passage:”, or a task_type parameter), but it’s still the same model and space.</x-fu>
 <x-fu q="What about re-ranking with a different model?">That’s fine: a cross-encoder reranker reads text, not vectors, so it doesn’t need to match the embedding model.</x-fu>
 <x-no>“Same dimension means compatible.”</x-no>
@@ -196,6 +206,7 @@ async function backfill({ batch = 100 } = {}) {
 <x-no>“pgvector is a separate database.”</x-no>
 <x-ev>Basics.</x-ev></x-q>
 <x-q n="6.19" tag="must solid"><x-t>What are HNSW and IVFFlat?</x-t><x-say>Two approximate nearest-neighbour index types. HNSW builds a layered graph and greedily navigates it: high recall and speed, more memory, slower build, works on an empty table. IVFFlat clusters vectors into lists and searches the nearest few: faster build and smaller, but needs data first and usually lower recall at equal speed.</x-say>
+<x-simple>HNSW builds a multi-layer proximity graph: each vector links to its nearest neighbours (m links), upper layers are sparse shortcuts, the bottom layer holds all vectors. Search enters at the top and greedily moves toward the query, keeping ef_search candidates. It has high recall at low latency, supports inserts without rebuilding, but uses more memory and builds slowly. IVFFlat runs k-means to create <code>lists</code> centroids, assigns each vector to its nearest list, and at query time scans only the <code>probes</code> nearest lists. It builds quickly and uses less memory, but must be built after data exists, and recall drops if data drifts from the centroids.</x-simple>
 <x-eg><code>CREATE INDEX ON chunks USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);</code> then <code>SET hnsw.ef_search = 100;</code> per query session for higher recall.</x-eg>
 <x-fu q="Which would you pick by default?">HNSW: better speed/recall trade-off, works as data grows, no retraining; IVFFlat when build time or memory are the constraint.</x-fu>
 <x-no>“IVFFlat and HNSW give exact results.”</x-no>
@@ -247,11 +258,13 @@ ORDER BY c.embedding &lt;=&gt; $2 LIMIT 5;</pre></x-code>
 <x-no>Storing only vectors and losing the text.</x-no>
 <x-ev>Schema design.</x-ev></x-q>
 <x-q n="6.27" tag="must solid"><x-t>How would you isolate vectors belonging to different users?</x-t><x-say>Every query filters by the owner taken from the auth token, through a join or a user_id/tenant_id column; never trust an id from the request body. At scale, per-tenant partitions or partial indexes keep ANN results correct; Postgres row-level security adds a safety net.</x-say>
+<x-simple>Isolation must happen inside the retrieval query, because top-k is computed over whatever rows the query can see. Options: filter by an owner/tenant column through a join or denormalised column (with the id from the session), row-level security policies as a backstop, partial indexes or partitions per tenant for ANN correctness at scale, or separate collections per tenant in a vector DB. Test it explicitly: one user’s best-matching content must never appear for another user.</x-simple>
 <x-eg>The test: user A uploads “a.pdf”, user B asks a question whose best match is in a.pdf; B must get nothing from it.</x-eg><x-dm>DocMind: <code>chunks</code> has no user_id; <code>searchSimilar</code> INNER JOINs documents and filters <code>documents.user_id</code> and <code>status = 'ready'</code>; userId is a required parameter of every repository function.</x-dm>
 <x-fu q="Would you denormalise user_id onto chunks?">It speeds up filtering and enables partial indexes per tenant, at the cost of keeping it in sync; DocMind keeps ownership on documents and joins.</x-fu>
 <x-no>Filtering by user in the application after retrieving global top-k.</x-no>
 <x-ev>Security.</x-ev></x-q>
 <x-q n="6.28" tag="must basic"><x-t>How would you delete all chunks belonging to a document?</x-t><x-say><code>DELETE FROM chunks WHERE document_id = $1</code> after checking the document belongs to the caller, or rely on ON DELETE CASCADE from documents, inside a transaction with the document row.</x-say>
+<x-simple>Deleting a document’s vectors must be complete (no orphans that could still be retrieved), authorised (only the owner), and consistent with ongoing processing (a running ingestion job must not re-insert after deletion). Use foreign keys with ON DELETE CASCADE or an explicit delete in the same transaction as the document row, scoped by owner; with an external vector DB, delete by a document-id metadata filter and handle failures with retries or a cleanup job.</x-simple>
 <x-eg><code>DELETE FROM documents WHERE id = $1 AND user_id = $2</code> with chunks ON DELETE CASCADE removes the document and all its vectors in one transaction.</x-eg><x-dm>DocMind deletes the document row first, then chunks and messages, which closes a race with a still-running ingest job (the job sees 0 rows updated and removes what it stored).</x-dm>
 <x-fu q="Why does DocMind delete the document row first?">A still-running ingest job checks the row; if it’s gone, the job deletes what it stored, so no orphan chunks appear even if they race.</x-fu>
 <x-no>Deleting chunks without checking that the document belongs to the caller.</x-no>

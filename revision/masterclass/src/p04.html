@@ -63,6 +63,8 @@ CREATE TABLE conversation_documents (
   PRIMARY KEY (conversation_id, document_id)
 );</pre></x-impl>
 <x-dm><p>DocMind’s real schema is simpler and was created by hand-run SQL on Neon: <code>users</code>, <code>documents</code> (with <code>status</code> + <code>error</code>), <code>chunks</code> (<code>vector(3072)</code>, <b>no</b> user_id: ownership comes through the join to documents), <code>chat_messages</code> (its own <code>user_id</code>, because an “All documents” session has <code>document_id = 'all'</code>). There is <b>no sessions table</b>: a session is a <code>session_id</code> shared by message rows. And <b>no foreign keys anywhere</b>, so cleanup relies on code order (delete the document row first, then its chunks). Both are listed as known gaps. Messages are ordered by <code>created_at</code> without an id tiebreak (ISSUES #3).</p></x-dm>
+
+<x-walk><ol><li>A user signs up → one users row (email unique; a second signup with the same email fails with 23505 → 409).</li><li>Upload → documents row with user_id FK; UNIQUE (user_id, sha256) rejects a duplicate file.</li><li>Ingestion inserts chunks with document_id; UNIQUE (document_id, chunk_index) makes re-runs safe.</li><li>Deleting the user cascades to documents → chunks, conversations → messages in one statement.</li><li>“Messages of conversation X in order” uses the (conversation_id, id) index: no sort, no scan.</li></ol></x-walk>
 <x-mist><ul><li>Storing a list in a comma-separated text column instead of a join table.</li><li>No FK, then “orphan rows” after deletes (DocMind once had 65 orphan chunks).</li><li>Using <code>timestamp</code> instead of <code>timestamptz</code>.</li></ul></x-mist>
 </x-lesson>
 
@@ -279,7 +281,11 @@ CREATE INDEX chunks_document_idx ON chunks (document_id);   -- FK columns aren't
 <x-fu q="How do you find unused indexes?"><code>pg_stat_user_indexes.idx_scan</code> near 0 over a representative period.</x-fu>
 <x-no>“Indexes only cost disk space.”</x-no>
 <x-ev>Trade-offs.</x-ev></x-q>
-<x-q n="4.14" tag="must solid"><x-t>What is a composite index?</x-t><x-say>An index on several columns, sorted by the first, then the second within it, etc. It serves queries that filter on a leftmost prefix of its columns.</x-say><x-eg><code>(user_id, created_at)</code> serves <code>WHERE user_id = $1 ORDER BY created_at</code>, but not <code>WHERE created_at > $1</code> alone.</x-eg><x-ev>Practical indexing.</x-ev></x-q>
+<x-q n="4.14" tag="must solid"><x-t>What is a composite index?</x-t><x-say>An index on several columns, sorted by the first, then the second within it, etc. It serves queries that filter on a leftmost prefix of its columns.</x-say>
+<x-simple>A composite index on (a, b, c) is sorted by a, then by b within each a, then by c. It can serve queries that filter on a; on a and b; on a, b and c; equality on leading columns plus a range or ORDER BY on the next one. It can’t efficiently serve a filter on b or c alone (the “leftmost prefix” rule). Column order matters: put equality-filtered, selective columns first, then the range/sort column.</x-simple><x-eg><code>(user_id, created_at)</code> serves <code>WHERE user_id = $1 ORDER BY created_at</code>, but not <code>WHERE created_at > $1</code> alone.</x-eg>
+<x-fu q="One composite index or two single-column indexes?">For queries that filter on both columns together, a composite index is usually better; Postgres can combine single indexes with bitmap scans, but less efficiently.</x-fu>
+<x-no>“Column order in a composite index doesn’t matter.”</x-no>
+<x-ev>Practical indexing.</x-ev></x-q>
 <x-q n="4.15" tag="must basic"><x-t>What is a database transaction?</x-t><x-say>A group of statements executed as one unit: all commit or all roll back.</x-say>
 <x-simple>A transaction groups statements between BEGIN and COMMIT so the database applies all or none of them. If any statement fails or you ROLLBACK, earlier changes in the transaction are undone. Other sessions don’t see the uncommitted changes. Postgres runs every single statement in its own implicit transaction if you don’t open one.</x-simple>
 <x-eg>Publishing a course: insert modules, insert lessons, set course status = published; if any insert fails, nothing is published.</x-eg>
@@ -293,6 +299,7 @@ CREATE INDEX chunks_document_idx ON chunks (document_id);   -- FK columns aren't
 <x-no>Confusing ACID’s C with “consistency” in distributed systems (CAP).</x-no>
 <x-ev>Vocabulary.</x-ev></x-q>
 <x-q n="4.17" tag="must solid"><x-t>What is transaction isolation?</x-t><x-say>How much concurrent transactions can see of each other’s effects. Levels trade correctness for concurrency: read committed (Postgres default), repeatable read, serializable.</x-say>
+<x-simple>Isolation defines which effects of concurrent, uncommitted or recently committed transactions a transaction can see. Postgres uses MVCC: each transaction sees a snapshot of committed data; writers don’t block readers. Read committed takes a new snapshot per statement; repeatable read uses one snapshot for the whole transaction (and errors on conflicting updates); serializable additionally detects dangerous read/write patterns and aborts one transaction (SQLSTATE 40001), which the app must retry.</x-simple>
 <x-eg>Read committed: in one transaction, two identical SELECTs can return different results if another transaction committed between them.</x-eg><x-fu q="Give a bug read committed allows.">Two requests read credits = 1, both decide it’s enough, both write 0: one purchase is free. Fix with an atomic UPDATE … WHERE credits > 0, SELECT … FOR UPDATE, or serializable + retry.</x-fu>
 <x-no>“Serializable means transactions run one after another.” They run concurrently; the database aborts ones that would break serial equivalence.</x-no>
 <x-ev>Concurrency depth.</x-ev></x-q>
@@ -322,6 +329,7 @@ COMMIT;</pre></x-code>
 
 <h2 class="sec"><span class="k">4.2</span>PostgreSQL and SQL</h2>
 <x-q n="4.21" tag="must solid"><x-t>Why would you choose PostgreSQL for an AI application?</x-t><x-say>Reliable relational core for users, permissions and chats; JSONB for flexible metadata; pgvector for embeddings next to the data (filters and joins in one query); full-text search for hybrid retrieval; mature hosting and free tiers.</x-say>
+<x-simple>Postgres is a safe default for AI apps because the data around the AI is relational (users, permissions, documents, conversations, usage, billing) and needs transactions; JSONB handles flexible metadata (model settings, sources, token usage); pgvector stores embeddings with ANN indexes; full-text search enables hybrid retrieval in the same database; and managed hosting is everywhere. One system means joins between vectors and ownership in one query and fewer things to keep in sync.</x-simple>
 <x-eg>One query in DocMind joins chunks to documents, filters by owner and status, and orders by vector distance: something you can’t do in one call if vectors live in a separate system.</x-eg><x-fu q="When would you move vectors out?">Hundreds of millions of vectors, very high QPS, or needing features like built-in hybrid ranking at scale: a dedicated vector DB, kept in sync from Postgres.</x-fu>
 <x-no>“Postgres can’t do vectors, so you need Pinecone.”</x-no>
 <x-ev>Technology judgement.</x-ev></x-q>
@@ -375,15 +383,22 @@ FROM llm_calls;</pre></x-code>
 <x-fu q="INTERSECT and EXCEPT?">Rows present in both queries, and rows in the first but not the second.</x-fu>
 <x-no>“UNION joins tables side by side.”</x-no>
 <x-ev>Precision.</x-ev></x-q>
-<x-q n="4.30" tag="must solid"><x-t>What does EXPLAIN ANALYZE do?</x-t><x-say>It runs the query and shows the actual plan: each node (Seq Scan, Index Scan, Hash Join, Sort), estimated vs actual rows, loops and timings. Big gaps between estimated and actual rows, or a Seq Scan on a large table, point to the problem.</x-say><x-code><pre data-l="sql">EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM documents WHERE user_id = '...' ORDER BY created_at DESC LIMIT 20;
+<x-q n="4.30" tag="must solid"><x-t>What does EXPLAIN ANALYZE do?</x-t>
+<x-say>It runs the query and shows the actual plan: each node (Seq Scan, Index Scan, Hash Join, Sort), estimated vs actual rows, loops and timings. Big gaps between estimated and actual rows, or a Seq Scan on a large table, point to the problem.</x-say>
+<x-simple>EXPLAIN shows the planner’s chosen plan with estimated costs and row counts; ANALYZE actually executes the query and adds real row counts, loops and timings per node; BUFFERS shows how many pages came from cache vs disk. Read it bottom-up (innermost nodes run first), compare estimated vs actual rows (big mismatches mean bad statistics), and look for the node where most time is spent.</x-simple>
+<x-eg>A plan showing <code>Seq Scan on chunks (rows=1000000) Filter: document_id = …</code> with 900 ms is a missing index on chunks.document_id.</x-eg>
+<x-code><pre data-l="sql">EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM documents WHERE user_id = '...' ORDER BY created_at DESC LIMIT 20;
 -- Limit (actual time=0.03..0.05 rows=20)
 --   -> Index Scan using documents_user_created_idx on documents (rows=20)</pre></x-code>
-<x-eg>A plan showing <code>Seq Scan on chunks (rows=1000000) Filter: document_id = …</code> with 900 ms is a missing index on chunks.document_id.</x-eg><x-fu q="Any danger?">It really executes the query: wrap writes in BEGIN … ROLLBACK.</x-fu>
+<x-fu q="Any danger?">It really executes the query: wrap writes in BEGIN … ROLLBACK.</x-fu>
 <x-no>Reading only the estimated cost and ignoring actual rows/time, or running EXPLAIN ANALYZE on a DELETE in production without a transaction.</x-no>
 <x-ev>Debugging skill.</x-ev></x-q>
-<x-q n="4.31" tag="must basic"><x-t>What are JSON and JSONB in PostgreSQL?</x-t><x-say>JSON stores the text as is; JSONB stores a parsed binary form: faster to query, supports GIN indexes and operators (<code>-></code>, <code>->></code>, <code>@></code>), but doesn’t keep key order or duplicate keys. Use JSONB.</x-say><x-code><pre data-l="sql">SELECT * FROM messages WHERE metadata @> '{"model": "flash-lite"}';
-CREATE INDEX ON messages USING gin (metadata);</pre></x-code>
+<x-q n="4.31" tag="must basic"><x-t>What are JSON and JSONB in PostgreSQL?</x-t>
+<x-say>JSON stores the text as is; JSONB stores a parsed binary form: faster to query, supports GIN indexes and operators (<code>-></code>, <code>->></code>, <code>@></code>), but doesn’t keep key order or duplicate keys. Use JSONB.</x-say>
+<x-simple>JSON stores the exact input text (preserving whitespace, key order, duplicate keys) and re-parses it on every access. JSONB stores a decomposed binary format: slower to insert, much faster to query, supports containment (<code>@&gt;</code>), existence (<code>?</code>) and path operators, and GIN indexes. Use JSONB for semi-structured data you query; keep core, frequently filtered fields as real columns.</x-simple>
 <x-eg>Storing per-message metadata: <code>{ "model": "flash-lite", "tokens": { "in": 812, "out": 140 }, "sources": [ … ] }</code> in a <code>metadata jsonb</code> column.</x-eg>
+<x-code><pre data-l="sql">SELECT * FROM messages WHERE metadata @> '{"model": "flash-lite"}';
+CREATE INDEX ON messages USING gin (metadata);</pre></x-code>
 <x-fu q="When should a JSONB field become a real column?">When you filter, join or constrain on it frequently, or need types and NOT NULL/foreign keys.</x-fu>
 <x-no>Putting everything in one JSONB column to avoid schema design.</x-no>
 <x-ev>Postgres features.</x-ev></x-q>
@@ -443,6 +458,7 @@ CREATE INDEX ON messages USING gin (metadata);</pre></x-code>
 <x-no>“push is just a faster migrate.”</x-no>
 <x-ev>Process maturity.</x-ev></x-q>
 <x-q n="4.41" tag="must solid"><x-t>What happens when you change a schema and generate a migration?</x-t><x-say>Drizzle Kit compares the new schema with its last snapshot, writes the SQL needed (CREATE/ALTER/DROP), saves a new snapshot, and records it in its journal. migrate then runs unapplied files and records them in a migrations table in the DB.</x-say>
+<x-simple><code>drizzle-kit generate</code> loads your current schema file and the latest snapshot JSON, computes the difference (new tables, columns, indexes, constraints, renames it can’t decide alone, which it asks about), writes a new SQL migration file and a new snapshot, and updates the journal. Nothing touches the database yet. <code>migrate</code> later runs unapplied migrations in order and records each in the migrations table, so it never runs twice.</x-simple>
 <x-eg>Rename <code>filename</code> to <code>name</code> in schema.js → generate asks “rename or drop+create?” → choose rename → SQL: <code>ALTER TABLE "documents" RENAME COLUMN "filename" TO "name";</code></x-eg><x-fu q="What can go wrong?">An ambiguous rename becomes drop + add (Kit asks interactively; read the SQL); a NOT NULL column on a populated table fails (next question).</x-fu>
 <x-no>Editing an already-applied migration file instead of writing a new one.</x-no>
 <x-ev>Process detail.</x-ev></x-q>
@@ -471,11 +487,13 @@ CREATE INDEX ON messages USING gin (metadata);</pre></x-code>
 <x-no>Calling external APIs inside the transaction.</x-no>
 <x-ev>Applied transactions.</x-ev></x-q>
 <x-q n="4.45" tag="must solid"><x-t>What problems can occur when adding a NOT NULL column to an existing populated table?</x-t><x-say>Existing rows have no value, so the ALTER fails, unless you give a default. Also, the running old code doesn’t write the new column, so inserts fail after the migration. Do it in steps: add nullable (or with a default), deploy code that writes it, backfill in batches, then add NOT NULL.</x-say>
+<x-simple>Adding a NOT NULL column has two problems. Data: existing rows would violate the constraint, so the ALTER fails unless a DEFAULT supplies a value (Postgres 11+ adds a constant default instantly without rewriting the table). Code: during a rolling deploy, old code still running doesn’t write the new column; without a default its inserts fail. The safe pattern is expand/contract: add nullable or with default, deploy writers, backfill in batches, then enforce NOT NULL.</x-simple>
 <x-eg><code>ALTER TABLE users ADD COLUMN plan text NOT NULL;</code> on a table with rows fails: “column contains null values”. <code>ADD COLUMN plan text NOT NULL DEFAULT 'free'</code> succeeds instantly in Postgres 11+ (the default is stored in the catalog, not written to every row).</x-eg><x-dm>DocMind added <code>documents.status</code> as <code>NOT NULL DEFAULT 'ready'</code>: old rows became ready, and the then-deployed code (which never wrote status) kept working. <code>user_id</code> was added nullable for the same reason.</x-dm>
 <x-fu q="What if the right value differs per row?">Add it nullable, deploy code that writes it, backfill in batches with UPDATE … WHERE id BETWEEN, then <code>SET NOT NULL</code> (consider adding a CHECK constraint NOT VALID first and validating it to avoid long locks).</x-fu>
 <x-no>“Just add it and update all rows in the same migration on a huge table.” That can lock the table for a long time.</x-no>
 <x-ev>Production-safe schema changes.</x-ev></x-q>
 <x-q n="4.46" tag="must solid"><x-t>When would you choose raw SQL over ORM methods?</x-t><x-say>For features the ORM doesn’t model well (window functions, recursive CTEs, vector operators, complex upserts, bulk operations), for performance-critical hand-tuned queries, and for migrations. Still parameterize (Drizzle’s <code>sql</code> template does).</x-say>
+<x-simple>ORMs cover the common 90%; raw SQL is better for: complex analytics (window functions, CTEs, recursive queries), database-specific features (vector operators, full-text ranking, ON CONFLICT with complex updates, LATERAL joins), bulk operations, hand-tuned hot paths after EXPLAIN, and migrations. Keep raw SQL parameterized, typed at the boundary, tested, and inside repositories.</x-simple>
 <x-eg>Hybrid search with RRF (CTEs, window functions, UNION ALL, vector operators) is far clearer in raw SQL through Drizzle’s <code>sql</code> template than in builder calls.</x-eg>
 <x-fu q="How do you keep raw SQL safe and typed?">Use the sql template (values become parameters), type the result explicitly, and test it.</x-fu>
 <x-no>“Raw SQL is always unsafe.” Unsafe is string concatenation, not SQL itself.</x-no>

@@ -43,6 +43,19 @@
 <h2 class="sec"><span class="k">12.C</span>Production scenarios</h2>
 <x-scn t="Scenario 1: API is slow (500 ms → 5 s)" tag="must solid">
 <x-sit>Your backend API normally responds in 500 milliseconds. Suddenly, it takes five seconds.</x-sit>
+<x-sym>p95 latency 10× normal on many endpoints; event-loop lag up or DB time up; timeouts and retries rising; CPU or pool saturation alerts.</x-sym>
+<x-cause>A slow query after data growth (missing index), lock contention, pool exhaustion, a slow external dependency, CPU-blocking code on the event loop, a noisy deploy, increased traffic, cross-region latency.</x-cause>
+<x-inv>Check what changed (deploys, traffic, data size); compare per-endpoint and per-dependency timings via traces; look at pg_stat_statements, pg_stat_activity (locks, waiting), pool waiting count, event-loop delay and CPU; reproduce one slow request with a trace.</x-inv>
+<x-fix>Fix the bottleneck found (index/rewrite query, shorten transactions, move CPU work off the main thread, add timeouts and caching for the slow dependency, scale out), then add a regression alert on that metric.</x-fix>
+<x-change><pre data-l="js">// event-loop lag and pool saturation as metrics
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+const h = monitorEventLoopDelay({ resolution: 20 }); h.enable();
+setInterval(() =&gt; {
+  metrics.gauge('event_loop_p99_ms', h.percentile(99) / 1e6);
+  metrics.gauge('db_pool_waiting', pool.waitingCount);
+  metrics.gauge('db_pool_total', pool.totalCount);
+  h.reset();
+}, 10_000).unref();</pre></x-change>
 <x-sq q="What would you inspect first?">What changed (deploy, config, traffic, data volume), which endpoints are slow (all → shared dependency; one → its code path), and the latency breakdown per stage for one slow request.</x-sq>
 <x-sq q="How would you investigate database latency?">Query timing logs, <code>pg_stat_statements</code> for the slowest/most frequent queries, <code>EXPLAIN (ANALYZE, BUFFERS)</code> on them, lock waits (<code>pg_stat_activity</code>, <code>pg_locks</code>), pool wait time vs query time, missing indexes after data growth.</x-sq>
 <x-sq q="How would you identify external API delays?">Time every outbound call (LLM, embeddings, payments) with status and retry count; compare to their status pages; check whether retries are hiding failures.</x-sq>
@@ -52,6 +65,14 @@
 </x-scn>
 <x-scn t="Scenario 2: database connection exhaustion" tag="must solid">
 <x-sit>Your application starts returning database connection errors.</x-sit>
+<x-sym>“timeout exceeded when trying to connect” or “sorry, too many clients already”; requests hang; pool waitingCount climbs; many idle-in-transaction sessions.</x-sym>
+<x-cause>Clients not released on error paths; long transactions (LLM calls inside); pool size × instances above max_connections; slow queries; traffic spikes; serverless instances each opening connections.</x-cause>
+<x-inv>pg_stat_activity grouped by state and application; pool metrics over time; code search for pool.connect() without finally/release; check transaction durations.</x-inv>
+<x-fix>Release in finally, move slow work out of transactions, set connectionTimeoutMillis, statement_timeout and idle_in_transaction_session_timeout, size pools against max_connections, add a server-side pooler.</x-fix>
+<x-change><pre data-l="sql">-- who holds connections, and for how long?
+SELECT state, count(*), max(now() - xact_start) AS oldest_tx
+FROM pg_stat_activity WHERE datname = current_database() GROUP BY state;
+ALTER DATABASE app SET idle_in_transaction_session_timeout = '30s';</pre></x-change>
 <x-sq q="What could cause this?">Leaked clients (no release on an error path), long transactions (an LLM call inside a transaction), traffic spike beyond pool size, too many app instances × pool size above the server’s <code>max_connections</code>, slow queries holding connections, idle-in-transaction sessions.</x-sq>
 <x-sq q="What is connection pooling?">A fixed set of reusable DB connections lent to requests; requests queue when all are busy.</x-sq>
 <x-sq q="How would you identify leaked connections?">Pool metrics (totalCount, idleCount, waitingCount) climbing and never returning; <code>pg_stat_activity</code> showing many <code>idle in transaction</code> sessions from the app; code review for <code>pool.connect()</code> without <code>finally { release() }</code>; set <code>idle_in_transaction_session_timeout</code>.</x-sq>
@@ -60,6 +81,15 @@
 </x-scn>
 <x-scn t="Scenario 3: duplicate document processing" tag="must solid">
 <x-sit>A user uploads the same document three times accidentally.</x-sit>
+<x-sym>The same file appears three times in a user’s list; triple embedding cost; duplicate search results.</x-sym>
+<x-cause>No content hash or unique constraint; double clicks; client retries after timeouts; check-then-insert races.</x-cause>
+<x-inv>Query documents grouped by (user_id, sha256) or (user_id, filename, size) with count &gt; 1; check request logs for repeated uploads within seconds.</x-inv>
+<x-fix>Hash bytes on upload, unique (user_id, sha256), ON CONFLICT returning the existing row, stable job ids, UI disabling repeat submits.</x-fix>
+<x-change><pre data-l="sql">ALTER TABLE documents ADD COLUMN sha256 text;
+CREATE UNIQUE INDEX documents_user_hash_uq ON documents (user_id, sha256);
+INSERT INTO documents (user_id, filename, sha256) VALUES ($1, $2, $3)
+ON CONFLICT (user_id, sha256) DO UPDATE SET filename = documents.filename   -- no-op update so RETURNING gives the row
+RETURNING id, (xmax = 0) AS inserted;                                      -- inserted=false → duplicate</pre></x-change>
 <x-sq q="How would you detect duplicates?">Hash the file bytes (SHA-256) at upload and look for an existing document with the same hash for that user.</x-sq>
 <x-sq q="Would you use file hashes?">Yes for exact duplicates (cheap, reliable). Near-duplicates (re-exported PDF) need text or embedding similarity, usually only worth it later.</x-sq>
 <x-sq q="How would you prevent duplicate ingestion?">A unique constraint on <code>(user_id, sha256)</code>; on conflict return the existing document (200) instead of creating a new one; the job id = document id so it can’t be queued twice.</x-sq>
@@ -69,6 +99,20 @@
 </x-scn>
 <x-scn t="Scenario 4: LLM provider outage" tag="must solid">
 <x-sit>Your LLM provider becomes unavailable.</x-sit>
+<x-sym>5xx/timeouts from the provider; chat and quiz endpoints failing; queues backing up; error budget burning.</x-sym>
+<x-cause>Provider incident, regional outage, quota exhausted, bad deploy on their side, network issues.</x-cause>
+<x-inv>Provider status page, error codes by provider/model, success rate per model over time; check whether non-LLM endpoints are healthy.</x-inv>
+<x-fix>Circuit breaker + fallback model per task, graceful messages, queue non-urgent work for later, keep non-AI features up, alert and communicate.</x-fix>
+<x-change><pre data-l="js">// minimal circuit breaker: closed → open after N failures → half-open probe after cooldown
+class CircuitBreaker {
+  constructor({ failures = 5, cooldownMs = 30_000 } = {}) { Object.assign(this, { failures, cooldownMs, count: 0, openedAt: 0 }); }
+  get state() { return this.count &lt; this.failures ? 'closed' : Date.now() - this.openedAt &gt; this.cooldownMs ? 'half-open' : 'open'; }
+  async call(fn) {
+    if (this.state === 'open') throw new Error('circuit open');
+    try { const r = await fn(); this.count = 0; return r; }
+    catch (e) { if (++this.count &gt;= this.failures) this.openedAt = Date.now(); throw e; }
+  }
+}</pre></x-change>
 <x-sq q="Should the entire application stop working?">No. Login, documents, history and anything non-LLM should keep working; AI features degrade with a clear message.</x-sq>
 <x-sq q="How would you implement provider fallback?">A provider-neutral interface with an ordered fallback list per task; on timeout/5xx/429 after retries, try the next model or provider; validate its output the same way; log which provider answered.</x-sq>
 <x-sq q="What is a circuit breaker?">A wrapper that counts failures; after a threshold it “opens” and fails fast (or goes to fallback) without calling the provider for a cool-down period, then lets a few test calls through (“half-open”) and closes if they succeed. It stops you from piling timeouts onto a dead service.</x-sq>
@@ -78,6 +122,15 @@
 </x-scn>
 <x-scn t="Scenario 5: hallucinated answers" tag="must solid">
 <x-sit>Your RAG application generates answers that aren’t present in the source documents.</x-sit>
+<x-sym>Users report answers with facts not in their documents; faithfulness scores drop; citations missing or pointing to unrelated chunks.</x-sym>
+<x-cause>Retrieval misses, weak grounding instructions, noisy/long context, high temperature, model prior knowledge, no not-found path, a model change.</x-cause>
+<x-inv>Sample bad answers; check whether the needed chunk was retrieved; replay prompts at temperature 0; run the faithfulness checker on the eval set and on samples.</x-inv>
+<x-fix>Improve retrieval (hybrid, rewrite, rerank), strict citation rules, relevance threshold with fixed not-found answer, lower temperature, claim-level verification for high-risk answers, regression evals.</x-fix>
+<x-change><pre data-l="js">// block answers with no valid citations
+const cited = [...answer.matchAll(/\[(\d+)\]/g)].map((m) =&gt; Number(m[1]));
+if (!cited.length || cited.some((n) =&gt; n &lt; 1 || n &gt; sources.length)) {
+  answer = "I couldn't find a reliable answer in your documents.";
+}</pre></x-change>
 <x-sq q="What could cause this?">Retrieval missed the right chunk (so the model filled the gap), weak grounding instructions, too much loosely related context, high temperature, the model’s prior knowledge overriding the context, or a question with no answer in the documents.</x-sq>
 <x-sq q="How would you improve retrieval?">Query rewriting, hybrid search, reranking, better chunking, metadata filters; measure recall@k on a labelled set.</x-sq>
 <x-sq q="How would you improve grounding?">Strict system rules (answer only from sources, cite each claim, fixed not-found sentence), labelled sources, lower temperature, fewer but better chunks, citation verification.</x-sq>
@@ -87,6 +140,13 @@
 </x-scn>
 <x-scn t="Scenario 6: agent loop" tag="must solid">
 <x-sit>Your agent repeatedly invokes the same tool without reaching a conclusion.</x-sit>
+<x-sym>Requests taking 30+ s; logs show the same tool and arguments repeated; token cost per request spikes.</x-sym>
+<x-cause>Unhelpful or ambiguous tool results, missing “nothing found” signals, vague descriptions, trimmed history hiding earlier results, no step limit, tool errors telling the model to retry.</x-cause>
+<x-inv>Trace runs with many steps; compare tool results across repeats; check descriptions and what history the model saw.</x-inv>
+<x-fix>Step limit with tools-off final call, duplicate-call detection, clearer tool results and descriptions, token/time budget per run, alert on steps-per-run.</x-fix>
+<x-change><pre data-l="js">const key = `${call.function.name}:${JSON.stringify(sortKeys(args))}`;
+if (seen.has(key)) return toolResult(call.id, { error: 'Already done. Use the earlier result or answer now.' });
+seen.add(key);</pre></x-change>
 <x-sq q="Why might this happen?">Unhelpful tool results (empty, error, or too large and truncated), a vague tool description, the model not seeing earlier results (history trimmed), a task the tools can’t accomplish, or an error that tells it to retry.</x-sq>
 <x-sq q="How would you limit iterations?">A max step count in code; the last step without tools; per-request token and time budgets.</x-sq>
 <x-sq q="How would you detect repeated tool calls?">Keep a set of (tool name + normalised args) per run; on a repeat, return an error result (“you already ran this; use the earlier result or answer”) instead of executing.</x-sq>
@@ -96,6 +156,13 @@
 </x-scn>
 <x-scn t="Scenario 7: workflow crash at 60%" tag="must solid">
 <x-sit>Your course-generation workflow crashes after completing 60% of the work.</x-sit>
+<x-sym>Runs stuck in “running” after a deploy or crash; half of the lessons generated; users waiting with no progress.</x-sym>
+<x-cause>Process killed mid-step; no persistence; non-idempotent steps; recovery off; long steps with no checkpoints.</x-cause>
+<x-inv>List runs in running state older than N minutes; compare snapshots with business tables (which lessons exist); check boot logs for recovery.</x-inv>
+<x-fix>Persisted snapshots, recovery on boot (or a sweeper job), idempotent steps with skip-if-done, smaller steps, transactional publish, and a manual retry endpoint.</x-fix>
+<x-change><pre data-l="sql">-- find stuck runs from your own business table
+SELECT id, run_id, status, updated_at FROM courses
+WHERE status IN ('generating', 'resuming') AND updated_at &lt; now() - interval '15 minutes';</pre></x-change>
 <x-sq q="How would you identify completed steps?">From the persisted run snapshot (step statuses and outputs) and from the business tables (lesson drafts already saved).</x-sq>
 <x-sq q="How would you persist execution state?">Workflow storage writes a snapshot after each step (Mastra + Postgres), plus your own drafts table keyed by (course, module, lesson).</x-sq>
 <x-sq q="How would you resume execution?">Recovery on boot re-drives running runs from the last snapshot (Mastra default), or re-run the workflow with the same course key; idempotent steps skip finished work.</x-sq>
@@ -106,6 +173,16 @@
 </x-scn>
 <x-scn t="Scenario 8: changing a document id exposes another user’s document" tag="must solid">
 <x-sit>A user discovers they can access another user’s document by changing a document ID in an API request.</x-sit>
+<x-sym>A user reports seeing another user’s document; logs show successful reads where document owner ≠ requester.</x-sym>
+<x-cause>Queries filtering by id only; authorization done in the UI; a missing check in one endpoint, a background job, or vector search.</x-cause>
+<x-inv>Grep repositories for queries on user-owned tables without an owner condition; replay requests with another user’s token; audit access logs for owner ≠ requester.</x-inv>
+<x-fix>Owner condition in every query (required userId parameter), 404 for foreign ids, default-deny routing, cross-user tests for every endpoint, RLS as backstop, incident response for exposed data.</x-fix>
+<x-change><pre data-l="js">// test that fails if any endpoint leaks
+for (const path of ['/documents/', '/documents/:id/chunks', '/conversations/']) {
+  const res = await request(app).get(path.replace(':id', aliceDocId) + (path.endsWith('/') ? aliceDocId : ''))
+    .set('authorization', `Bearer ${bobToken}`);
+  assert.equal(res.status, 404, `${path} leaked Alice's data to Bob`);
+}</pre></x-change>
 <x-sq q="What vulnerability is this?">Broken object-level authorization, also called IDOR (insecure direct object reference): the top item on the OWASP API Security Top 10.</x-sq>
 <x-sq q="Why isn’t authentication alone sufficient?">Authentication proves who the user is; it doesn’t check whether this particular object belongs to them. Any logged-in user can try any id.</x-sq>
 <x-sq q="Where would you enforce authorization?">In the data access layer for every query: <code>WHERE id = $1 AND user_id = $2</code> with the user from the token (including vector search and tools), returning 404 for “not yours”.</x-sq>
@@ -115,6 +192,13 @@
 </x-scn>
 <x-scn t="Scenario 9: LLM cost explosion (3×)" tag="must solid">
 <x-sit>Your application suddenly consumes three times its usual token budget.</x-sit>
+<x-sym>Daily spend 3× baseline; tokens per request or requests per user up; one feature or a few users dominating.</x-sym>
+<x-cause>Prompt/context growth (history, more chunks), a new feature or agent step, retry storms, loops, abuse by a few accounts, a model switch to a pricier model, caching disabled.</x-cause>
+<x-inv>Usage logs grouped by day, feature, model and user; compare before/after the change date; inspect the top requests by tokens.</x-inv>
+<x-fix>Token budgets per request/user, history summarisation, step limits, retry discipline, model routing, caching, per-user rate limits, anomaly alerts on spend.</x-fix>
+<x-change><pre data-l="sql">SELECT user_id, sum(input_tokens + output_tokens) AS tokens, count(*) AS calls
+FROM llm_calls WHERE created_at &gt; now() - interval '1 day'
+GROUP BY user_id ORDER BY tokens DESC LIMIT 10;</pre></x-change>
 <x-sq q="How would you investigate?">Break usage down by feature, endpoint, model, user and day from your usage logs; compare tokens per request and requests per user before/after; check recent deploys and prompt changes.</x-sq>
 <x-sq q="Could conversation history be responsible?">Yes: unbounded history (or counting messages, not tokens) makes every turn more expensive as chats grow.</x-sq>
 <x-sq q="Could repeated agent calls be responsible?">Yes: loops, more steps per request after a prompt change, retries stacking at several layers, or tool results bloating context.</x-sq>
@@ -124,12 +208,130 @@
 </x-scn>
 <x-scn t="Scenario 10: poor retrieval despite correct embeddings" tag="must solid">
 <x-sit>The embedding generation process appears correct, but search results are poor.</x-sit>
+<x-sym>Good embeddings by spot checks, but answers miss information; low recall@k on the eval set; users rephrase repeatedly.</x-sym>
+<x-cause>Bad extraction (garbled text, missing tables), chunk boundaries, raw follow-up queries, filters excluding documents, wrong operator or sort order, ANN index recall/post-filtering, stale or failed documents, model mismatch.</x-cause>
+<x-inv>For failing questions, find the right chunk with plain SQL, check its text quality, rank it with exact search with and without filters, compare with the ANN result, log the exact embedded query and model version.</x-inv>
+<x-fix>Fix the link that breaks: re-extract/rechunk, query rewriting, filter fix, iterative scan or higher ef_search, hybrid search for exact terms, reranking; track recall@k.</x-fix>
+<x-change><pre data-l="sql">-- compare ANN vs exact for one query: missing ids = recall loss from the index
+SET LOCAL enable_indexscan = off;   -- inside a transaction: force exact search
+SELECT id FROM chunks ORDER BY embedding &lt;=&gt; $1 LIMIT 10;</pre></x-change>
 <x-sq q="What else could be responsible?">Bad extraction (garbled text, missing tables), chunking (too big/small, split answers), the query (raw follow-ups, typos, exact codes), filters excluding documents, wrong distance operator or sort order, an ANN index with low recall or post-filtering, a model mismatch between query and corpus, stale or failed documents.</x-sq>
 <x-sq q="How would you inspect query embeddings?">Log the exact text embedded; check model name and dimension; compare its similarity with known-good chunks; try the same query without filters and with exact search (no index).</x-sq>
 <x-sq q="Would you inspect chunk boundaries?">Yes: read the chunks that should match. Often the answer is split or buried in a 2,000-token chunk.</x-sq>
 <x-sq q="Could metadata filters be excluding relevant records?">Yes: wrong user/tenant id, status not ready, a date filter, or ANN post-filtering returning too few rows.</x-sq>
 <x-sq q="Would hybrid search or reranking help?">Hybrid for exact terms and names; reranking when the right chunk is in the top 50 but not the top 5. Measure before and after.</x-sq>
 <x-say>“Embeddings are one link. I’d check extraction, chunks, the exact query, filters and the index, find where the right chunk drops out, then fix that link.”</x-say>
+</x-scn>
+
+<h2 class="sec"><span class="k">12.D</span>More production scenarios (added in the audit)</h2>
+<div class="note">The bank lists these situations across several parts; each now has its own full scenario card in the same 7-part format.</div>
+
+<x-scn t="Extra scenario: the LLM provider returns HTTP 429" tag="must solid">
+<x-sit>At 10 a.m. traffic doubles; chat and background quiz generation start failing with 429 Too Many Requests from the LLM provider.</x-sit>
+<x-sym>Bursts of 429s in logs; user-facing errors or long waits; retry counts climbing; background jobs failing their attempts; sometimes a “quota exceeded” message that doesn’t go away.</x-sym>
+<x-cause>Requests or tokens per minute above the account’s limit; unbounded concurrency in a batch job competing with interactive traffic; retries without backoff amplifying load; one user or feature consuming the shared quota; a daily/monthly quota exhausted.</x-cause>
+<x-inv>Read the error body and headers (rate limit vs quota, Retry-After, remaining-limit headers if provided); graph requests and tokens per minute by feature; check which callers retry and how; compare with the provider’s published limits for your tier.</x-inv>
+<x-fix>Short term: backoff with jitter honouring Retry-After, pause or slow background jobs, return a clear “busy, retry shortly” to users. Long term: a shared rate limiter (token bucket per provider key) with priority for interactive traffic, concurrency caps for batch jobs, per-user budgets, request a higher tier, and a fallback model for overflow. Quota exhaustion is not retryable: alert instead.</x-fix>
+<x-change><pre data-l="js">// one limiter shared by all callers in the process (use Redis for many processes)
+const interactive = new TokenBucket(40);   // per minute, reserved for chat
+const batch = new TokenBucket(15);         // background jobs get the rest
+async function callLLM(req, { priority = 'interactive' } = {}) {
+  await (priority === 'interactive' ? interactive : batch).take();
+  return retryWithBackoff(() => providerCall(req), 3, { baseMs: 1000 });   // honours err.retryAfterMs
+}</pre></x-change>
+<x-say>“A 429 is a capacity signal. I’d back off with jitter and Retry-After, then prevent it: a shared rate limiter with priority for interactive traffic, capped batch concurrency, per-user budgets and a fallback model. Quota errors get an alert, not retries.”</x-say>
+</x-scn>
+
+<x-scn t="Extra scenario: a user uploads a corrupted PDF" tag="must solid">
+<x-sit>A user uploads a file named report.pdf that is truncated, password-protected, or actually a renamed Word file.</x-sit>
+<x-sym>Parser exceptions in the upload route or worker; documents stuck in processing; a generic 500 for the user; sometimes an empty document that “succeeds” with no chunks.</x-sym>
+<x-cause>Trusting the extension or Content-Type; no magic-byte check; parser errors not caught; no “has text” check; the job retrying a permanent failure three times.</x-cause>
+<x-inv>Reproduce with the file; check where it failed (upload vs worker), the exact parser error, and whether the document row was left behind; check how many attempts the job made.</x-inv>
+<x-fix>Validate early: magic bytes (<code>%PDF-</code>), size; catch parser errors and map them to clear 400 messages (“This PDF is corrupted or password-protected”); detect no-text PDFs; mark permanent failures as non-retryable so the job fails once with a reason; never leave a processing row behind.</x-fix>
+<x-change><pre data-l="js">async function parsePdfSafely(buffer) {
+  if (!buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) throw new HttpError(400, 'This file is not a PDF.');
+  const parser = new PDFParse({ data: buffer });            // pdf-parse v2
+  try {
+    const result = await parser.getText();
+    const pages = result.pages.map((p) => p.text.trim());
+    if (!pages.some((t) => t.length > 20)) throw new HttpError(400, 'This PDF has no text layer (scanned?).');
+    return pages;
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    if (/password/i.test(err.message)) throw new HttpError(400, 'This PDF is password-protected.');
+    throw new HttpError(400, 'This PDF could not be read. It may be corrupted.');
+  } finally {
+    await parser.destroy();                                   // free pdf.js resources (DocMind does this too)
+  }
+}
+// in the worker: UnrecoverableError (BullMQ) for permanent failures, so it isn't retried
+// import { UnrecoverableError } from 'bullmq'; throw new UnrecoverableError('corrupted PDF');</pre></x-change>
+<x-dm>DocMind checks the per-page texts for a text layer (pdf-parse v2 adds page markers, so a textless PDF still returned 12 characters) and answers 400; the parse happens in the request, before any row or job is created.</x-dm>
+<x-say>“Validate the real file type, catch parser errors and translate them into clear 400s, treat permanent failures as non-retryable, and make sure no half-created document is left behind.”</x-say>
+</x-scn>
+
+<x-scn t="Extra scenario: the user asks something the documents don’t support" tag="must solid">
+<x-sit>A user asks the document assistant “What’s the capital of Australia?” or “What’s our refund policy for enterprise plans?” when no document mentions it.</x-sit>
+<x-sym>Confident answers with no citations, citations to unrelated chunks, or general-knowledge answers presented as if they came from the user’s files.</x-sym>
+<x-cause>No relevance threshold, prompts that don’t define a not-found behaviour, the model filling gaps from training data, a router sending general questions to a general chat path.</x-cause>
+<x-inv>Run unanswerable questions from the eval set; inspect retrieval scores for them; check what the prompt instructs when nothing relevant is found.</x-inv>
+<x-fix>A minimum relevance score before passing context; a fixed not-found sentence in the instructions; refusing general-knowledge questions in the document assistant (or answering them clearly labelled as not from documents, if the product allows); measure the not-found rate on unanswerable questions.</x-fix>
+<x-change><pre data-l="js">const hits = await retrieve({ userId, query });
+const relevant = hits.filter((h) => h.similarity >= 0.35);      // threshold tuned on the eval set
+if (!relevant.length) {
+  return { answer: "I couldn't find that in your documents. Try rephrasing or upload a document that covers it.", sources: [] };
+}</pre></x-change>
+<x-dm>DocMind’s smalltalk prompt refuses general-knowledge questions, the agent instruction requires answering only from tool results, and searchDocuments returns a “Nothing relevant was found” note; there’s no similarity threshold yet (prompt plan PI.6).</x-dm>
+<x-say>“Define the not-found path explicitly: a relevance threshold, a fixed honest reply, and eval questions that check it, so the assistant never invents answers from outside the documents.”</x-say>
+</x-scn>
+
+<x-scn t="Extra scenario: the embedding model changes" tag="must solid">
+<x-sit>The provider deprecates your embedding model, or a better model is available; someone switches the model name in config.</x-sit>
+<x-sym>Immediately after the switch, retrieval quality collapses (unrelated chunks), with no errors; or inserts fail because the new model’s dimension doesn’t match the column.</x-sym>
+<x-cause>Query vectors from the new model compared with stored vectors from the old one; a schema with a fixed dimension; no version recorded per vector.</x-cause>
+<x-inv>Compare model name/version used at query time vs stored vectors; check recall on the eval set before/after the deploy; check insert errors for dimension mismatches.</x-inv>
+<x-fix>Revert the query model immediately; then migrate properly: new column (or table) with the new dimension, dual writes, background re-embedding, eval, index build, atomic cutover of query + corpus, rollback window, cleanup. Store the model version with each vector and assert it at query time.</x-fix>
+<x-change><pre data-l="sql">ALTER TABLE chunks ADD COLUMN embedding_v2 halfvec(1536), ADD COLUMN embed_model_v2 text;
+-- backfill in batches (Phase 6 Q14), then:
+CREATE INDEX CONCURRENTLY chunks_embedding_v2_hnsw ON chunks USING hnsw (embedding_v2 halfvec_cosine_ops);
+-- cutover: app flag EMBED_VERSION=v2 switches both the query model and the column</pre></x-change>
+<x-say>“Vectors from different models aren’t comparable, so a model change is a data migration: dual columns, backfill, evaluate, switch query and corpus together, and keep a rollback.”</x-say>
+</x-scn>
+
+<x-scn t="Extra scenario: course generation produces duplicate modules" tag="must solid">
+<x-sit>Users report a generated course with “Introduction to Embeddings” as module 2 and “Embeddings Basics” as module 5, and sometimes the same lesson twice after a retry.</x-sit>
+<x-sym>Near-identical module titles and overlapping lessons; duplicate lesson rows with the same position after retries; quizzes repeating questions across modules.</x-sym>
+<x-cause>Outline prompt without explicit uniqueness rules or without the existing titles; no semantic dedupe check; lessons generated in parallel without sibling titles; non-idempotent inserts on retry.</x-cause>
+<x-inv>Compute pairwise similarity of module titles/objectives in affected courses; check draft rows for duplicate keys; check retry logs for those runs.</x-inv>
+<x-fix>Ask for distinct modules and include the list when regenerating; reject outlines whose module titles exceed a similarity threshold (regenerate); give lesson prompts sibling titles; unique keys on (course, module, lesson) with ON CONFLICT DO NOTHING; a final dedupe/quality step before publish; the human approval catches the rest.</x-fix>
+<x-change><pre data-l="js">async function assertDistinctModules(outline, threshold = 0.9) {
+  const vecs = await embed(outline.modules.map((m) => `${m.title}: ${m.objectives?.join('; ') ?? ''}`));
+  for (let i = 0; i &lt; vecs.length; i++)
+    for (let j = i + 1; j &lt; vecs.length; j++)
+      if (cosine(vecs[i], vecs[j]) > threshold) throw new Error(`modules ${i + 1} and ${j + 1} overlap`);   // → step retry
+}</pre></x-change>
+<x-say>“Two kinds of duplicates: semantic ones from generation, fixed by prompts plus an embedding-based check that triggers regeneration; and technical ones from retries, fixed by unique keys and idempotent writes.”</x-say>
+</x-scn>
+
+<x-scn t="Extra scenario: a background job is executed twice" tag="must solid">
+<x-sit>An ingestion job for one document runs twice: once before a worker crash and once after BullMQ treats it as stalled and hands it to another worker.</x-sit>
+<x-sym>Duplicate chunks for a document (duplicate search results), double embedding cost, a status flapping between processing and ready.</x-sym>
+<x-cause>At-least-once delivery: stalled-job recovery, retries after a failure that happened after the side effect, duplicate enqueues without stable job ids; jobs that append instead of replace.</x-cause>
+<x-inv>Count chunks per document vs expected; check job events (stalled, retried) for that job id; check whether two jobs with different ids were enqueued for the same document.</x-inv>
+<x-fix>Stable job id = document id (no duplicate enqueue); make the job idempotent: delete-then-insert in one transaction, or unique (document_id, chunk_index) with upserts; check the document still exists and isn’t already ready at the start; mark completion atomically.</x-fix>
+<x-change><pre data-l="js">await queue.add('ingest', { documentId }, { jobId: documentId });   // re-adding the same id is a no-op
+
+new Worker('ingest', async (job) => {
+  const doc = await repo.getDocument(job.data.documentId);
+  if (!doc || doc.status === 'ready') return;                      // deleted, or already done
+  await db.transaction(async (tx) => {
+    await tx.delete(chunks).where(eq(chunks.documentId, doc.id));   // replace, never append
+    await tx.insert(chunks).values(await buildChunks(doc));
+    await tx.update(documents).set({ status: 'ready' }).where(eq(documents.id, doc.id));
+  });
+}, { connection });</pre></x-change>
+<x-dm>DocMind uses exactly this: jobId = documentId, delete-then-insert, tested with a forced failure on chunk 2 and a hard kill mid-job; a crashed job resumed after ~10 minutes (stalled checks every 5 minutes) with a correct result.</x-dm>
+<x-say>“Queues deliver at least once, so I design jobs to be safe to run twice: stable job ids, replace-not-append writes in a transaction, and a check at the start whether the work is already done.”</x-say>
 </x-scn>
 
 <h2 class="sec"><span class="k">✓</span>Checkpoint</h2>

@@ -35,6 +35,8 @@
 
 // 4. model's final reply
 { "role": "assistant", "content": "You have one document: rag-guide.pdf (ready)." }</pre></x-impl>
+
+<x-walk><ol><li>Request 1 carries the user message and the tool list.</li><li>Response 1 has no text, one tool call with id call_1 and arguments as a JSON string.</li><li>Your code parses the string, validates, runs listDocuments for the session user.</li><li>Request 2 resends the whole conversation: user message, the assistant turn with the tool call (unchanged), and a tool message with tool_call_id call_1 and the JSON result.</li><li>Response 2 is plain text: the loop ends. Two model calls, one tool execution.</li></ol></x-walk>
 <x-dm><p>Gemini’s shape differs: tools are <code>functionDeclarations</code>; the model turn has parts with <code>functionCall: { name, args }</code> (args already an object); you reply with a <code>user</code>-role turn containing <code>functionResponse: { name, response }</code>. Gotcha found in DocMind’s AG.0 probe: Gemini puts a <code>thoughtSignature</code> on model turns; send a call turn back without it and you get 400 “Function call is missing a thought_signature”, so every model turn is pushed back byte for byte. Also, <code>mode: 'NONE'</code> was ignored by the Flash-Lite model in testing, so “answer now” is done by leaving <code>tools</code> out of the last request.</p></x-dm>
 </x-lesson>
 
@@ -85,7 +87,7 @@ const tools = {
   },
 };
 const toolDefs = Object.entries(tools).map(([name, t]) => ({
-  type: 'function', function: { name, description: t.description, parameters: z.toJSONSchema(t.schema) },
+  type: 'function', function: { name, description: t.description, parameters: (({ $schema, ...rest }) => rest)(z.toJSONSchema(t.schema)) },
 }));
 
 // ---------- helpers ----------
@@ -224,6 +226,8 @@ export const docAgent = new Agent({
 const requestContext = new RequestContext(); requestContext.set('userId', req.user.id);
 const result = await docAgent.generate(req.body.message, { maxSteps: 4, requestContext });</pre>
 <p>Approval with streaming: the stream emits a <code>tool-call-approval</code> chunk; you call <code>docAgent.approveToolCall({ runId: stream.runId })</code> or <code>declineToolCall(...)</code> (needs storage configured). Model id strings change often: use one your provider currently lists.</p></x-impl>
+
+<x-walk><ol><li>The route creates a RequestContext and sets userId from req.user.id.</li><li><code>docAgent.generate(message, { maxSteps: 4, requestContext })</code>: Mastra sends instructions + tools (converted from Zod) to the model.</li><li>When the model calls search-documents, Mastra validates the input against inputSchema and calls execute(input, context).</li><li>execute reads userId from context.requestContext and runs the owner-scoped retrieval; Mastra validates the output and sends it back to the model.</li><li>The loop ends with text or at maxSteps; the result contains text, tool calls/results and usage. For delete-document (requireApproval) a streaming call pauses with a tool-call-approval chunk until <code>approveToolCall({ runId })</code>.</li></ol></x-walk>
 <x-dm>DocMind’s agent is hand-written on Gemini’s REST API (<code>streamAgent</code> in <code>agent.service.ts</code>); Mastra is planned for Phase 8 workflows, and rebuilding this agent in Mastra to compare is agreed as “Phase 8b”, not built.</x-dm>
 </x-lesson>
 
@@ -242,7 +246,9 @@ const result = await docAgent.generate(req.body.message, { maxSteps: 4, requestC
 <x-ev>Correct definition (not “any LLM app”).</x-ev></x-q>
 <x-q n="8.2" tag="must basic"><x-t>What distinguishes an agent from a normal LLM call?</x-t><x-say>A normal call is one fixed request and response, with steps chosen by your code. An agent lets the model choose actions dynamically across several calls, using tool results as feedback.</x-say>
 <x-simple>In a plain call, the number of model calls and the order of operations are fixed by your code; the model only produces text. In an agent, the model’s output determines the next operation (which tool, with what arguments, or stop), so the number of calls varies per request and the path is decided at runtime. That flexibility brings variable latency and cost, new failure modes (wrong tool, loops), and the need for limits and validation.</x-simple>
-<x-eg>Summarise this text (one call) vs “find my latest document and summarise it” (list → pick → fetch → summarise, decided by the model).</x-eg><x-no>“An agent is an LLM with a system prompt / persona.”</x-no><x-ev>Red-flag check.</x-ev></x-q>
+<x-eg>Summarise this text (one call) vs “find my latest document and summarise it” (list → pick → fetch → summarise, decided by the model).</x-eg>
+<x-fu q="Can a single call still use a tool?">Yes: one call that returns a function call, executed once, then one more call to answer, is a minimal agent loop of two steps; the difference is whether the model chooses the action.</x-fu>
+<x-no>“An agent is an LLM with a system prompt / persona.”</x-no><x-ev>Red-flag check.</x-ev></x-q>
 <x-q n="8.3" tag="must basic"><x-t>What is the agent loop?</x-t><x-say>Call the model with the conversation and tools → if it requests tool calls, validate and execute them, append the results, call again → stop when it returns a final answer or the step limit is hit.</x-say>
 <x-simple>The loop: (1) send the conversation + tool definitions; (2) if the response contains tool calls, validate and execute each, append a tool-result message per call, increment the step counter; (3) if it contains only text, that’s the answer; (4) stop at the step limit (send a last request without tools so the model must answer). Everything in the conversation is resent each step, so context grows with every tool result.</x-simple>
 <x-eg>The agent simulator in lesson 8.A shows each message being appended.</x-eg><x-dm>DocMind: max 3 model calls (<code>AGENT_MAX_STEPS</code>), the last one sent without tools; a typical document question costs 2 calls.</x-dm>
@@ -268,7 +274,10 @@ const result = await docAgent.generate(req.body.message, { maxSteps: 4, requestC
 <x-no>“Function calling executes functions.”</x-no>
 <x-ev>Basics.</x-ev></x-q>
 <x-q n="8.7" tag="must solid"><x-t>What’s the difference between function calling and tool execution?</x-t><x-say>Function calling is the model producing a structured request. Tool execution is your backend validating that request, checking permissions, running real code and returning the result. The first is a suggestion; the second is the action.</x-say>
+<x-simple>The two are separate responsibilities. The model’s job ends at producing a well-formed request (name + arguments). The backend owns everything that touches the real world: looking up the tool, validating arguments, checking permissions and approvals, running the code with timeouts, handling errors, shaping the result and returning it. This split is what makes agents safe enough for production.</x-simple>
 <x-eg>Function calling output: <code>{ name: 'deleteDocument', arguments: '{"documentId":"d_9"}' }</code>. Tool execution: lookup → validate UUID → check approval → <code>DELETE … WHERE id = $1 AND user_id = $2</code> → result.</x-eg>
+
+<x-fu q="Why does the distinction matter in interviews?">Confusing them suggests you think the model has access to your systems, which leads to unsafe designs; it’s one of the listed red flags.</x-fu>
 <x-no>Using the terms as if the model did both.</x-no>
 <x-ev>The core distinction.</x-ev></x-q>
 <x-q n="8.8" tag="must basic"><x-t>Who actually executes a tool: the LLM or the backend?</x-t><x-say>The backend, always. The model has no access to your database or network; it only emits text that your code chooses to interpret as a call.</x-say>
@@ -331,6 +340,7 @@ const result = await docAgent.generate(req.body.message, { maxSteps: 4, requestC
 <x-no>“Agents are just smarter, with no downside.”</x-no>
 <x-ev>Realism.</x-ev></x-q>
 <x-q n="8.18" tag="must solid"><x-t>When should you avoid building an agent?</x-t><x-say>When the steps are known in advance (use a workflow or plain code), when one LLM call is enough, when latency or cost must be predictable, or when actions are high-risk and must be deterministic.</x-say>
+<x-simple>Avoid agents when the steps are known (use a workflow or plain code), when a single call or a fixed RAG pipeline answers well, when latency and cost must be predictable (high-volume endpoints), when actions are high-stakes and must be deterministic and auditable, or when you can’t evaluate the agent’s behaviour well. Start simple and add agency only where measured quality requires decisions the code can’t make.</x-simple>
 <x-eg>Converting a fixed RAG flow into an agent added a model call to every question; reverting simple FAQs to a single retrieval + generation cut latency by half.</x-eg><x-dm>DocMind’s quiz offer is written by code (no LLM) and the quiz only runs on a button click: a deliberate choice not to let the agent trigger it.</x-dm>
 <x-fu q="Give a case where an agent is the right choice.">Open-ended questions where the system must choose between several data sources or decide whether to search again based on what it found.</x-fu>
 <x-no>“Always use agents because they’re more advanced.”</x-no>
@@ -408,6 +418,7 @@ const result = await docAgent.generate(req.body.message, { maxSteps: 4, requestC
 <x-no>Promise.race without cancelling the underlying work.</x-no>
 <x-ev>Robustness.</x-ev></x-q>
 <x-q n="8.29" tag="must basic"><x-t>How would you log tool executions?</x-t><x-say>Structured logs per call: request id, user id, step, tool name, validated args (redacted), duration, success/error, result size; plus model usage per step; ideally as trace spans so one request’s whole agent run is visible.</x-say>
+<x-simple>Log every tool call as a structured event tied to the request and run: who (user, tenant), what (tool, validated arguments, redacted where sensitive), when and how long, outcome (ok/error type), and result size; log each model step with usage and finish reason. Better still, emit trace spans (OpenTelemetry) so a whole agent run appears as one tree. These logs power debugging, audits of sensitive actions, cost analysis and eval datasets.</x-simple>
 <x-eg><code>{"evt":"tool","runId":"r_1","step":2,"name":"searchDocuments","args":{"query":"chunk overlap"},"ms":143,"ok":true,"resultChars":2210,"userId":"u_42"}</code></x-eg>
 <x-fu q="What must you not log?">Secrets, full document contents for sensitive data, and raw personal data unless your policy allows it; redact arguments where needed.</x-fu>
 <x-no>Logging only errors.</x-no>

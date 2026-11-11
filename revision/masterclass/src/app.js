@@ -115,7 +115,7 @@ const SL = {
   'x-fix': 'Recommended solution', 'x-change': 'Code or architecture change', 'x-say': 'What to say in the interview',
   'x-prob': 'Problem', 'x-req': 'Requirements', 'x-exp': 'Expected behaviour', 'x-edge': 'Edge cases',
   'x-expl': 'Explanation', 'x-cx': 'Time and space complexity', 'x-mist': 'Common mistakes', 'x-tests': 'Test cases',
-  'x-dm': 'In DocMind', 'x-ev': 'What the interviewer is checking', 'x-steps': 'Steps', 'x-vis': 'Visual',
+  'x-dm': 'In DocMind', 'x-ev': 'What the interviewer is checking', 'x-steps': 'Steps', 'x-vis': 'Visual', 'x-an': 'Analogy', 'x-def': 'Simple definition', 'x-why': 'Why it exists', 'x-in': 'How it works inside', 'x-real': 'Real-world use', 'x-impl': 'Implementation', 'x-more': 'Going further',
 };
 
 function pills(tags) {
@@ -1320,6 +1320,16 @@ function renderCoverage() {
   view.innerHTML = `<div class="phase-h"><div class="eyebrow">Quality control</div><h1>Coverage check against the question bank</h1><p class="prose" style="margin:0;color:var(--muted)">Counted live from the cards on this page, compared with the numbers in the original 20-part bank. Each card keeps the bank’s own numbering, so a gap shows up as a missing number.</p></div>
   <div class="${allOk ? 'note' : 'warn'}">${allOk ? 'Every counted item from the bank is present.' : 'Some parts are below the bank’s count (shown in red).'}</div>
   <div class="tbl box"><table><thead><tr><th>#</th><th>Part</th><th>Bank items found / expected</th><th class="num">lessons</th><th class="num">quiz Qs</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <h2 class="sec">Audit log</h2>
+  <div class="box prose"><p><b>Independent audit, 11 Nov 2026.</b> Every card was checked by script for the required sections, and the gaps were filled rather than shortened:</p><ul>
+  <li>Detailed explanations added to about 500 questions, follow-up questions with answers to about 520, and common wrong answers to about 530; every one of the 565 question cards now has a short answer, an explanation, a follow-up, common mistakes and what the interviewer checks.</li>
+  <li>All 30 bank scenarios now have symptoms, causes, investigation, solution and a code or architecture change; 6 new scenarios added (429s, corrupted PDF, unsupported questions, embedding-model change, duplicate modules, a job executed twice).</li>
+  <li>Execution walkthroughs added to the 16 lessons that had code without one.</li>
+  <li>New code for topics that were only described: webhook signature verification, cache-aside with Redis, BullMQ producer/worker, CORS and Redis-backed rate limiting, circuit breaker, provider fallback chain, PII redaction, injection-safe prompting, SSRF guard, multi-query retrieval, MMR, contextual retrieval, faithfulness judge, neighbour expansion, token bucket, saga runner, MCP server (SDK 1.32), semantic cache, OpenTelemetry spans, user memory schema.</li>
+  <li><b>Corrections made after running code:</b> the Phase 2 practical snippet claimed timeout usually prints before immediate; on Node 22 it printed immediate first in 4 of 5 runs, so the answer now says the order isn’t guaranteed. <code>recursiveSplit</code> dropped the “. ” separator at chunk boundaries; fixed and re-run. <code>z.toJSONSchema</code> adds a <code>$schema</code> key (verified), now stripped before sending tool/response schemas. A Mastra execute-parameter list was corrected to match the 1.82 step reference. DocMind’s agent was confirmed to run multiple tool calls sequentially, not in parallel.</li>
+  <li><b>Verified, unchanged:</b> event-loop outputs (A E D C B in CommonJS, A E C D B in ES modules, 3 1 6 2 5 4, tick immediate timeout), the NDCG example (0.65), Zod 4 error output, express-rate-limit 8 options, Mastra 1.82 APIs (createRun with resourceId, run result fields, getStepResultAsync, foreach concurrency, PostgresStore), MCP SDK 1.32 (registerTool, StdioServerTransport), BullMQ UnrecoverableError, pdf-parse v2 usage.</li>
+  <li><b>Interactive elements:</b> 17 flow players, the event-loop stepper (3 programs), chunking, similarity, sampling, token, RRF, retry, index, JWT, agent and workflow simulators (crash, restart, double approval, reject, dedupe), concurrency runner, quizzes, scorecard, mock interview, drill, revision list, bookmarks, progress, search focus, theme and mode buttons were driven by an automated browser test; all pass. The 7 runnable exercises pass with their reference solutions (50/50 tests).</li>
+  <li><b>Still labelled, not invented:</b> Phase 14 is a reference design (no course-creation project exists in your repositories); illustrative prices and logits are marked as examples.</li></ul></div>
   <div class="note prose">Also preserved from the bank: the “What I’m evaluating” notes (Phase 1), the priority labels per part, the practical event-loop follow-up (Phase 2), every scenario’s sub-questions word for word, all 10 coding exercises with their follow-ups, the scorecard with critical minimums and the 10 red flags (Phase 19), the 90-minute plan and the second-round note (Phase 20), and the closing advice (Dashboard).</div>`;
 }
 

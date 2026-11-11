@@ -19,44 +19,186 @@ POST /courses/:id/lessons/:m/:l/regenerate                                   →
 </x-lesson>
 
 <h2 class="sec"><span class="k">14.1</span>Architecture</h2>
-<x-q n="14.1" tag="must basic"><x-t>What problem does this application solve?</x-t><x-say>Creating a structured, reviewed course (modules, lessons, quizzes) from a topic in minutes instead of days, with the human staying in control of the outline.</x-say><x-ev>Purpose.</x-ev></x-q>
-<x-q n="14.2" tag="must basic"><x-t>How does the course-generation process start?</x-t><x-say><code>POST /courses</code> with a validated body and an idempotency key; the API creates (or finds) the course row and starts a workflow run with the user as the resource owner.</x-say><x-ev>Flow.</x-ev></x-q>
-<x-q n="14.3" tag="must basic"><x-t>What components are involved?</x-t><x-say>API, workflow engine with Postgres storage, LLM service, app tables, and the frontend’s review and progress screens; optionally a queue for very large courses.</x-say><x-ev>Components.</x-ev></x-q>
-<x-q n="14.4" tag="must solid"><x-t>Why did you choose a workflow-based architecture?</x-t><x-say>The steps and order are known, it runs for minutes, it must pause for approval, survive restarts, retry single steps and never duplicate content. Those are exactly what workflows give; an agent would add unpredictability for no gain.</x-say><x-ev>Architecture reasoning.</x-ev></x-q>
-<x-q n="14.5" tag="must basic"><x-t>What is the role of the LLM?</x-t><x-say>Content generation inside specific steps (outline, lessons, quizzes, optional quality judging), always with a schema. The LLM never decides the process.</x-say><x-ev>Separation.</x-ev></x-q>
-<x-q n="14.6" tag="must basic"><x-t>How do you structure the generated course?</x-t><x-say>Course → modules (title, objectives) → lessons (title, Markdown body) → one quiz per module (5 questions × 4 options), each level validated by a Zod schema.</x-say><x-ev>Modelling.</x-ev></x-q>
-<x-q n="14.7" tag="must basic"><x-t>How do you store the output?</x-t><x-say>Course row (status, outline JSONB, request key), <code>lesson_drafts</code> keyed by (course, module, lesson), <code>module_quizzes</code> keyed by (course, module); publish flips the status in one transaction.</x-say><x-ev>Data design.</x-ev></x-q>
-<x-q n="14.8" tag="must solid"><x-t>How do you validate generated content?</x-t><x-say>Schema validation (Zod) on every LLM output, deterministic checks (unique titles, lesson length, distinct quiz options, valid answer index), and an optional judge pass for relevance; failures retry the step.</x-say><x-ev>Quality control.</x-ev></x-q>
+<x-q n="14.1" tag="must basic"><x-t>What problem does this application solve?</x-t><x-say>Creating a structured, reviewed course (modules, lessons, quizzes) from a topic in minutes instead of days, with the human staying in control of the outline.</x-say>
+<x-simple>Writing a structured course by hand takes days of outlining, drafting lessons and quizzes. The system turns a topic and a few parameters into a reviewed, structured course: the human controls the plan (outline approval), the machine does the bulk drafting, and quality checks catch obvious problems before publishing. The engineering problem is making a long, multi-step, failure-prone LLM process reliable and affordable.</x-simple>
+<x-eg>A trainer enters “Intro to RAG, beginner, 4 modules”; 3 minutes later approves an outline; 6 minutes later has 16 lessons and 4 quizzes in draft.</x-eg>
+<x-fu q="Who is the user, and what do they need most?">Educators or teams creating training content; they need control (approval/editing) and trustworthy content more than raw speed.</x-fu>
+<x-no>Describing only “it calls GPT to write a course”.</x-no>
+<x-ev>Purpose.</x-ev></x-q>
+<x-q n="14.2" tag="must basic"><x-t>How does the course-generation process start?</x-t><x-say><code>POST /courses</code> with a validated body and an idempotency key; the API creates (or finds) the course row and starts a workflow run with the user as the resource owner.</x-say>
+<x-simple>A validated request (topic, level, module count, audience, language) arrives with an idempotency key; the API upserts a course row keyed by (user, key) so repeats return the same course; it starts a workflow run with the user as the resource owner, stores the run id on the course, and returns 202 when the run suspends for outline approval.</x-simple>
+<x-eg><code>POST /courses</code> with <code>Idempotency-Key: 5f1c…</code> → 202 <code>{ courseId, status: 'awaiting_approval', outline }</code>.</x-eg>
+<x-fu q="What if generation of the outline itself is slow?">Start the run in the background and return 202 immediately with status “outlining”; the UI polls until the outline is ready.</x-fu>
+<x-no>Starting generation without any dedupe.</x-no>
+<x-ev>Flow.</x-ev></x-q>
+<x-q n="14.3" tag="must basic"><x-t>What components are involved?</x-t><x-say>API, workflow engine with Postgres storage, LLM service, app tables, and the frontend’s review and progress screens; optionally a queue for very large courses.</x-say>
+<x-simple>API (auth, validation, endpoints), workflow engine with persistent storage (orchestration, suspend/resume, retries, recovery), LLM client (structured output, timeouts, retries, routing, usage logs), database (courses, lesson drafts, quizzes, events), optional queue for very large jobs, and the frontend (outline review, progress, reader). Observability ties them together with run ids.</x-simple>
+<x-fu q="Do you need a separate queue if you use a workflow engine?">Not always; the engine persists and resumes runs. A queue helps when you need to distribute heavy work across separate worker processes.</x-fu>
+<x-no>“Just the LLM and the database.”</x-no>
+<x-ev>Components.</x-ev></x-q>
+<x-q n="14.4" tag="must solid"><x-t>Why did you choose a workflow-based architecture?</x-t><x-say>The steps and order are known, it runs for minutes, it must pause for approval, survive restarts, retry single steps and never duplicate content. Those are exactly what workflows give; an agent would add unpredictability for no gain.</x-say>
+<x-simple>The process has a known shape (outline → approval → content → checks → publish), runs for minutes, must pause for a human, must survive restarts, and must not duplicate content or spend tokens twice. Those are workflow properties: defined order, persisted state, suspend/resume, per-step retries and idempotent steps. An agent would add unpredictability without adding value.</x-simple>
+<x-eg>The same flow as a single agent prompt would sometimes skip approval, generate lessons out of order, and lose all progress on a crash.</x-eg>
+<x-fu q="What would make you reconsider and use an agent?">If each course needed open-ended research with tool choices (web search, reading sources), as a step inside the workflow.</x-fu>
+<x-no>“Because workflows are trendy.”</x-no>
+<x-ev>Architecture reasoning.</x-ev></x-q>
+<x-q n="14.5" tag="must basic"><x-t>What is the role of the LLM?</x-t><x-say>Content generation inside specific steps (outline, lessons, quizzes, optional quality judging), always with a schema. The LLM never decides the process.</x-say>
+<x-simple>The LLM writes content in clearly bounded steps: outline from the request, each lesson from its slot in the outline, each quiz from its module’s lessons, optionally a judge for relevance and answer keys. Each call has a schema, a token cap, and validation. Control flow, persistence, numbering, deduplication and publishing are deterministic code.</x-simple>
+<x-fu q="Could you use different models per step?">Yes: a stronger model for the outline (planning), a cheaper one for quizzes and checks.</x-fu>
+<x-no>“The LLM manages the workflow.”</x-no>
+<x-ev>Separation.</x-ev></x-q>
+<x-q n="14.6" tag="must basic"><x-t>How do you structure the generated course?</x-t><x-say>Course → modules (title, objectives) → lessons (title, Markdown body) → one quiz per module (5 questions × 4 options), each level validated by a Zod schema.</x-say>
+<x-simple>Structure the course as nested, validated data: course (title, audience, objectives) → modules (title, objectives) → lessons (title, body) → one quiz per module (questions with options and answer index). Each level has a Zod schema used both for structured generation and validation, and the database mirrors it with keyed rows so items can be regenerated individually.</x-simple>
+<x-code><pre data-l="js">const Course = z.object({
+  title: z.string(), audience: z.string(), objectives: z.array(z.string()).min(1),
+  modules: z.array(z.object({
+    title: z.string(), objectives: z.array(z.string()),
+    lessons: z.array(z.object({ title: z.string(), body: z.string().min(400) })).min(2).max(6),
+    quiz: z.object({ questions: z.array(z.object({ question: z.string(), options: z.array(z.string()).length(4), correctIndex: z.number().int().min(0).max(3) })).length(5) }),
+  })).min(1).max(10),
+});</pre></x-code>
+<x-fu q="Why objectives per module?">They guide lesson generation and give a checklist for coverage checks and quiz alignment.</x-fu>
+<x-no>One giant markdown string.</x-no>
+<x-ev>Modelling.</x-ev></x-q>
+<x-q n="14.7" tag="must basic"><x-t>How do you store the output?</x-t><x-say>Course row (status, outline JSONB, request key), <code>lesson_drafts</code> keyed by (course, module, lesson), <code>module_quizzes</code> keyed by (course, module); publish flips the status in one transaction.</x-say>
+<x-simple>Content is stored incrementally as drafts with natural keys, so retries and resumes are idempotent, then published atomically. The course row holds the request, outline JSONB, status and run id; lesson_drafts and module_quizzes hold generated content keyed by position; publishing flips status in one transaction after verifying completeness. Optionally keep versions of regenerated items.</x-simple>
+<x-fu q="Why not write everything at the end?">A crash or failure at lesson 9 would lose all earlier lessons; incremental drafts allow resume.</x-fu>
+<x-no>Keeping generated content only in the workflow snapshot.</x-no>
+<x-ev>Data design.</x-ev></x-q>
+<x-q n="14.8" tag="must solid"><x-t>How do you validate generated content?</x-t><x-say>Schema validation (Zod) on every LLM output, deterministic checks (unique titles, lesson length, distinct quiz options, valid answer index), and an optional judge pass for relevance; failures retry the step.</x-say>
+<x-simple>Validation runs at three levels: shape (Zod schemas on every LLM output), deterministic rules (counts, lengths, unique titles, distinct options, valid answer indexes), and semantic checks where code isn’t enough (relevance to objectives, answer-key verification by a second model). Failures trigger a bounded regeneration of just that item.</x-simple>
+<x-eg>Outline: unique module titles, requested module count. Lessons: 400–1,500 words, mentions the lesson’s objective terms, no duplicate paragraphs across lessons. Quizzes: 4 distinct options, key verified by a judge from the lesson text.</x-eg>
+<x-fu q="What happens when validation fails repeatedly?">The step fails after its retries; the course is marked failed for that item and the user can regenerate just that lesson or quiz.</x-fu>
+<x-no>Trusting the model’s output because it “looks fine”.</x-no>
+<x-ev>Quality control.</x-ev></x-q>
 
 <h2 class="sec"><span class="k">14.2</span>Workflow design</h2>
-<x-q n="14.9" tag="must solid"><x-t>Explain the complete course-generation workflow.</x-t><x-say>prepare (dedupe, create row) → outline (LLM, schema) → approve (suspend until the user answers) → lessons (foreach, concurrency 3, retries) → quizzes (foreach per module) → quality checks → publish (transaction).</x-say><x-ev>End to end.</x-ev></x-q>
-<x-q n="14.10" tag="must basic"><x-t>What are the individual steps?</x-t><x-say>Validate and dedupe; generate outline; human approval; generate lessons; generate quizzes; check quality; publish.</x-say><x-ev>Recall.</x-ev></x-q>
-<x-q n="14.11" tag="must basic"><x-t>Which steps are deterministic?</x-t><x-say>Validation, dedupe, mapping the outline to work items, quality checks, and publishing. Their output depends only on input and data.</x-say><x-ev>Distinction.</x-ev></x-q>
-<x-q n="14.12" tag="must basic"><x-t>Which steps require an LLM?</x-t><x-say>Outline, lessons, quizzes, and optionally a judge for relevance.</x-say><x-ev>Distinction.</x-ev></x-q>
-<x-q n="14.13" tag="must solid"><x-t>Which steps can execute in parallel?</x-t><x-say>Lessons across modules (and within a module if they don’t depend on each other), and quizzes per module once that module’s lessons exist. Capped concurrency for rate limits.</x-say><x-ev>Parallelism judgement.</x-ev></x-q>
-<x-q n="14.14" tag="must basic"><x-t>How do you pass data between steps?</x-t><x-say>Each step’s output is the next step’s input; <code>.map()</code> turns the outline into lesson items; later steps read the approved outline with <code>getStepResultAsync</code>; large content goes to the database, and steps pass ids rather than big blobs.</x-say><x-ev>Data flow.</x-ev></x-q>
-<x-q n="14.15" tag="must solid"><x-t>What happens when one step fails?</x-t><x-say>It retries (step <code>retries: 2</code>); if it still fails the run fails, the course is marked failed with the reason, completed drafts stay, and a re-run continues from the failed step.</x-say><x-ev>Failure handling.</x-ev></x-q>
-<x-q n="14.16" tag="must basic"><x-t>How do you implement retries?</x-t><x-say>Step-level retries for LLM steps, transport retries with backoff inside the LLM client for 429/5xx, and no retries on deterministic validation failures that would fail again.</x-say><x-ev>Retry discipline.</x-ev></x-q>
-<x-q n="14.17" tag="must solid"><x-t>How do you prevent duplicate course generation?</x-t><x-say>Unique (user_id, request_key) on courses with an upsert, so a repeated POST finds the same course (and returns it if published); the approval endpoint claims the waiting state once.</x-say><x-ev>Idempotency.</x-ev></x-q>
-<x-q n="14.18" tag="must basic"><x-t>How do you persist workflow state?</x-t><x-say>Mastra storage on Postgres saves a snapshot per step; app tables hold the content and user-visible status.</x-say><x-ev>Persistence.</x-ev></x-q>
+<x-q n="14.9" tag="must solid"><x-t>Explain the complete course-generation workflow.</x-t><x-say>prepare (dedupe, create row) → outline (LLM, schema) → approve (suspend until the user answers) → lessons (foreach, concurrency 3, retries) → quizzes (foreach per module) → quality checks → publish (transaction).</x-say>
+<x-simple>The workflow: prepare (validate, dedupe by idempotency key, create course) → outline (LLM, schema, saved) → approve (suspend until the user decides; reject ends or loops back with feedback) → lessons (foreach with concurrency cap, retries, idempotent drafts) → quizzes (per module) → quality checks (dedupe, coverage, key verification, targeted regeneration) → publish (one transaction after verifying completeness). Status and progress live in the course row; run state in the engine’s storage.</x-simple>
+<x-eg>Step through the course workflow animation in lesson 14.A and the simulator below it.</x-eg>
+<x-fu q="Where would you put a “quality check” step that can send work back?">After lessons/quizzes: a deterministic check that lists failing items, followed by a loop (dountil) regenerating only those, with a maximum number of rounds.</x-fu>
+<x-no>Describing it as one LLM call.</x-no>
+<x-ev>End to end.</x-ev></x-q>
+<x-q n="14.10" tag="must basic"><x-t>What are the individual steps?</x-t><x-say>Validate and dedupe; generate outline; human approval; generate lessons; generate quizzes; check quality; publish.</x-say>
+<x-simple>(1) prepare: validate, dedupe by idempotency key, create/find the course; (2) outline: LLM with schema, saved; (3) approval: suspend until the user approves, rejects or edits; (4) lessons: one item per lesson, parallel with a cap, idempotent drafts; (5) quizzes: one per module from its lessons; (6) checks: duplicates, coverage, quiz keys; (7) publish: verify counts and flip status in one transaction.</x-simple>
+<x-fu q="Which step is most expensive?">Lessons: the most calls and output tokens.</x-fu>
+<x-no>Forgetting approval or publish.</x-no>
+<x-ev>Recall.</x-ev></x-q>
+<x-q n="14.11" tag="must basic"><x-t>Which steps are deterministic?</x-t><x-say>Validation, dedupe, mapping the outline to work items, quality checks, and publishing. Their output depends only on input and data.</x-say>
+<x-simple>Deterministic steps produce the same result for the same input and stored data: validation and dedupe, mapping the outline to work items and numbering, duplicate/coverage checks, and the publish transaction. They’re cheap, testable with unit tests, and never need LLM retries.</x-simple>
+<x-fu q="Why make checks deterministic where possible?">They’re reliable, free, and don’t introduce new randomness; use a judge model only for what code can’t check.</x-fu>
+<x-no>“Everything is non-deterministic because it’s AI.”</x-no>
+<x-ev>Distinction.</x-ev></x-q>
+<x-q n="14.12" tag="must basic"><x-t>Which steps require an LLM?</x-t><x-say>Outline, lessons, quizzes, and optionally a judge for relevance.</x-say>
+<x-simple>LLM steps are the ones producing language or judgement: the outline (planning and structure), lessons (writing), quizzes (question writing), and optional judging (relevance, answer verification). Each is wrapped with a schema, retries and limits, and its output is stored so re-runs don’t regenerate it.</x-simple>
+<x-fu q="Could the outline be partly deterministic?">Yes: templates for module structure (intro, core, practice, summary) with the LLM filling titles reduces variance.</x-fu>
+<x-no>Saying the save step uses an LLM.</x-no>
+<x-ev>Distinction.</x-ev></x-q>
+<x-q n="14.13" tag="must solid"><x-t>Which steps can execute in parallel?</x-t><x-say>Lessons across modules (and within a module if they don’t depend on each other), and quizzes per module once that module’s lessons exist. Capped concurrency for rate limits.</x-say>
+<x-simple>Steps without data dependencies can run concurrently: lessons in different modules, and within a module if each lesson doesn’t need the previous lesson’s text (passing sibling titles is enough for coherence); quizzes per module once that module’s lessons exist. Concurrency is capped to respect provider rate limits.</x-simple>
+<x-fu q="What’s the trade-off of generating lessons in parallel?">Speed vs coherence; lessons can repeat each other, mitigated by sibling titles in the prompt and a dedupe check.</x-fu>
+<x-no>“Everything can run in parallel.”</x-no>
+<x-ev>Parallelism judgement.</x-ev></x-q>
+<x-q n="14.14" tag="must basic"><x-t>How do you pass data between steps?</x-t><x-say>Each step’s output is the next step’s input; <code>.map()</code> turns the outline into lesson items; later steps read the approved outline with <code>getStepResultAsync</code>; large content goes to the database, and steps pass ids rather than big blobs.</x-say>
+<x-simple>Step outputs feed the next step’s input; .map reshapes outline → lesson items; later steps read the approved outline via getStepResultAsync; large texts are written to the database and passed as ids or re-read by later steps (e.g. quizzes read lessons from lesson_drafts), keeping snapshots small and making steps idempotent.</x-simple>
+<x-fu q="Why not pass all lesson bodies through the workflow outputs?">Large snapshots, slower persistence, and duplication of data already stored in your tables.</x-fu>
+<x-no>Passing data through global variables.</x-no>
+<x-ev>Data flow.</x-ev></x-q>
+<x-q n="14.15" tag="must solid"><x-t>What happens when one step fails?</x-t><x-say>It retries (step <code>retries: 2</code>); if it still fails the run fails, the course is marked failed with the reason, completed drafts stay, and a re-run continues from the failed step.</x-say>
+<x-simple>The failing step retries according to its policy; transient errors usually pass. If it still fails, the run fails with completed steps’ results and drafts preserved; the course is marked failed with a reason; a retry re-runs the workflow with the same course key, and idempotent steps skip finished work so only the failed part is redone.</x-simple>
+<x-fu q="Should one bad lesson fail the whole course?">By default yes (publish requires completeness), but you could mark it and let the user regenerate just that lesson.</x-fu>
+<x-no>Restarting from scratch.</x-no>
+<x-ev>Failure handling.</x-ev></x-q>
+<x-q n="14.16" tag="must basic"><x-t>How do you implement retries?</x-t><x-say>Step-level retries for LLM steps, transport retries with backoff inside the LLM client for 429/5xx, and no retries on deterministic validation failures that would fail again.</x-say>
+<x-simple>Two layers, chosen deliberately: transport retries in the LLM client (429/5xx/timeouts with backoff and jitter, honouring Retry-After), and step retries for invalid outputs or remaining failures (step retries: 2). Validation errors on input are never retried. Total attempts per item are bounded, logged, and visible in cost dashboards.</x-simple>
+<x-fu q="How do you avoid retry multiplication?">Count the layers (client 2 × step 2 = 4 calls max per lesson) and keep each small.</x-fu>
+<x-no>Infinite retries.</x-no>
+<x-ev>Retry discipline.</x-ev></x-q>
+<x-q n="14.17" tag="must solid"><x-t>How do you prevent duplicate course generation?</x-t><x-say>Unique (user_id, request_key) on courses with an upsert, so a repeated POST finds the same course (and returns it if published); the approval endpoint claims the waiting state once.</x-say>
+<x-simple>Duplicates come from repeated submissions, double approvals, retries and recovery re-runs. Guards: unique (user_id, request_key) on courses with an upsert at the start; atomic approval claim; stable item keys for drafts with ON CONFLICT DO NOTHING; skip-if-exists before LLM calls; and a publish step that checks the course isn’t already published.</x-simple>
+<x-fu q="What if the user deliberately wants a second course on the same topic?">A new idempotency key (a new “generate” action) creates a new course; the key represents one click, not one topic.</x-fu>
+<x-no>Deduping by topic text only.</x-no>
+<x-ev>Idempotency.</x-ev></x-q>
+<x-q n="14.18" tag="must basic"><x-t>How do you persist workflow state?</x-t><x-say>Mastra storage on Postgres saves a snapshot per step; app tables hold the content and user-visible status.</x-say>
+<x-simple>The workflow engine’s storage (Postgres) holds run snapshots after each step and on suspension; the app’s tables hold user-visible state (course status, outline, drafts) linked by run id. This separation lets the API answer status queries without reading framework internals and survive framework changes.</x-simple>
+<x-fu q="What if the snapshot and your tables disagree?">Treat your tables as the business truth; steps re-check them (skip-if-exists), so a re-run reconciles them.</x-fu>
+<x-no>Keeping state only in memory.</x-no>
+<x-ev>Persistence.</x-ev></x-q>
 
 <h2 class="sec"><span class="k">14.3</span>Suspend and resume</h2>
-<x-q n="14.19" tag="must basic"><x-t>Why would you suspend course generation?</x-t><x-say>To let the user approve or reject the outline before spending tokens on 30 lessons, and to keep a human in control of what gets generated.</x-say><x-ev>Purpose.</x-ev></x-q>
-<x-q n="14.20" tag="must basic"><x-t>How would you request user approval?</x-t><x-say>The approval step suspends with the outline; the API returns 202 with status awaiting_approval and the outline; the UI shows it with Approve and Reject (with feedback).</x-say><x-ev>Flow.</x-ev></x-q>
-<x-q n="14.21" tag="must basic"><x-t>Where is the workflow state stored?</x-t><x-say>In Postgres: Mastra’s snapshot table for the run, and the course row for status and outline.</x-say><x-ev>Storage.</x-ev></x-q>
-<x-q n="14.22" tag="must basic"><x-t>How does the frontend know the workflow is waiting?</x-t><x-say>The course status is awaiting_approval (returned by POST and by <code>GET /courses/:id</code>); polling or an SSE event updates the screen.</x-say><x-ev>UX.</x-ev></x-q>
-<x-q n="14.23" tag="must solid"><x-t>What happens after user approval?</x-t><x-say>The endpoint checks ownership and claims the waiting state, then resumes the run in the background; the approval step re-runs with resumeData, marks the outline approved, and lesson generation begins; the client watches progress.</x-say><x-ev>Resume flow.</x-ev></x-q>
-<x-q n="14.24" tag="must solid"><x-t>What happens if the user rejects the outline?</x-t><x-say>Either end the run with <code>bail({ outcome: 'rejected' })</code> (status success, outcome rejected) and mark the course rejected, or loop back to regenerate the outline with the feedback, a bounded number of times (e.g. <code>.dountil</code> or a new run).</x-say><x-ev>Design choice.</x-ev></x-q>
-<x-q n="14.25" tag="must solid"><x-t>What happens if the server restarts during suspension?</x-t><x-say>Nothing is lost and nothing is running: the snapshot is in Postgres. After restart the approval can arrive and <code>createRun({ runId })</code> + <code>resume()</code> continues it. Runs that were running (not suspended) are re-driven by recovery at boot.</x-say><x-ev>Durability understanding.</x-ev></x-q>
-<x-q n="14.26" tag="must solid"><x-t>How would you handle an approval that arrives twice?</x-t><x-say>The first request claims the state with a conditional UPDATE (awaiting_approval → resuming) and wins; the second updates 0 rows and gets 409. Mastra’s own resume claim (suspended → running) throws <code>WORKFLOW_RESUME_ALREADY_CLAIMED</code> as a second guard.</x-say><x-ev>Concurrency.</x-ev></x-q>
+<x-q n="14.19" tag="must basic"><x-t>Why would you suspend course generation?</x-t><x-say>To let the user approve or reject the outline before spending tokens on 30 lessons, and to keep a human in control of what gets generated.</x-say>
+<x-simple>Suspending for approval puts a cheap checkpoint before the expensive part: the user can catch a wrong scope, level or structure before 30 lesson calls are spent, and stays in control of what’s produced. Other reasons: editing the outline, choosing between alternative outlines, or waiting for a manager’s review.</x-simple>
+<x-fu q="Could you skip approval for trusted users?">Yes, as a setting: the approval step returns immediately when auto-approve is on.</x-fu>
+<x-no>“To save server memory.”</x-no>
+<x-ev>Purpose.</x-ev></x-q>
+<x-q n="14.20" tag="must basic"><x-t>How would you request user approval?</x-t><x-say>The approval step suspends with the outline; the API returns 202 with status awaiting_approval and the outline; the UI shows it with Approve and Reject (with feedback).</x-say>
+<x-simple>The approval step suspends with the outline; the course status becomes awaiting_approval; the user is notified (in-app, email); the UI shows the outline with Approve, Request changes (with feedback) and Cancel; the decision is sent to an authenticated endpoint that validates it against the resume schema.</x-simple>
+<x-fu q="Can the user edit the outline before approving?">Yes: send the edited outline as resume data (validated with the Outline schema) and continue with it.</x-fu>
+<x-no>Asking for approval in the chat text and parsing “yes”.</x-no>
+<x-ev>Flow.</x-ev></x-q>
+<x-q n="14.21" tag="must basic"><x-t>Where is the workflow state stored?</x-t><x-say>In Postgres: Mastra’s snapshot table for the run, and the course row for status and outline.</x-say>
+<x-simple>In the workflow storage (Mastra’s snapshot table in Postgres) for orchestration, with the suspend payload; and in the course row (status, outline, run id) for the UI and authorization.</x-simple>
+<x-fu q="How long can it stay suspended?">Indefinitely in principle; apply an expiry policy (e.g. 7 days) to clean up.</x-fu>
+<x-no>“In the user’s browser.”</x-no>
+<x-ev>Storage.</x-ev></x-q>
+<x-q n="14.22" tag="must basic"><x-t>How does the frontend know the workflow is waiting?</x-t><x-say>The course status is awaiting_approval (returned by POST and by <code>GET /courses/:id</code>); polling or an SSE event updates the screen.</x-say>
+<x-simple>The course status in your own table (awaiting_approval) is returned by the create call and by GET /courses/:id; the UI polls or receives an SSE/websocket event, and notifications point the user to the review screen.</x-simple>
+<x-fu q="Why not read Mastra’s run status directly from the frontend?">The frontend shouldn’t access framework internals or other users’ runs; your API exposes a stable, authorised status.</x-fu>
+<x-no>“The frontend keeps the request open.”</x-no>
+<x-ev>UX.</x-ev></x-q>
+<x-q n="14.23" tag="must solid"><x-t>What happens after user approval?</x-t><x-say>The endpoint checks ownership and claims the waiting state, then resumes the run in the background; the approval step re-runs with resumeData, marks the outline approved, and lesson generation begins; the client watches progress.</x-say>
+<x-simple>Approval endpoint: authenticate, check the course belongs to the user, claim the waiting state (conditional UPDATE), resume the run with { approved: true } in the background, respond 202. The approval step re-runs with resumeData, records the approval time, sets status generating, and the workflow continues with lessons, quizzes, checks and publish; the UI shows progress.</x-simple>
+<x-fu q="Why respond before generation finishes?">Generation takes minutes; the UI polls progress instead of holding a request open.</x-fu>
+<x-no>“The user must keep the page open until it finishes.”</x-no>
+<x-ev>Resume flow.</x-ev></x-q>
+<x-q n="14.24" tag="must solid"><x-t>What happens if the user rejects the outline?</x-t><x-say>Either end the run with <code>bail({ outcome: 'rejected' })</code> (status success, outcome rejected) and mark the course rejected, or loop back to regenerate the outline with the feedback, a bounded number of times (e.g. <code>.dountil</code> or a new run).</x-say>
+<x-simple>Two designs: end the run (bail with outcome rejected, status success with that outcome) and mark the course rejected; or treat rejection with feedback as “regenerate”: loop back to the outline step with the feedback (dountil or a new run), with a cap on rounds. Either way, no lessons are generated for a rejected outline.</x-simple>
+<x-fu q="How do you include the feedback?">Add it to the outline prompt as constraints (“make it more hands-on, 5 modules instead of 4”) and keep the previous outline for comparison.</x-fu>
+<x-no>“Generate the lessons anyway.”</x-no>
+<x-ev>Design choice.</x-ev></x-q>
+<x-q n="14.25" tag="must solid"><x-t>What happens if the server restarts during suspension?</x-t><x-say>Nothing is lost and nothing is running: the snapshot is in Postgres. After restart the approval can arrive and <code>createRun({ runId })</code> + <code>resume()</code> continues it. Runs that were running (not suspended) are re-driven by recovery at boot.</x-say>
+<x-simple>Nothing is lost and nothing needs to run while suspended: the state is in Postgres. After the restart, the approval request can arrive and resume the run in the new process. Runs that were actively running (not suspended) are re-driven by recovery at boot, re-executing the interrupted step idempotently.</x-simple>
+<x-fu q="What if recovery is turned off?">A sweeper job finds runs stuck in running and restarts or fails them explicitly.</x-fu>
+<x-no>“The user must start over.”</x-no>
+<x-ev>Durability understanding.</x-ev></x-q>
+<x-q n="14.26" tag="must solid"><x-t>How would you handle an approval that arrives twice?</x-t><x-say>The first request claims the state with a conditional UPDATE (awaiting_approval → resuming) and wins; the second updates 0 rows and gets 409. Mastra’s own resume claim (suspended → running) throws <code>WORKFLOW_RESUME_ALREADY_CLAIMED</code> as a second guard.</x-say>
+<x-simple>Make approval single-use: the first request’s conditional update moves the course from awaiting_approval to resuming and gets a row back; the second request updates nothing and receives 409. The workflow engine’s own claim (Mastra: suspended → running atomically, WORKFLOW_RESUME_ALREADY_CLAIMED on the loser) is a second guard. The UI also disables the button after click.</x-simple>
+<x-fu q="What about an approval from another user?">The update includes user_id = the caller; another user’s request updates nothing → 404/409.</x-fu>
+<x-no>“The second click just runs another generation.”</x-no>
+<x-ev>Concurrency.</x-ev></x-q>
 
 <h2 class="sec"><span class="k">14.4</span>Content quality</h2>
-<x-q n="14.27" tag="must solid"><x-t>How do you ensure lessons are relevant to the course topic?</x-t><x-say>Give each lesson call the course topic, module title, objectives and sibling titles; check relevance with embedding similarity between lesson and module objective (threshold) or a judge; regenerate outliers.</x-say><x-ev>Quality methods.</x-ev></x-q>
-<x-q n="14.28" tag="must solid"><x-t>How do you prevent duplicate modules?</x-t><x-say>Instruct uniqueness in the outline prompt, then check in code: normalised title equality and embedding similarity between module titles/objectives; regenerate the outline if duplicates appear; the user also sees it at approval.</x-say><x-ev>Dedup.</x-ev></x-q>
-<x-q n="14.29" tag="must solid"><x-t>How do you validate quiz questions?</x-t><x-say>Zod (5 questions, 4 distinct options, index 0–3), answerable from the module’s lessons (a judge answers each question from the lesson text and must match the key), shuffle option order in code, no duplicates across modules.</x-say><x-ev>Validation.</x-ev></x-q>
-<x-q n="14.30" tag="must solid"><x-t>How do you ensure generated answers are correct?</x-t><x-say>You can’t guarantee it with an LLM alone: ground quizzes in the generated lessons, verify with a second model or a judge, flag low-confidence items for review, let users report errors, and for factual domains retrieve trusted sources (RAG) before generating.</x-say><x-ev>Honest limits.</x-ev></x-q>
-<x-q n="14.31" tag="must solid"><x-t>How would you evaluate course quality?</x-t><x-say>Automatic checks (coverage of objectives, readability, duplicate rate, quiz validity), judge scores on a rubric, human review of samples, and learner signals (completion, quiz scores, ratings, reports).</x-say><x-ev>Evaluation.</x-ev></x-q>
-<x-q n="14.32" tag="must solid"><x-t>How would you reduce the cost of generating large courses?</x-t><x-say>Approve the outline before spending on lessons; smaller models for quizzes and checks; cap lesson length; reuse content for repeated topics (cache by normalised topic + level); never regenerate finished lessons on retry; batch where possible; log tokens per course and enforce per-user budgets.</x-say><x-ev>Cost engineering.</x-ev></x-q>
+<x-q n="14.27" tag="must solid"><x-t>How do you ensure lessons are relevant to the course topic?</x-t><x-say>Give each lesson call the course topic, module title, objectives and sibling titles; check relevance with embedding similarity between lesson and module objective (threshold) or a judge; regenerate outliers.</x-say>
+<x-simple>Relevance is built in and then checked: each lesson prompt includes the course topic, module title and objectives and sibling titles; generation is constrained by a schema; afterwards, a relevance check (embedding similarity between lesson and module objective above a threshold, or a judge rating) flags off-topic lessons for regeneration.</x-simple>
+<x-fu q="Which is cheaper, embeddings or a judge?">Embeddings: one cheap call per lesson; use a judge only for flagged or borderline items.</x-fu>
+<x-no>“The model always stays on topic.”</x-no>
+<x-ev>Quality methods.</x-ev></x-q>
+<x-q n="14.28" tag="must solid"><x-t>How do you prevent duplicate modules?</x-t><x-say>Instruct uniqueness in the outline prompt, then check in code: normalised title equality and embedding similarity between module titles/objectives; regenerate the outline if duplicates appear; the user also sees it at approval.</x-say>
+<x-simple>Prevent at the source (outline prompt requires distinct modules, previous titles listed), detect in code (normalised title comparison and embedding similarity between module titles/objectives), and let the human catch remaining overlap at approval. Same idea one level down for lessons.</x-simple>
+<x-fu q="What threshold would you use?">Start around 0.9 cosine for titles and tune on examples of true duplicates vs related-but-distinct modules.</x-fu>
+<x-no>Only checking exact title equality.</x-no>
+<x-ev>Dedup.</x-ev></x-q>
+<x-q n="14.29" tag="must solid"><x-t>How do you validate quiz questions?</x-t><x-say>Zod (5 questions, 4 distinct options, index 0–3), answerable from the module’s lessons (a judge answers each question from the lesson text and must match the key), shuffle option order in code, no duplicates across modules.</x-say>
+<x-simple>Schema (5 questions, 4 distinct options, valid index), structural rules (no “all of the above”, options of similar length), grounding (answer present in the module’s lessons), key verification (a judge answers from the lesson text without seeing the key), and option shuffling in code.</x-simple>
+<x-fu q="What do you do with a question that fails verification?">Regenerate that question only, with the failure reason in the prompt.</x-fu>
+<x-no>Validating only that JSON parses.</x-no>
+<x-ev>Validation.</x-ev></x-q>
+<x-q n="14.30" tag="must solid"><x-t>How do you ensure generated answers are correct?</x-t><x-say>You can’t guarantee it with an LLM alone: ground quizzes in the generated lessons, verify with a second model or a judge, flag low-confidence items for review, let users report errors, and for factual domains retrieve trusted sources (RAG) before generating.</x-say>
+<x-simple>LLM-generated facts can be wrong. Mitigations: ground lessons in trusted sources (RAG over course materials or vetted references) instead of model memory, verify quiz keys against the lesson text with a second model, flag low-confidence or numeric claims for review, keep a human review step before publishing for high-stakes topics, and let learners report errors.</x-simple>
+<x-fu q="Can you ever guarantee correctness?">No; you can raise confidence and make errors visible and fixable quickly.</x-fu>
+<x-no>“Temperature 0 makes it correct.”</x-no>
+<x-ev>Honest limits.</x-ev></x-q>
+<x-q n="14.31" tag="must solid"><x-t>How would you evaluate course quality?</x-t><x-say>Automatic checks (coverage of objectives, readability, duplicate rate, quiz validity), judge scores on a rubric, human review of samples, and learner signals (completion, quiz scores, ratings, reports).</x-say>
+<x-simple>Combine automatic metrics (objective coverage, readability level, duplication rate, quiz validity and key agreement, length targets), rubric-based judge scores (accuracy, clarity, pedagogy) checked against human ratings, and learner outcomes (completion, quiz performance, ratings, reports). Track by model and prompt version to compare changes.</x-simple>
+<x-fu q="How do you calibrate the judge?">Have humans rate a sample, compare with judge scores, adjust the rubric until they agree well enough.</x-fu>
+<x-no>Only asking users if they liked it.</x-no>
+<x-ev>Evaluation.</x-ev></x-q>
+<x-q n="14.32" tag="must solid"><x-t>How would you reduce the cost of generating large courses?</x-t><x-say>Approve the outline before spending on lessons; smaller models for quizzes and checks; cap lesson length; reuse content for repeated topics (cache by normalised topic + level); never regenerate finished lessons on retry; batch where possible; log tokens per course and enforce per-user budgets.</x-say>
+<x-simple>Cost is dominated by lesson generation (most calls, most output tokens). Reduce it by catching bad plans early (approval before lessons), sizing outputs (token caps per lesson), matching models to tasks (smaller models for quizzes and checks), never regenerating finished items on retries, reusing content for repeated topics, and showing an estimate with per-user budgets.</x-simple>
+<x-eg>For a 10-module course: approval before lessons (avoid wasted 40+ calls), smaller model for quizzes (~60% cheaper per call), lesson cap 1,200 tokens, cache outlines for popular topics, and skip-if-exists on retries.</x-eg>
+<x-fu q="How would you show cost to users?">Estimate before generation (modules × lessons × average tokens × price) and enforce per-user monthly budgets.</x-fu>
+<x-no>“Use the cheapest model everywhere.”</x-no>
+<x-ev>Cost engineering.</x-ev></x-q>
 
 <h2 class="sec"><span class="k">✓</span>Checkpoint</h2>
 <x-quiz id="qz-p14">

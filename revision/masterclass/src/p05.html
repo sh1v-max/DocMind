@@ -63,12 +63,13 @@ async function callOnce(body, { timeoutMs = 30_000, signal } = {}) {
 }
 
 export async function chat({ messages, model = process.env.LLM_MODEL, temperature = 0.2, maxTokens = 800, schema, attempts = 3 }) {
-  const body = { model, messages, temperature, max_tokens: maxTokens };
+  const body = { model, messages, temperature, max_tokens: maxTokens };   // some APIs/models call it max_completion_tokens or max_output_tokens
   if (schema) {
     // constrained decoding: the provider is asked to only produce JSON matching this schema.
     // Strict modes usually require every field to be required and additionalProperties: false:
     // print z.toJSONSchema(schema) once and check it against your provider's rules.
-    body.response_format = { type: 'json_schema', json_schema: { name: 'output', strict: true, schema: z.toJSONSchema(schema) } };
+    const { $schema, ...jsonSchema } = z.toJSONSchema(schema);   // Zod 4 adds a $schema key; some providers reject it
+    body.response_format = { type: 'json_schema', json_schema: { name: 'output', strict: true, schema: jsonSchema } };
   }
   for (let attempt = 1; ; attempt++) {
     const started = Date.now();
@@ -149,6 +150,8 @@ app.post('/chat/stream', requireAuth, async (req, res) => {
     res.end();
   }
 });</pre></x-impl>
+
+<x-walk><ol><li>Client POSTs; the server registers <code>res.on('close')</code> to abort the provider call if the user leaves.</li><li>Headers sent: <code>text/event-stream</code>, no cache, no proxy buffering. From now on the status is 200 and errors must be events.</li><li>The provider stream arrives in arbitrary byte chunks; TextDecoder with <code>stream: true</code> keeps multi-byte characters intact; <code>\r\n</code> is normalised; events are cut at blank lines; the partial tail stays in the buffer.</li><li>Each <code>data:</code> JSON is parsed; the text delta is appended to <code>full</code> and forwarded as <code>data: {"text": …}</code>.</li><li><code>[DONE]</code> or end of stream → the full answer is saved (exactly what was streamed) → <code>event: done</code> → <code>res.end()</code>.</li><li>If the provider fails mid-stream → <code>event: error</code> unless the abort came from the client leaving.</li></ol></x-walk>
 <x-mist><ul><li>Not handling a client disconnect: the server keeps paying for tokens nobody reads (DocMind has this gap: ISSUES #5).</li><li>Splitting events on single newlines or decoding chunks without <code>{ stream: true }</code>.</li><li>Proxies buffering the response (<code>X-Accel-Buffering: no</code>, compression off for SSE).</li></ul></x-mist>
 </x-lesson>
 
@@ -203,7 +206,11 @@ app.post('/chat/stream', requireAuth, async (req, res) => {
 <x-fu q="How do you count tokens before sending?">Use the provider’s tokenizer library or count-tokens endpoint; for estimates, ~4 characters per English token.</x-fu>
 <x-no>“1 token = 1 word.”</x-no>
 <x-ev>Basics.</x-ev></x-q>
-<x-q n="5.8" tag="must basic"><x-t>How does tokenization work?</x-t><x-say>A tokenizer (often byte-pair encoding) has a vocabulary learned from data: it starts from bytes and merges the most frequent pairs into larger pieces. Text is split into the longest known pieces and mapped to integer ids.</x-say><x-fu q="Why do models struggle to count letters in a word?">They see tokens, not letters: “strawberry” may be two or three tokens, so letter-level questions are hard.</x-fu><x-ev>Intuition.</x-ev></x-q>
+<x-q n="5.8" tag="must basic"><x-t>How does tokenization work?</x-t><x-say>A tokenizer (often byte-pair encoding) has a vocabulary learned from data: it starts from bytes and merges the most frequent pairs into larger pieces. Text is split into the longest known pieces and mapped to integer ids.</x-say>
+<x-simple>Tokenizers are trained once on a large corpus. Byte-pair encoding (BPE) starts from bytes or characters and repeatedly merges the most frequent adjacent pair into a new token until the vocabulary reaches its target size (e.g. 100K). At runtime the text is split by applying the learned merges greedily, then each piece is mapped to its integer id. Spaces usually attach to the following word (“ Paris”), so “Paris” at the start of a line and “ Paris” mid-sentence can be different tokens. Different models use different tokenizers, so token counts differ between providers.</x-simple>
+<x-eg>Try the token counter toy above: common words stay whole, “pgvector” splits into pieces.</x-eg><x-fu q="Why do models struggle to count letters in a word?">They see tokens, not letters: “strawberry” may be two or three tokens, so letter-level questions are hard.</x-fu>
+<x-no>“Tokenization splits on spaces.”</x-no>
+<x-ev>Intuition.</x-ev></x-q>
 <x-q n="5.9" tag="must basic"><x-t>What is a context window?</x-t><x-say>The maximum number of tokens the model can consider in one call: system prompt + history + retrieved context + tool results + the output it generates.</x-say>
 <x-simple>The context window is a hard limit on the total tokens the model can process in one request, input plus output. Everything the model “knows” about this conversation must fit: system instructions, tool definitions, history, retrieved documents, tool results, and room for the answer. Larger windows cost more per call and can reduce attention to details in the middle (“lost in the middle”), so good systems send the most relevant context, not the most context.</x-simple>
 <x-eg>A 128K-token window can hold a long report, but sending it on every chat turn costs 128K input tokens per message.</x-eg>
@@ -211,6 +218,7 @@ app.post('/chat/stream', requireAuth, async (req, res) => {
 <x-no>“A bigger context window means the model remembers past conversations.”</x-no>
 <x-ev>Basics.</x-ev></x-q>
 <x-q n="5.10" tag="must solid"><x-t>What happens when a conversation exceeds the context window?</x-t><x-say>The API rejects the request (or the provider truncates), so the app must manage context: keep the last N turns, summarise older turns, retrieve relevant past messages, and trim large tool results.</x-say>
+<x-simple>The provider either rejects the request (context length exceeded) or, in some products, silently truncates. Your app must manage context explicitly: count tokens, keep a budget per section (system, tools, retrieved context, history, answer), drop or summarise the oldest turns, and keep critical facts in a running summary or structured memory. Retrieval over past messages can bring back old details only when relevant.</x-simple>
 <x-eg>A support chat at turn 60: the API returns a context-length error, or you silently drop the oldest turns and the bot forgets the customer’s order number given at turn 2.</x-eg><x-dm>DocMind sends the last 8 messages (<code>HISTORY_LIMIT</code>), counted in messages, not tokens (ISSUES #11: eight huge messages could still be too big).</x-dm>
 <x-fu q="How would you keep important facts from early turns?">Running summaries that explicitly keep entities (names, ids, decisions), or extract key facts into structured memory, and retrieve relevant earlier messages by similarity.</x-fu>
 <x-no>“The model just remembers everything.”</x-no>
@@ -221,8 +229,11 @@ app.post('/chat/stream', requireAuth, async (req, res) => {
 <x-fu q="Where do you find the counts?">In the response’s usage field (OpenAI: <code>usage.prompt_tokens</code>/<code>completion_tokens</code>; Gemini: <code>usageMetadata</code>).</x-fu>
 <x-no>“Only the answer is billed.”</x-no>
 <x-ev>Cost awareness.</x-ev></x-q>
-<x-q n="5.12" tag="must basic"><x-t>How is LLM API pricing generally calculated?</x-t><x-say>Per million tokens, with separate prices for input and output tokens, varying by model; some providers discount cached input tokens or batch jobs. Cost per call = in_tokens × in_price + out_tokens × out_price.</x-say><x-eg>Illustrative prices only: at $0.50 per 1M input and $1.50 per 1M output, a call with 3,000 in + 500 out costs 0.0015 + 0.00075 = $0.00225; 100,000 such calls ≈ $225.</x-eg>
+<x-q n="5.12" tag="must basic"><x-t>How is LLM API pricing generally calculated?</x-t><x-say>Per million tokens, with separate prices for input and output tokens, varying by model; some providers discount cached input tokens or batch jobs. Cost per call = in_tokens × in_price + out_tokens × out_price.</x-say>
+<x-simple>Providers charge per million tokens, with separate input and output prices that depend on the model (larger models cost more), sometimes discounted cached input tokens, batch APIs at a discount, and extra charges for images/audio or tools. Embeddings are priced per input token only. Your cost per request = input tokens × input price + output tokens × output price, summed over every call the request makes (rewrite, classifier, agent steps, retries).</x-simple><x-eg>Illustrative prices only: at $0.50 per 1M input and $1.50 per 1M output, a call with 3,000 in + 500 out costs 0.0015 + 0.00075 = $0.00225; 100,000 such calls ≈ $225.</x-eg>
 <x-fu q="How would you estimate monthly cost for a feature?">Average input and output tokens per call × calls per user per day × users × 30 × prices, plus retries and agent steps; then verify with logged usage after launch.</x-fu>
+
+<x-no>“It’s priced per request.”</x-no>
 <x-ev>Cost reasoning.</x-ev></x-q>
 <x-q n="5.13" tag="must basic"><x-t>What is temperature?</x-t><x-say>A sampling setting that scales how random token selection is. Low = focused and repeatable; high = varied and creative but riskier.</x-say>
 <x-simple>Temperature T rescales logits before softmax: p_i ∝ exp(logit_i / T). T &lt; 1 sharpens (the top token gets even more probability), T &gt; 1 flattens (unlikely tokens gain probability), T → 0 approaches greedy decoding. It controls randomness, not intelligence or truthfulness: a hallucination at T=0 is just a repeatable hallucination.</x-simple>
@@ -295,6 +306,8 @@ const { $schema, ...jsonSchema } = z.toJSONSchema(Quiz);   // strip $schema: som
 <x-q n="5.24" tag="should basic"><x-t>What is a multimodal model?</x-t><x-say>A model that accepts or produces more than text: images, audio, video, PDFs. For example, sending a scanned page image and asking for its text.</x-say>
 <x-simple>Multimodal models accept several input types in one request (text plus images, audio, video, PDFs) and some generate images or audio. Inputs are converted to tokens/embeddings of their own (image patches, audio frames) and processed with the text. Uses in backends: OCR-free document understanding, chart reading, screenshot debugging, voice interfaces, image captioning for search.</x-simple><x-eg>Could replace OCR for scanned PDFs in DocMind (currently rejected with 400).</x-eg>
 <x-fu q="What’s the cost catch?">Images and audio count as many tokens; high-resolution pages can be expensive, so downscale and crop where possible.</x-fu>
+
+<x-no>“Multimodal means the model can browse the web.”</x-no>
 <x-ev>Breadth.</x-ev></x-q>
 <x-q n="5.25" tag="must basic"><x-t>What’s the difference between an LLM and an embedding model?</x-t><x-say>An LLM generates text token by token. An embedding model maps text to one fixed-length vector that represents its meaning, used for search and similarity. Different models, different APIs, different prices.</x-say>
 <x-simple>Both are neural networks, often transformers, but trained for different outputs. A generative LLM outputs a token at a time and is used through generate/chat endpoints. An embedding model outputs one vector per input, trained so similar meanings are close; it’s much cheaper and faster per input, can’t write text, and is used for search, clustering, deduplication and routing.</x-simple>
@@ -315,15 +328,20 @@ const { $schema, ...jsonSchema } = z.toJSONSchema(Quiz);   // strip $schema: som
 <x-fu q="Which parts add latency you can control?">Prompt length (prefill), output length (decode), number of sequential calls, region distance, and retries.</x-fu>
 <x-no>“The request goes straight to the model.”</x-no>
 <x-ev>End-to-end model.</x-ev></x-q>
-<x-q n="5.28" tag="must basic"><x-t>How do you handle API timeouts?</x-t><x-say>Pass an AbortSignal with a timeout to fetch so the request is really cancelled, choose limits per use (streaming: time to first token + idle timeout), treat timeouts as retryable with backoff, and give the user a clear message.</x-say>
-<x-simple>Two kinds of timeouts: connection/first-byte (the provider isn’t answering) and total/idle (a stream stalls). Use <code>AbortSignal.timeout(ms)</code> (or an AbortController) so the HTTP request is actually cancelled and stops costing. Pick values from measured p99 latency plus margin, shorter for interactive calls, longer for batch jobs; retry timeouts with backoff (they’re transient) and keep an overall deadline for the user request.</x-simple><x-code><pre data-l="js">await fetch(url, { signal: AbortSignal.timeout(30_000), ... });</pre></x-code>
+<x-q n="5.28" tag="must basic"><x-t>How do you handle API timeouts?</x-t>
+<x-say>Pass an AbortSignal with a timeout to fetch so the request is really cancelled, choose limits per use (streaming: time to first token + idle timeout), treat timeouts as retryable with backoff, and give the user a clear message.</x-say>
+<x-simple>Two kinds of timeouts: connection/first-byte (the provider isn’t answering) and total/idle (a stream stalls). Use <code>AbortSignal.timeout(ms)</code> (or an AbortController) so the HTTP request is actually cancelled and stops costing. Pick values from measured p99 latency plus margin, shorter for interactive calls, longer for batch jobs; retry timeouts with backoff (they’re transient) and keep an overall deadline for the user request.</x-simple>
 <x-eg>Chat: first token within 15 s and no gap over 30 s, else abort and show a retry message; background summarisation: 120 s total.</x-eg>
+<x-code><pre data-l="js">await fetch(url, { signal: AbortSignal.timeout(30_000), ... });</pre></x-code>
+<x-fu q="What timeout would you use for a streaming chat call?">Two: a first-token timeout (e.g. 15–20 s) and an idle timeout between chunks (e.g. 30 s), rather than one total timeout that would cut long answers.</x-fu>
 <x-no>“Promise.race cancels the request.” It only stops waiting.</x-no>
 <x-ev>Robustness.</x-ev></x-q>
 <x-q n="5.29" tag="must basic"><x-t>What happens if an LLM provider returns a 429 response?</x-t><x-say>You hit a rate or quota limit (requests or tokens per minute, or daily). Back off and retry, honouring Retry-After; limit your own concurrency; queue work; and if it persists, fall back to another model or tell the user to retry later.</x-say>
 <x-simple>429 means a limit was exceeded: requests per minute, tokens per minute, or a daily/monthly quota. Short-term limits recover after a delay (honour the <code>Retry-After</code> header); quota exhaustion won’t recover by retrying. Prevention matters more than retrying: client-side rate limiting/concurrency caps, batching, spreading background jobs, and per-user budgets so one user can’t exhaust the shared limit.</x-simple>
 <x-eg>DocMind’s free tier allows 15 Flash-Lite requests per minute; a burst of 20 simultaneous chats would get 429s without a limiter.</x-eg><x-dm>DocMind’s free-tier limits: Flash-Lite 15 requests/min and 500/day; embeddings 100 requests/min, 30K tokens/min. Batch embeddings count per text, so running the router eval twice within a minute got a 429.</x-dm>
 <x-fu q="How do you distinguish rate limit from quota?">Read the error body/code (providers differentiate “rate limit” and “quota exceeded”) and the headers; alert on quota errors instead of retrying.</x-fu>
+
+<x-no>Retrying immediately in a loop, which extends the rate limit.</x-no>
 <x-ev>Operational awareness.</x-ev></x-q>
 <x-q n="5.30" tag="must basic"><x-t>How would you implement retries?</x-t><x-say>A wrapper that retries only retryable errors (timeouts, 429, 5xx), with a max attempt count, exponential backoff with jitter, Retry-After support and a total time budget.</x-say><x-simple><p>See <code>chat()</code> above and Phase 11 exercise 3.</p></x-simple>
 <x-eg><code>retryWithBackoff(() => callModel(body), 3, { baseMs: 500 })</code> from Phase 11, wrapped around only the HTTP call, not around validation of the content.</x-eg>
@@ -350,6 +368,7 @@ export function generate(task, req) {
 <x-no>“Just change the model name.”</x-no>
 <x-ev>Design for change.</x-ev></x-q>
 <x-q n="5.33" tag="must solid"><x-t>What is model fallback?</x-t><x-say>Automatically trying a different model or provider when the primary fails (outage, 429, timeout) or returns invalid output, so the feature degrades instead of breaking.</x-say>
+<x-simple>Fallback is a degradation strategy: when the primary model is unavailable or keeps failing, try an alternative that can do the same job acceptably (smaller model, another provider, cached answer, or a non-LLM path). It must be configured per task, combined with a circuit breaker so you stop hammering a dead provider, and validated: the fallback’s outputs go through the same schemas and evals, and logs record which model served each request.</x-simple>
 <x-eg>Primary: a large model; on 429/5xx/timeout after retries → a smaller model from another provider for the same task; if that fails → a cached or canned answer with a clear message.</x-eg>
 <x-code><pre data-l="js">async function generateWithFallback(req, chain = config.fallbacks[req.task]) {
   let lastErr;
@@ -369,19 +388,25 @@ export function generate(task, req) {
 <x-no>“Fallback means retrying the same model.”</x-no>
 <x-ev>Resilience.</x-ev></x-q>
 <x-q n="5.34" tag="must solid"><x-t>How would you control LLM costs?</x-t><x-say>Measure first (tokens per feature and per user), then: shorter prompts and less context, fewer and smaller retrieved chunks, history summarisation, cheaper models for easy steps, caching, max output limits, per-user budgets and rate limits, and avoiding unnecessary calls (route without an LLM when possible).</x-say>
+<x-simple>Costs = calls × tokens × price. Reduce calls (route without an LLM when possible, cache, avoid redundant agent steps and retries), reduce tokens (shorter system prompts, fewer and smaller chunks, history budgets and summaries, capped output length), and reduce price (smaller models for easy tasks, batch APIs for offline jobs, provider prompt caching for repeated prefixes). Enforce per-user budgets and monitor continuously.</x-simple>
 <x-eg>A support bot cut costs by routing FAQ-like questions (classified by a small model) to a cheap model, capping history at 2,000 tokens with summaries, and caching answers to the top 200 questions.</x-eg><x-dm>DocMind’s router tries example-phrase vectors first (free, the message is embedded anyway) and only calls the LLM classifier on close calls: LLM used on 17 of 52 eval messages.</x-dm>
 <x-fu q="Which single change usually saves the most?">It depends on measurement, but trimming context (history and retrieved chunks) and using a smaller model for easy steps are typical big wins.</x-fu>
 <x-no>“Use temperature 0 to save money.”</x-no>
 <x-ev>Cost engineering.</x-ev></x-q>
-<x-q n="5.35" tag="must basic"><x-t>How would you monitor token usage?</x-t><x-say>Log the usage fields from every response with model, feature, user id, latency and request id; aggregate into dashboards (cost per day, per feature, per user); alert on spikes; enforce budgets.</x-say>
-<x-simple>Monitoring token usage means turning every call’s usage numbers into data: log them with context, aggregate per feature, model, user and day, convert to cost with a price table, and alert on anomalies (per-user spikes, per-request outliers, sudden daily growth). It answers “why is the bill up?” in minutes instead of days and lets you enforce budgets.</x-simple><x-code><pre data-l="sql">CREATE TABLE llm_calls (id bigserial PRIMARY KEY, user_id uuid, feature text, model text,
-  input_tokens int, output_tokens int, latency_ms int, status text, created_at timestamptz DEFAULT now());</pre></x-code>
+<x-q n="5.35" tag="must basic"><x-t>How would you monitor token usage?</x-t>
+<x-say>Log the usage fields from every response with model, feature, user id, latency and request id; aggregate into dashboards (cost per day, per feature, per user); alert on spikes; enforce budgets.</x-say>
+<x-simple>Monitoring token usage means turning every call’s usage numbers into data: log them with context, aggregate per feature, model, user and day, convert to cost with a price table, and alert on anomalies (per-user spikes, per-request outliers, sudden daily growth). It answers “why is the bill up?” in minutes instead of days and lets you enforce budgets.</x-simple>
 <x-eg>A dashboard showing cost per active user per day, top 10 users by tokens, and tokens per request by endpoint.</x-eg>
+<x-code><pre data-l="sql">CREATE TABLE llm_calls (id bigserial PRIMARY KEY, user_id uuid, feature text, model text,
+  input_tokens int, output_tokens int, latency_ms int, status text, created_at timestamptz DEFAULT now());</pre></x-code>
+<x-fu q="What alert would you set first?">Daily spend (and tokens per request) exceeding a multiple of the trailing 7-day average, plus a per-user daily cap alert.</x-fu>
 <x-no>Looking only at the provider’s monthly invoice.</x-no>
 <x-ev>Observability.</x-ev></x-q>
 <x-q n="5.36" tag="must basic"><x-t>How would you handle malformed LLM responses?</x-t><x-say>Parse defensively, validate with a schema, retry a limited number of times (optionally feeding back the error), then fail cleanly or fall back. Never let unvalidated output reach the database or the user’s screen as trusted data.</x-say>
 <x-simple>Malformed means: not parseable, wrong shape, truncated, extra prose around JSON, or semantically wrong (invalid ids, impossible values). Handle it with a pipeline: check finish reason → extract/parse → schema validation → business validation → on failure retry with a limit (optionally including the error) → then fail cleanly (error to the user, job marked failed) and log the raw output for debugging.</x-simple>
 <x-eg>The model returns “Here is your JSON: ```json {…} ```”: either strip the fence carefully or (better) use structured-output mode so it doesn’t happen.</x-eg>
+
+<x-fu q="Should you show the raw invalid output to the user?">No: show a clear failure and retry option; keep the raw output in logs for debugging.</x-fu>
 <x-no>“Wrap JSON.parse in try/catch and return an empty object.”</x-no>
 <x-ev>Robustness.</x-ev></x-q>
 <x-q n="5.37" tag="must basic"><x-t>How would you validate structured LLM output?</x-t><x-say>JSON.parse in a try, then Zod safeParse with all constraints (types, enums, ranges, lengths, refinements like “options unique”), plus business checks against your data (ids exist, the cited chunk exists).</x-say>
@@ -402,6 +427,7 @@ export function generate(task, req) {
 <x-no>“It’s just users being rude.”</x-no>
 <x-ev>Security awareness.</x-ev></x-q>
 <x-q n="5.39" tag="must solid"><x-t>How would you defend against prompt injection?</x-t><x-say>Assume it will sometimes succeed and limit the damage: least-privilege tools with scope from code, validation of tool arguments and outputs, human approval for risky actions, separating and labelling untrusted content, output encoding, and monitoring. Prompt wording helps but isn’t a control.</x-say>
+<x-simple>Assume some injections will succeed and design so that success does little harm. Layers: least-privilege tools whose scope (user, tenant) comes from code; argument validation; approval for side effects; separating and labelling untrusted content (delimiters, “data not instructions”); output handling (no raw HTML, no auto-executing model output, check links/emails against the source); input heuristics/classifiers for known attack patterns; and monitoring/red-team tests in the eval set.</x-simple>
 <x-eg>An email-summarising agent: tools can read the user’s inbox but sending email requires a confirmation click; retrieved emails are wrapped as data; outputs are rendered as text, not HTML.</x-eg>
 <x-code><pre data-l="js">const system = [
   'You summarise documents for the user.',
@@ -410,6 +436,8 @@ export function generate(task, req) {
 const user = `&lt;document&gt;\n${doc.replaceAll('&lt;/document&gt;', '')}\n&lt;/document&gt;\nSummarise the document above.`;
 // plus, in code: no tool can act outside the user's scope; risky tools need approval;
 // flag outputs that contain URLs/emails not present in the source.</pre></x-code>
+
+<x-fu q="What is a canary or spotlighting technique?">Marking untrusted text (e.g. wrapping or encoding it) so the model can tell it apart, or inserting a secret marker in the system prompt and alerting if it appears in output (a sign the prompt leaked).</x-fu>
 <x-no>“A good system prompt prevents injection.”</x-no>
 <x-ev>Defence in depth.</x-ev></x-q>
 <x-q n="5.40" tag="must solid"><x-t>How would you prevent sensitive data from being sent to an LLM?</x-t><x-say>Send only what the task needs; redact or mask PII and secrets before the call (regex + NER-based detectors); choose providers with no-training/data-retention terms and the right region; never put credentials in prompts; log prompts carefully (they may contain user data).</x-say>

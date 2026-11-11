@@ -1,0 +1,1569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocMind Phase 6 Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: same shell as the Phase 7 walkthrough (sticky contents rail, one
+   reading column, step-through "players"), recoloured for the queue: teal is the
+   terminal's green "queue" log theme. Every job state keeps one colour everywhere
+   (waiting blue, active amber, delayed violet, completed green, failed red),
+   always written next to its name. */
+:root {
+  --bg: #f1f5f4;
+  --surface: #ffffff;
+  --ink: #13201d;
+  --muted: #55645f;
+  --line: #d5dfdb;
+  --accent: #0d7a60;
+  --accent-soft: #dcefe8;
+  --code-bg: #ecf2f0;
+  --good: #1d8549;
+  --bad: #c0352a;
+  --warn: #9a6400;
+  --s-wait: #3361c9;
+  --s-active: #a86500;
+  --s-delayed: #7449cc;
+  --s-done: #1d8549;
+  --s-failed: #c0352a;
+  --term-bg: #0f1a17;
+  --term-ink: #d3e4de;
+  --term-dim: #7f9a91;
+  --term-green: #5fd49c;
+  --term-red: #ff8a7d;
+  --term-cyan: #6cc9e0;
+  --term-yellow: #f0c25a;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --radius: 10px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1412; --surface: #16201d; --ink: #e3eeea; --muted: #9db0aa; --line: #283632;
+    --accent: #4fd1a8; --accent-soft: #1b3a31; --code-bg: #111a17;
+    --good: #52c684; --bad: #ff7b6f; --warn: #f2b54d;
+    --s-wait: #7397f0; --s-active: #e5a23a; --s-delayed: #ad8cf5; --s-done: #52c684; --s-failed: #ff7b6f;
+    --term-bg: #08100d;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1412; --surface: #16201d; --ink: #e3eeea; --muted: #9db0aa; --line: #283632;
+  --accent: #4fd1a8; --accent-soft: #1b3a31; --code-bg: #111a17;
+  --good: #52c684; --bad: #ff7b6f; --warn: #f2b54d;
+  --s-wait: #7397f0; --s-active: #e5a23a; --s-delayed: #ad8cf5; --s-done: #52c684; --s-failed: #ff7b6f;
+  --term-bg: #08100d;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; animation: none !important; } }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.62 var(--font-body); }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.shell { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 40px; max-width: 1280px; margin: 0 auto; padding: 32px 24px 80px; }
+nav.toc { position: sticky; top: 24px; align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; font-size: 14px; }
+nav.toc h2 { font: 600 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+nav.toc a { display: grid; grid-template-columns: 26px 1fr; gap: 4px; padding: 5px 8px; border-radius: 6px; color: var(--ink); text-decoration: none; }
+nav.toc a span { font: 12px/1.7 var(--font-mono); color: var(--muted); }
+nav.toc a:hover { background: var(--accent-soft); }
+main { min-width: 0; }
+
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; }
+h1 { font-size: clamp(32px, 4.6vw, 52px); font-weight: 800; margin: 0 0 14px; letter-spacing: -.01em; }
+h2 { font-size: 30px; font-weight: 800; margin: 0 0 6px; }
+h3 { font-size: 19px; font-weight: 600; margin: 28px 0 10px; }
+p, li { max-width: 72ch; }
+.eyebrow { font: 600 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
+.lede { font-size: 19px; color: var(--muted); max-width: 64ch; margin: 0 0 22px; }
+section { padding: 44px 0 8px; border-top: 1px solid var(--line); margin-top: 36px; scroll-margin-top: 16px; }
+section.hero { border-top: 0; margin-top: 0; padding-top: 8px; }
+.sec-head { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; margin-bottom: 4px; }
+.sec-head .num { font: 600 14px/1 var(--font-mono); color: var(--accent); }
+.sec-head .tag { font: 12px/1 var(--font-mono); color: var(--muted); border: 1px solid var(--line); padding: 4px 8px; border-radius: 99px; }
+.sub { color: var(--muted); margin: 0 0 18px; }
+
+code, pre, .mono { font-family: var(--font-mono); }
+:not(pre) > code { font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.55; margin: 12px 0; }
+pre .c { color: var(--muted); }
+pre .k { color: var(--accent); font-weight: 600; }
+pre .hl { background: var(--accent-soft); display: inline-block; width: 100%; }
+.file { font: 12px/1 var(--font-mono); color: var(--muted); margin: 14px 0 -6px; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px 20px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.card h4 { margin: 0 0 6px; font: 600 15px/1.3 var(--font-body); }
+.card p { margin: 0; font-size: 15px; color: var(--muted); }
+.card p + p { margin-top: 8px; }
+.card.key { border-color: var(--accent); }
+
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.stat b { display: block; font: 800 30px/1.1 var(--font-display); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 13px; color: var(--muted); }
+
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); margin: 12px 0; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px/1.3 var(--font-mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; margin: 14px 0; font-size: 15px; max-width: 80ch; }
+.note.warn { border-left-color: var(--warn); }
+.note.bad { border-left-color: var(--bad); }
+.say30 { background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 14px 18px; margin: 18px 0; }
+.say30 .eyebrow { margin-bottom: 6px; }
+.say30 p { margin: 0; font-size: 16px; }
+
+/* players */
+.player { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 16px 0; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.btn { font: 600 13px/1 var(--font-body); padding: 8px 13px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.progress { font: 12px/1 var(--font-mono); color: var(--muted); margin-left: auto; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.tabs .btn { font-weight: 500; }
+.say { min-height: 3.2em; background: var(--accent-soft); border-radius: 8px; padding: 10px 14px; font-size: 15px; margin-bottom: 12px; }
+.say b { font-family: var(--font-mono); font-size: 12px; color: var(--accent); margin-right: 6px; }
+.caption { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { font: 12.5px/1.3 var(--font-mono); padding: 6px 9px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); opacity: .3; transition: opacity .25s, border-color .25s, background .25s; }
+.chip.lit { opacity: 1; }
+.chip.lit.bad { border-color: var(--bad); color: var(--bad); }
+.chip.lit.good { border-color: var(--good); color: var(--good); }
+.chip.lit.key { border-color: var(--accent); background: var(--accent-soft); }
+.arrow { color: var(--muted); font-size: 13px; }
+
+/* terminal */
+.term { background: var(--term-bg); color: var(--term-ink); border-radius: 10px; padding: 12px 14px; font: 12.5px/1.6 var(--font-mono); min-height: 120px; max-height: 300px; overflow-y: auto; }
+.term div { white-space: pre-wrap; word-break: break-word; }
+.term .q { color: var(--term-green); }
+.term .u { color: var(--term-cyan); }
+.term .e { color: var(--term-red); }
+.term .y { color: var(--term-yellow); }
+.term .d { color: var(--term-dim); }
+.term .new { animation: fadein .35s ease; }
+@keyframes fadein { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+/* state machine */
+.states { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.state { border: 2px solid var(--line); border-radius: 10px; padding: 10px 8px; text-align: center; background: var(--bg); transition: border-color .25s, background .25s, transform .25s; }
+.state b { display: block; font: 600 13px/1.2 var(--font-mono); }
+.state span { font-size: 12px; color: var(--muted); }
+.state[data-s="waiting"] b { color: var(--s-wait); }
+.state[data-s="active"] b { color: var(--s-active); }
+.state[data-s="delayed"] b { color: var(--s-delayed); }
+.state[data-s="completed"] b { color: var(--s-done); }
+.state[data-s="failed"] b { color: var(--s-failed); }
+.state.on[data-s="waiting"] { border-color: var(--s-wait); background: color-mix(in srgb, var(--s-wait) 12%, var(--surface)); transform: translateY(-2px); }
+.state.on[data-s="active"] { border-color: var(--s-active); background: color-mix(in srgb, var(--s-active) 12%, var(--surface)); transform: translateY(-2px); }
+.state.on[data-s="delayed"] { border-color: var(--s-delayed); background: color-mix(in srgb, var(--s-delayed) 12%, var(--surface)); transform: translateY(-2px); }
+.state.on[data-s="completed"] { border-color: var(--s-done); background: color-mix(in srgb, var(--s-done) 12%, var(--surface)); transform: translateY(-2px); }
+.state.on[data-s="failed"] { border-color: var(--s-failed); background: color-mix(in srgb, var(--s-failed) 12%, var(--surface)); transform: translateY(-2px); }
+.panes { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 12px; }
+.pane { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--bg); min-width: 0; }
+.pane h4 { margin: 0 0 8px; font: 600 12px/1 var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.kv { display: grid; gap: 4px; font: 12.5px/1.4 var(--font-mono); }
+.kv .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 4px 8px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); transition: background .3s; }
+.kv .row .t { color: var(--muted); }
+.kv .row.chg { background: var(--accent-soft); border-color: var(--accent); }
+.kv .row.gone { opacity: .35; text-decoration: line-through; }
+.kv .empty { color: var(--muted); font-style: italic; padding: 4px 8px; }
+.db { display: grid; gap: 8px; font: 13px/1.4 var(--font-mono); }
+.pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font: 600 12px/1.6 var(--font-mono); border: 1px solid currentColor; }
+.pill.processing { color: var(--s-active); }
+.pill.ready { color: var(--s-done); }
+.pill.failed { color: var(--s-failed); }
+.pill.gone { color: var(--muted); }
+.cells { display: flex; flex-wrap: wrap; gap: 4px; min-height: 30px; }
+.cell { width: 34px; height: 28px; border-radius: 6px; display: grid; place-items: center; font: 600 12px/1 var(--font-mono); background: var(--surface); border: 1px solid var(--accent); color: var(--accent); animation: fadein .3s ease; }
+.cell.dup { border-color: var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, var(--surface)); }
+.cell.orphan { border-style: dashed; border-color: var(--warn); color: var(--warn); }
+
+/* timeline */
+.tl { position: relative; display: grid; gap: 10px; }
+.tl-row { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; align-items: center; }
+.tl-row > span { font: 600 12px/1.2 var(--font-mono); color: var(--muted); }
+.track { position: relative; height: 34px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg { position: absolute; top: 4px; bottom: 4px; border-radius: 5px; font: 11px/24px var(--font-mono); padding: 0 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .15; transition: opacity .2s; color: var(--ink); background: var(--accent-soft); border: 1px solid var(--accent); }
+.seg.lit { opacity: 1; }
+.seg.wait { background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
+.seg.bad { background: color-mix(in srgb, var(--bad) 14%, var(--surface)); border-color: var(--bad); color: var(--bad); }
+.seg.good { background: color-mix(in srgb, var(--good) 14%, var(--surface)); border-color: var(--good); color: var(--good); }
+.seg.delay { background: color-mix(in srgb, var(--s-delayed) 14%, var(--surface)); border-color: var(--s-delayed); color: var(--s-delayed); }
+.seg.dot { width: 10px !important; padding: 0; border-radius: 50%; top: 11px; bottom: 11px; background: var(--s-wait); border-color: var(--s-wait); }
+.playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); left: 130px; pointer-events: none; transition: left .05s linear; }
+.tl-axis { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 10px; font: 11px/1 var(--font-mono); color: var(--muted); }
+.tl-axis div { display: flex; justify-content: space-between; }
+
+/* race / two columns */
+.race { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .8fr); gap: 10px; }
+.race .col { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg); min-width: 0; }
+.race .col h4 { margin: 0 0 8px; font: 600 12px/1 var(--font-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.race .act { font: 12.5px/1.4 var(--font-mono); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); margin-bottom: 6px; opacity: .25; transition: opacity .25s, border-color .25s; }
+.race .act.lit { opacity: 1; }
+.race .act.lit.bad { border-color: var(--bad); color: var(--bad); }
+.race .act.lit.good { border-color: var(--good); }
+.race .act.spacer { visibility: hidden; }
+
+/* calculator */
+.calc { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 18px; align-items: start; }
+.field { display: grid; gap: 4px; margin-bottom: 14px; }
+.field label { font-weight: 600; font-size: 14px; }
+.field output { font: 600 13px/1 var(--font-mono); color: var(--accent); }
+.field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.field .hint { font-size: 12.5px; color: var(--muted); }
+.bars { display: grid; gap: 10px; }
+.bar { display: grid; gap: 4px; }
+.bar .lbl { display: flex; justify-content: space-between; font-size: 13px; gap: 8px; }
+.bar .lbl b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.bar .track2 { position: relative; height: 22px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+.bar .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); transition: width .3s; }
+.bar .fill.over { background: var(--bad); }
+.bar .limit { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--ink); }
+
+details.q { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; margin: 8px 0; }
+details.q summary { cursor: pointer; font-weight: 600; }
+details.q div { margin-top: 10px; color: var(--ink); font-size: 15px; }
+details.q div p { margin: 0 0 8px; }
+
+ul.tight { margin: 8px 0; padding-left: 20px; }
+ul.tight li { margin: 4px 0; }
+.flow { font: 13px/1.5 var(--font-mono); background: var(--code-bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; overflow-x: auto; white-space: pre; margin: 12px 0; }
+
+@media (max-width: 960px) {
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  nav.toc { position: static; max-height: none; }
+  nav.toc ol { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid3 { grid-template-columns: minmax(0, 1fr); }
+  .panes, .calc { grid-template-columns: minmax(0, 1fr); }
+  .race { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 600px) {
+  .shell { padding: 20px 16px 60px; }
+  .grid2, .grid4 { grid-template-columns: minmax(0, 1fr); }
+  .states { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tl-row, .tl-axis { grid-template-columns: 70px minmax(0, 1fr); }
+  nav.toc ol { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+<nav class="toc" aria-label="Contents">
+<h2>Phase 6 · Contents</h2>
+<ol>
+<li><a href="#top"><span>00</span>Overview</a></li>
+<li><a href="#timeline"><span>01</span>How it was built</a></li>
+<li><a href="#before"><span>02</span>Before vs after</a></li>
+<li><a href="#words"><span>03</span>The words</a></li>
+<li><a href="#redis"><span>04</span>Redis in 5 minutes</a></li>
+<li><a href="#upstash"><span>05</span>Upstash + prefixes</a></li>
+<li><a href="#lifecycle"><span>06</span>Job lifecycle simulator</a></li>
+<li><a href="#options"><span>07</span>Job + worker options</a></li>
+<li><a href="#upload"><span>08</span>The request side</a></li>
+<li><a href="#enqueue"><span>09</span>The 5 s enqueue race</a></li>
+<li><a href="#connections"><span>10</span>Two connections</a></li>
+<li><a href="#worker"><span>11</span>The worker, line by line</a></li>
+<li><a href="#idempotent"><span>12</span>Idempotency</a></li>
+<li><a href="#race"><span>13</span>The delete race</a></li>
+<li><a href="#failed"><span>14</span>State, not arithmetic</a></li>
+<li><a href="#stalled"><span>15</span>Stalled jobs</a></li>
+<li><a href="#shutdown"><span>16</span>Graceful shutdown</a></li>
+<li><a href="#budget"><span>17</span>Command budget</a></li>
+<li><a href="#status"><span>18</span>Status in the app</a></li>
+<li><a href="#frontend"><span>19</span>Frontend polling</a></li>
+<li><a href="#startup"><span>20</span>Startup + where it runs</a></li>
+<li><a href="#gotchas"><span>21</span>What bit</a></li>
+<li><a href="#tests"><span>22</span>Tests and numbers</a></li>
+<li><a href="#open"><span>23</span>Limits + open ends</a></li>
+<li><a href="#files"><span>24</span>File map</a></li>
+<li><a href="#check"><span>25</span>Check yourself</a></li>
+</ol>
+</nav>
+<main>
+
+<!-- 00 -->
+<section class="hero" id="top">
+  <p class="eyebrow">DocMind · Phase 6 · Background jobs · BullMQ + Redis</p>
+  <h1>The upload stopped waiting for Gemini</h1>
+  <p class="lede">Uploading a PDF used to mean one HTTP request that stayed open while every chunk got embedded. Phase 6 split it in two. The request parses and chunks the PDF, saves the document as <code>processing</code>, puts a job in a Redis queue and answers <b>202</b>. A BullMQ worker picks the job up, embeds the chunks, and flips the document to <code>ready</code>, retrying on its own when Gemini fails.</p>
+
+  <div class="grid4">
+    <div class="stat"><b>~2 s</b><span>live upload answer (202), down from "one Gemini call per chunk"</span></div>
+    <div class="stat"><b>4.4–4.8 s</b><span>live, upload → document <code>ready</code> (Render and Upstash both in Oregon)</span></div>
+    <div class="stat"><b>204% → 33%</b><span>of Upstash's free 500K commands/month, idle worker, defaults vs tuned</span></div>
+    <div class="stat"><b>3.5K</b><span>Upstash commands used that month, all testing included (read 2026-10-15)</span></div>
+  </div>
+
+  <div class="say30">
+    <p class="eyebrow">If an interviewer says "explain your background jobs" (30 seconds)</p>
+    <p>"Uploading a PDF needs one embedding call per chunk, so I moved that out of the request. The request parses and chunks the PDF, inserts the document as <i>processing</i>, adds a BullMQ job to Redis with only the chunk texts, and returns 202. A worker embeds and stores the chunks, then marks the document ready. The job is idempotent: it deletes the document's chunks before inserting, so retries and crash re-runs never duplicate anything. BullMQ retries three times with exponential backoff; after the last failure the document is marked failed. Chat and quiz return 409 until the document is ready, and the frontend polls the document list. I also tuned the worker for Upstash's free plan, because an idle BullMQ worker with default settings would have used twice the monthly command limit."</p>
+  </div>
+
+  <div class="flow">browser ── POST /upload ──► parse + chunk  (fast, needs the PDF bytes)
+                            insert documents row, status = 'processing'
+                            queue.add('ingest', { documentId, userId, chunks }) ──► Redis
+        ◄── 202 { documentId, status: 'processing' }
+
+                worker (inside the same Node process on Render) ◄── takes the job
+                            delete old chunks → embed + store each chunk → status = 'ready'
+                            throws? BullMQ retries (5 s, then 10 s) → after 3 attempts: 'failed'
+
+browser polls GET /documents every 2 s while anything is 'processing'</div>
+  <p class="caption">Every number on this page comes from <code>background-jobs-plan.md</code> §9 (the results log) or the code. Where a player shows timing that wasn't measured, it says so.</p>
+</section>
+
+<!-- 01 -->
+<section id="timeline">
+  <div class="sec-head"><span class="num">01</span><h2>How it was built</h2><span class="tag">2026-10-06 → 10-15</span></div>
+  <p class="sub">Seven steps, each tested against the real stack (Neon, Upstash, Gemini) before the next one started. Each step's test data was deleted by id afterwards.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>Date</th><th>What it added</th><th>Proof</th></tr></thead>
+    <tbody>
+      <tr><td><b>BG.0</b> Prep</td><td>10-06</td><td>Upstash database in Oregon (same region as Render), <code>REDIS_URL</code> + <code>BULLMQ_PREFIX</code> env vars, <code>bullmq 6.3.11</code> + <code>ioredis 6.0.0</code>, <code>status</code>/<code>error</code> columns on <code>documents</code></td><td>Redis <code>PING → PONG</code>, <code>noeviction</code>, columns checked</td></tr>
+      <tr><td><b>BG.1</b> Learning script</td><td>10-06</td><td><code>npm run step5</code>: 3 toy jobs (one succeeds, one retries, one gives up), then an idle worker's Redis commands counted</td><td>defaults 118 cmds / 5 min, tuned 19</td></tr>
+      <tr><td><b>BG.2</b> Queue + worker</td><td>10-14</td><td><code>queue/</code> (connections, queue, shutdown), <code>workers/ingest.worker.ts</code>, idempotent job, <code>npm run worker</code></td><td>9/9 in-process tests · <code>61346fa</code></td></tr>
+      <tr><td><b>BG.3</b> API side</td><td>10-14</td><td><code>/upload</code> → 202, 409 while processing, 503 if Redis is down, "row first" delete, worker started in <code>index.ts</code></td><td>16/16 over HTTP, Redis-down test, crash test (624 s) · <code>3b0db1d</code></td></tr>
+      <tr><td><b>BG.4</b> Frontend</td><td>10-14</td><td>Polling <code>GET /documents</code>, Processing… / Failed in the sidebar, <code>uploadFile()</code> resolves on <i>ready</i></td><td>11/11 in headless Chromium · <code>849251a</code></td></tr>
+      <tr><td><b>BG.5</b> Deploy</td><td>10-14 → 15</td><td>Pushed BG.3 + BG.4 together, checked live</td><td>9/9, found the prefix bug, then 10/10</td></tr>
+      <tr><td><b>BG.6</b> Docs</td><td>10-15</td><td>CLAUDE.md, README, CODE_EXPLAINED, PROGRESS, roadmap, topic 09</td><td>500 + 827 links checked</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 02 -->
+<section id="before">
+  <div class="sec-head"><span class="num">02</span><h2>Before vs after</h2><span class="tag">player</span></div>
+  <p class="sub">Press Play. The top two rows are the old upload, the bottom three are the new one. Switch to the 503 case to see why retrying a <i>job</i> beats retrying a whole <i>upload</i>.</p>
+  <div class="player" id="ba">
+    <div class="tabs" id="ba-tabs"></div>
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" id="ba-clock">t = 0.0</span>
+    </div>
+    <div class="say" id="ba-say"><b>READY</b>Press Play.</div>
+    <div class="tl" id="ba-tl"></div>
+    <p class="caption">Illustrative timing (5 chunks, ~1.4 s per embedding). Measured live after Phase 6: 202 in 2.0–2.5 s, ready in 4.4–4.8 s.</p>
+  </div>
+  <div class="grid3">
+    <div class="card"><h4>Problem 1: a long open request</h4><p>A 30-chunk PDF kept one HTTP request open from 15 s to a few minutes. Proxies (Cloudflare and Render's own) and browsers give up on very long requests.</p></div>
+    <div class="card"><h4>Problem 2: all-or-nothing</h4><p>A Gemini 503 on chunk 17 threw away chunks 1–16. The only retry was "upload again".</p></div>
+    <div class="card"><h4>Problem 3: deploys</h4><p>Render restarts the process on every deploy. An upload in progress died with it.</p></div>
+  </div>
+  <div class="note">The split is called the <b>offline / online split</b>. Chat is <i>online</i> work: someone is waiting for each word. Ingestion is <i>offline</i> work: nobody needs to watch it happen, they only need to know when it's done.</div>
+</section>
+
+<!-- 03 -->
+<section id="words">
+  <div class="sec-head"><span class="num">03</span><h2>The words</h2><span class="tag">vocabulary</span></div>
+  <p class="sub">A restaurant works the same way. The waiter (the request) takes your order, pins a ticket on the rail (the queue) and goes back to the tables. The cook (the worker) takes tickets in order. If the cook burns a dish, they make it again; you don't have to order again.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Word</th><th>Meaning</th><th>In DocMind</th></tr></thead>
+    <tbody>
+      <tr><td><b>Producer</b></td><td>Code that adds jobs</td><td><code>POST /upload</code> → <code>enqueueIngest()</code></td></tr>
+      <tr><td><b>Queue</b></td><td>A named waiting list of jobs, stored in Redis</td><td><code>ingest-pdf</code>, keys under <code>docmind:ingest-pdf:…</code></td></tr>
+      <tr><td><b>Job</b></td><td>One unit of work plus its data</td><td><code>{ documentId, userId, chunks }</code>, <code>jobId = documentId</code></td></tr>
+      <tr><td><b>Worker / consumer</b></td><td>Code that takes jobs and runs them</td><td><code>processIngestJob()</code>, concurrency 1</td></tr>
+      <tr><td><b>Processor</b></td><td>The worker's function. Return = success, throw = failure</td><td>embed + store, then mark <code>ready</code></td></tr>
+      <tr><td><b>Attempt / retry</b></td><td>One run of a job; BullMQ re-runs a failed one by itself</td><td>3 attempts in total</td></tr>
+      <tr><td><b>Backoff</b></td><td>How long to wait before the next attempt</td><td>exponential: 5 s, then 10 s</td></tr>
+      <tr><td><b>Lock</b></td><td>A Redis key saying "this worker owns this job", renewed while it runs</td><td>60 s (<code>lockDuration</code>)</td></tr>
+      <tr><td><b>Stalled job</b></td><td>An active job whose lock expired: its worker died</td><td>checked every 5 min (<code>stalledInterval</code>)</td></tr>
+      <tr><td><b>Idempotent</b></td><td>Running it twice leaves the same result as running it once</td><td>delete the document's chunks first, then insert</td></tr>
+      <tr><td><b>202 Accepted</b></td><td>"Got it, still working on it"</td><td><code>/upload</code>'s answer, document in <code>processing</code></td></tr>
+      <tr><td><b>Prefix</b></td><td>A namespace in front of every key</td><td><code>docmind</code> live, <code>docmind-dev</code> on the laptop</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b>Why not just <code>setTimeout</code> or a promise you don't await?</b> Fire-and-forget work lives only in memory. A restart loses it, nothing retries it, and nobody can see it. A queue writes the job to Redis first, so it survives the process, can be retried, and can be inspected.</div>
+</section>
+
+<!-- 04 -->
+<section id="redis">
+  <div class="sec-head"><span class="num">04</span><h2>Redis in 5 minutes</h2><span class="tag">concept</span></div>
+  <p class="sub">Redis is a server that keeps its data in memory. It's a key → value store, but the values are real data structures, and every command on them is atomic.</p>
+  <div class="grid2">
+    <div class="card"><h4>Fast</h4><p>Data lives in RAM, so a command takes well under a millisecond on the server. From the laptop (India → Oregon) the round trip was ~250 ms; on Render it's the same region.</p></div>
+    <div class="card"><h4>Atomic</h4><p>Redis runs one command at a time. "Move this job from waiting to active" can't be half-done, and two workers can never both take the same job.</p></div>
+    <div class="card"><h4>Blocking waits</h4><p>A client can say "wait up to N seconds until something arrives". An idle worker doesn't hammer Redis with "anything yet?"; it waits once per <code>drainDelay</code>.</p></div>
+    <div class="card"><h4>Lua scripts</h4><p>BullMQ sends small Lua scripts that run inside Redis as one atomic step: take the job, set its lock, update its hash, write an event.</p></div>
+  </div>
+  <h3>The data structures BullMQ uses</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Redis type</th><th>What it is</th><th>BullMQ uses it for</th></tr></thead>
+    <tbody>
+      <tr><td><b>String</b></td><td>one value, can expire (TTL)</td><td>the job's <b>lock</b> (expires after <code>lockDuration</code>), the <code>stalled-check</code> throttle</td></tr>
+      <tr><td><b>List</b></td><td>ordered, push/pop at either end</td><td><code>wait</code> (jobs ready to run), <code>active</code> (jobs running now)</td></tr>
+      <tr><td><b>Hash</b></td><td>a small object: field → value</td><td>one per job: <code>data</code>, <code>opts</code>, <code>attemptsMade</code>, <code>failedReason</code>…; also the queue's <code>meta</code></td></tr>
+      <tr><td><b>Sorted set</b></td><td>members ordered by a score</td><td><code>delayed</code> (score = when to run), <code>completed</code> / <code>failed</code> (score = when it finished)</td></tr>
+      <tr><td><b>Set</b></td><td>unordered, unique members</td><td><code>stalled</code> (active jobs suspected dead)</td></tr>
+      <tr><td><b>Stream</b></td><td>an append-only log</td><td><code>events</code>: added, waiting, active, completed, failed…</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">None of these key names appear in DocMind's code. BullMQ builds them (in its <code>queue-keys.js</code>) from the prefix and the queue name: <code>&lt;prefix&gt;:ingest-pdf:wait</code>, <code>&lt;prefix&gt;:ingest-pdf:&lt;jobId&gt;</code>, and so on. The simulator in <a href="#lifecycle">06</a> shows them changing as a job moves.</div>
+  <div class="note warn"><b>Why Redis must not evict.</b> A cache is allowed to throw away old keys when memory is full. A queue isn't: an evicted job hash is a lost upload. Upstash was checked at BG.0: <code>maxmemory_policy: noeviction</code>, so a full Redis refuses new writes instead.</div>
+</section>
+
+<!-- 05 -->
+<section id="upstash">
+  <div class="sec-head"><span class="num">05</span><h2>Upstash, and one Redis for two environments</h2><span class="tag">decision D1</span></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Option</th><th>Good</th><th>Bad</th></tr></thead>
+    <tbody>
+      <tr><td><b>Upstash free</b> (chosen)</td><td>No card. One <code>rediss://</code> URL works from Render <i>and</i> the laptop. Data browser and command counter in the dashboard</td><td><b>500K commands a month</b>, and an idle BullMQ worker talks to Redis all the time</td></tr>
+      <tr><td>Render Key Value free</td><td>Same platform, no command limit</td><td>25 MB, data lost on every restart, the laptop would need its own Redis</td></tr>
+      <tr><td>Postgres queue (pg-boss)</td><td>No new service</td><td>Not BullMQ/Redis (the point of the phase), and polling would keep Neon awake</td></tr>
+    </tbody>
+  </table></div>
+  <div class="grid3">
+    <div class="card"><h4><code>rediss://</code></h4><p>Two s's means TLS. ioredis turns TLS on from the scheme. Plain <code>redis://</code> made Upstash hang up, and ioredis reported "max retries per request".</p></div>
+    <div class="card"><h4>Oregon</h4><p>Same AWS region as the Render service, so the worker's Redis round trips are short. Neon is in Ohio: a separate, older cross-US hop.</p></div>
+    <div class="card"><h4>Use the URL, not the CLI line</h4><p>Upstash shows a <code>redis-cli --tls -u …</code> command and a plain URL. The URL from the ioredis/TCP tab is the one that goes in <code>REDIS_URL</code>.</p></div>
+  </div>
+  <h3>Prefixes: two queues in one Redis</h3>
+  <div class="player" id="px">
+    <div class="tabs" id="px-tabs"></div>
+    <div class="grid2">
+      <div class="pane"><h4>Laptop · npm run dev</h4><div class="kv" id="px-laptop"></div></div>
+      <div class="pane"><h4>Render · production</h4><div class="kv" id="px-render"></div></div>
+    </div>
+    <div class="say" id="px-say" style="margin-top:12px"></div>
+  </div>
+  <p>Local and live share <b>one</b> free Upstash database (and one Neon database). BullMQ's <code>prefix</code> keeps their queues apart: <code>BULLMQ_PREFIX=docmind-dev</code> in the laptop's <code>.env</code>, <code>docmind</code> on Render. There's <b>no default</b> in the code on purpose: <code>getQueueSettings()</code> throws if the prefix is missing, so production can't quietly fall back to the dev queue.</p>
+</section>
+
+<!-- 06 -->
+<section id="lifecycle">
+  <div class="sec-head"><span class="num">06</span><h2>Job lifecycle simulator</h2><span class="tag">player · the centre of the phase</span></div>
+  <p class="sub">One upload of a 5-chunk PDF, followed through BullMQ's states, Redis's keys, the Postgres rows and the terminal. Pick a scenario, then Play or Step. The log lines are the real <code>pipelineLogger</code> texts, shortened.</p>
+  <div class="player" id="lc">
+    <div class="tabs" id="lc-tabs"></div>
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="step">Step</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" data-progress>0 / 0</span>
+    </div>
+    <div class="say" id="lc-say"><b>READY</b>Pick a scenario and press Play.</div>
+    <div class="states" id="lc-states">
+      <div class="state" data-s="waiting"><b>waiting</b><span>in the <code>wait</code> list</span></div>
+      <div class="state" data-s="active"><b>active</b><span>a worker holds the lock</span></div>
+      <div class="state" data-s="delayed"><b>delayed</b><span>backoff before a retry</span></div>
+      <div class="state" data-s="completed"><b>completed</b><span>processor returned</span></div>
+      <div class="state" data-s="failed"><b>failed</b><span>no attempts left</span></div>
+    </div>
+    <div class="panes">
+      <div class="pane"><h4>Redis · docmind:ingest-pdf:… (simplified)</h4><div class="kv" id="lc-redis"></div></div>
+      <div class="pane"><h4>Postgres (Neon)</h4>
+        <div class="db">
+          <div>documents row: <span id="lc-doc"></span></div>
+          <div id="lc-err" class="mono" style="font-size:12px;color:var(--muted)"></div>
+          <div>chunks for this document: <b id="lc-n">0</b></div>
+          <div class="cells" id="lc-cells"></div>
+        </div>
+      </div>
+    </div>
+    <div class="term" id="lc-term" style="margin-top:12px" aria-live="polite"></div>
+    <p class="caption">Simplified Redis view: BullMQ 6 also keeps helper keys (a marker, counters, a lock token per job). The job id is the document id, shortened here to <code>3f2a91c0</code>.</p>
+  </div>
+</section>
+
+<!-- 07 -->
+<section id="options">
+  <div class="sec-head"><span class="num">07</span><h2>Job and worker options</h2><span class="tag">config.ts</span></div>
+  <p class="sub">Every behaviour in the simulator comes from these settings. The worker settings are tuned for Upstash's free plan; the defaults are shown next to each.</p>
+  <p class="file">src/config.ts · INGEST_JOB_OPTIONS (every job)</p>
+<pre>export const INGEST_JOB_OPTIONS = {
+  attempts: 3,                                    <span class="c">// Gemini 503s usually pass: try 3 times in total</span>
+  backoff: { type: 'exponential', delay: 5000 },  <span class="c">// wait 5 s before the 2nd try, 10 s before the 3rd</span>
+  removeOnComplete: true,                         <span class="c">// the documents row is the record; chunk text shouldn't sit in Redis</span>
+  removeOnFail: 50,                               <span class="c">// keep the last 50 failed jobs to inspect in Upstash</span>
+} satisfies DefaultJobOptions</pre>
+  <p class="file">src/config.ts · INGEST_WORKER_OPTIONS (the worker)</p>
+<pre>export const INGEST_WORKER_OPTIONS = {
+  concurrency: 1,             <span class="c">// one document at a time: Gemini's free tier is rate limited anyway</span>
+  drainDelay: 30,             <span class="c">// seconds per idle "any jobs?" wait        (default 5)</span>
+  stalledInterval: 300_000,   <span class="c">// look for dead workers' jobs every 5 min (default 30 s)</span>
+  lockDuration: 60_000,       <span class="c">// a job's lock lasts 60 s, renewed while it runs (default 30 s)</span>
+} satisfies Partial&lt;WorkerOptions&gt;</pre>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Option</th><th>Ours</th><th>Default</th><th>What it buys, what it costs</th></tr></thead>
+    <tbody>
+      <tr><td><code>attempts</code></td><td class="num">3</td><td class="num">1</td><td>Survives a passing Gemini 503. No retry loop in our code.</td></tr>
+      <tr><td><code>backoff</code></td><td>exp. 5 s</td><td>none</td><td>Gives "high demand" time to pass. Attempt n waits <code>5 s × 2<sup>n−2</sup></code>: 5 s, then 10 s.</td></tr>
+      <tr><td><code>jobId</code></td><td>documentId</td><td>auto</td><td>A second <code>add()</code> with the same id is ignored, so one document can't be queued twice.</td></tr>
+      <tr><td><code>removeOnComplete</code></td><td>true</td><td>keep all</td><td>Redis stays small (256 MB free). The <code>documents.status</code> column is what the app reads.</td></tr>
+      <tr><td><code>removeOnFail</code></td><td class="num">50</td><td>keep all</td><td>Recent failures stay inspectable, with <code>failedReason</code> and data.</td></tr>
+      <tr><td><code>drainDelay</code></td><td class="num">30 s</td><td class="num">5 s</td><td>About 6× fewer idle commands. A new job still starts at once: adding it wakes the waiting worker.</td></tr>
+      <tr><td><code>stalledInterval</code></td><td class="num">5 min</td><td class="num">30 s</td><td>Fewer idle commands. Price: a crashed job resumes up to ~10 min later (<a href="#stalled">15</a>).</td></tr>
+      <tr><td><code>lockDuration</code></td><td class="num">60 s</td><td class="num">30 s</td><td>A slow Gemini call on Render's 0.1 CPU shouldn't make a live job look dead.</td></tr>
+      <tr><td><code>maxStalledCount</code></td><td>(default)</td><td class="num">1</td><td>A job that stalls a second time is failed by BullMQ, whatever its attempts. That's why <a href="#failed">14</a> exists.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 08 -->
+<section id="upload">
+  <div class="sec-head"><span class="num">08</span><h2>The request side: POST /upload</h2><span class="tag">player</span></div>
+  <p class="sub">The request keeps only what the user waits for: checks, parse, chunk, one row, one job. Each tab is a path that was tested over HTTP in BG.3.</p>
+  <div class="player" id="up">
+    <div class="tabs" id="up-tabs"></div>
+    <div class="chips" id="up-chips"></div>
+    <div class="term" id="up-term" style="margin-top:12px;min-height:90px"></div>
+    <div class="say" id="up-out" style="margin-top:12px;margin-bottom:0"></div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h4>Why parsing stays in the request (D2)</h4><p>The PDF bytes only exist here: multer keeps them in memory. Parsing takes milliseconds to about a second. The job then carries chunk <i>text</i> (~100–300 KB for 50 pages), never a 10 MB file and never a token.</p></div>
+    <div class="card"><h4>Why the 400 comes early</h4><p>A scanned PDF has no text layer. Refusing it while the user is still waiting beats queueing a job that fails later. Before BG.3, such a PDF was saved with 0 chunks and every chat with it answered "No document found".</p></div>
+  </div>
+  <p class="file">src/services/ingestion.service.ts · queuePdfIngestion() (shortened)</p>
+<pre><span class="k">const</span> { text, chunks, hasText } = <span class="k">await</span> parsePdf(file)
+<span class="k">if</span> (!hasText || chunks.length === 0) <span class="k">return</span> { ok: false, status: 400, error: <span class="c">'This PDF has no text layer…'</span> }
+
+<span class="k">const</span> documentId = randomUUID()
+<span class="k">await</span> insertDocument(documentId, userId, file.originalname, file.size, text.length, chunks.length, <span class="c">'processing'</span>)
+
+<span class="k">try</span> {
+  <span class="k">await</span> enqueueIngest({ documentId, userId, chunks })   <span class="c">// userId came from req.user.id, never the body</span>
+} <span class="k">catch</span> (err) {
+  <span class="k">await</span> deleteDocument(documentId, userId)            <span class="c">// no job = nothing would ever finish this row</span>
+  <span class="k">return</span> { ok: false, status: 503, error: <span class="c">'The upload queue is unavailable right now. Try again shortly.'</span> }
+}
+<span class="k">return</span> { ok: true, document: { documentId, …, status: <span class="c">'processing'</span> } }   <span class="c">// route answers 202</span></pre>
+  <div class="note"><b>Same shape as every other service:</b> <code>{ ok: false, status, error }</code>, never touching <code>req</code>/<code>res</code>. That rule (from the start of the project) is exactly what let the slow half move into a worker that has no request at all.</div>
+</section>
+
+<!-- 09 -->
+<section id="enqueue">
+  <div class="sec-head"><span class="num">09</span><h2>The 5 s enqueue race</h2><span class="tag">player · F27</span></div>
+  <p class="sub">If Redis has been unreachable <b>since the server started</b>, BullMQ's <code>add()</code> waits for a first connection that never comes (found by reading bullmq 6's source). Without a limit, the upload would hang forever instead of getting its 503.</p>
+  <p class="file">src/queue/ingest.queue.ts · enqueueIngest()</p>
+<pre><span class="k">export async function</span> enqueueIngest(data: IngestJobData) {
+  <span class="k">let</span> timer: NodeJS.Timeout | undefined
+  <span class="k">const</span> timeout = <span class="k">new</span> Promise&lt;never&gt;((_, reject) =&gt; {
+    timer = setTimeout(() =&gt; reject(<span class="k">new</span> Error(<span class="c">`Redis didn't accept the job within 5 s`</span>)), ENQUEUE_TIMEOUT_MS)
+  })
+  <span class="k">try</span> {
+<span class="hl">    <span class="k">return await</span> Promise.race([getIngestQueue().add(<span class="c">'ingest'</span>, data, { jobId: data.documentId }), timeout])</span>
+  } <span class="k">finally</span> {
+    clearTimeout(timer)   <span class="c">// the winner was add(): don't leave the timer running</span>
+  }
+}</pre>
+  <div class="player" id="er">
+    <div class="tabs" id="er-tabs"></div>
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" id="er-clock">t = 0.0 s</span>
+    </div>
+    <div class="tl" id="er-tl"></div>
+    <div class="say" id="er-say" style="margin-top:12px;margin-bottom:0"></div>
+  </div>
+  <div class="note">Measured in BG.3 with an unreachable <code>REDIS_URL</code>: the upload got its <b>503 in 7.4 s</b> (5 s of race plus parsing and the database round trips), no row was left behind, and chat still answered 200 because chat never touches Redis. If Redis does come back and the job lands late, the worker finds the row already deleted and exits quietly.</div>
+</section>
+
+<!-- 10 -->
+<section id="connections">
+  <div class="sec-head"><span class="num">10</span><h2>Two connections with opposite settings</h2><span class="tag">connection.ts</span></div>
+  <p class="sub">When Redis drops, the two sides want opposite things. An upload should fail <i>now</i>. A worker should wait it out.</p>
+  <div class="grid2">
+    <div class="card key"><h4>'queue' connection · used by POST /upload</h4><p><code>enableOfflineQueue: false</code>, <code>maxRetriesPerRequest: 1</code></p><p>While disconnected, ioredis <b>refuses</b> a command instead of holding it in memory until Redis returns. The upload answers 503 at once. One connection, shared by the whole process.</p></div>
+    <div class="card key"><h4>'worker' connection · BullMQ's blocking waits</h4><p><code>maxRetriesPerRequest: null</code></p><p>A command <b>survives</b> reconnects. The worker spends its life in long "give me the next job" waits; they must keep waiting through a blip. BullMQ requires this and warns without it.</p></div>
+  </div>
+  <p class="file">src/queue/connection.ts · connect()</p>
+<pre><span class="k">const</span> connection = <span class="k">new</span> Redis(url,
+  role === <span class="c">'queue'</span> ? { maxRetriesPerRequest: 1, enableOfflineQueue: false } : { maxRetriesPerRequest: null })
+
+<span class="k">let</span> lastError = <span class="c">''</span>
+connection.on(<span class="c">'error'</span>, (err) =&gt; {                    <span class="c">// without a listener: "Unhandled error event" + stack, every ~2 s</span>
+  <span class="k">const</span> summary = summarizeError(err)
+  <span class="k">if</span> (summary !== lastError) console.error(<span class="c">`[redis:${role}] ${summary}`</span>)   <span class="c">// each DIFFERENT error once</span>
+  lastError = summary
+})
+connection.on(<span class="c">'ready'</span>, () =&gt; { <span class="k">if</span> (lastError) console.log(<span class="c">`[redis:${role}] reconnected`</span>); lastError = <span class="c">''</span> })</pre>
+  <div class="grid3">
+    <div class="card"><h4>Lazy</h4><p>Nothing connects on import. A script that imports these modules doesn't open a connection and spend Upstash commands.</p></div>
+    <div class="card"><h4>Tracked</h4><p>Every connection goes in <code>openConnections</code>, so shutdown can <code>quit()</code> them all.</p></div>
+    <div class="card"><h4><code>quit()</code>, not <code>disconnect()</code></h4><p><code>quit()</code> sends QUIT and waits for replies to commands already sent. <code>disconnect()</code> just drops the socket.</p></div>
+  </div>
+</section>
+
+<!-- 11 -->
+<section id="worker">
+  <div class="sec-head"><span class="num">11</span><h2>The worker, line by line</h2><span class="tag">ingest.worker.ts</span></div>
+  <p class="sub">No Express, no <code>req</code>/<code>res</code>. The same function runs inside the API process (Render) or on its own (<code>npm run worker</code>).</p>
+  <p class="file">src/workers/ingest.worker.ts · processIngestJob() (comments shortened)</p>
+<pre><span class="k">export async function</span> processIngestJob(job: Job&lt;IngestJobData&gt;): Promise&lt;void&gt; {
+  <span class="k">const</span> { documentId, userId, chunks } = job.data
+  <span class="c">// attemptsMade counts FAILED attempts so far, so +1 is this one</span>
+  pipelineStart(<span class="c">'queue'</span>, <span class="c">`ingest job ${id8} — attempt ${job.attemptsMade + 1}/${job.opts.attempts}`</span>)
+
+  <span class="c">// 1. Still there? Scoped by owner, like every read since auth.</span>
+  <span class="k">const</span> document = <span class="k">await</span> getDocumentForUser(documentId, userId)
+  <span class="k">if</span> (!document) {
+    <span class="k">await</span> deleteChunksByDocumentId(documentId)   <span class="c">// a previous attempt may have stored some</span>
+    <span class="k">return</span>                                       <span class="c">// "completed": retrying can't bring the document back</span>
+  }
+<span class="hl">  <span class="k">await</span> deleteChunksByDocumentId(documentId)     <span class="c">// THE idempotent part: start from a clean slate</span></span>
+
+  <span class="c">// 2. The slow part: one Gemini call per chunk</span>
+  <span class="k">await</span> embedAndStoreChunks(documentId, chunks)   <span class="c">// a throw here = this attempt failed → BullMQ retries</span>
+
+  <span class="c">// 3. Done. false = no row was updated = the user deleted it while we worked</span>
+  <span class="k">const</span> stillExists = <span class="k">await</span> setDocumentStatus(documentId, userId, <span class="c">'ready'</span>)
+  <span class="k">if</span> (!stillExists) <span class="k">await</span> deleteChunksByDocumentId(documentId)
+}</pre>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Line</th><th>Why it's there</th></tr></thead>
+    <tbody>
+      <tr><td><code>return</code> = success, <code>throw</code> = failure</td><td>The whole contract with BullMQ. There's no retry loop in DocMind's code; <code>attempts</code> + <code>backoff</code> do it.</td></tr>
+      <tr><td><code>getDocumentForUser(documentId, userId)</code></td><td>Auth rule: every read of user data is scoped to its owner, the worker included. <code>userId</code> was put in the job by <code>/upload</code> from <code>req.user.id</code>.</td></tr>
+      <tr><td>Missing document → <code>return</code>, not <code>throw</code></td><td>Throwing would retry 3 times for nothing.</td></tr>
+      <tr><td>Delete chunks first</td><td>A retry or a crash re-run finds whatever the last run left (maybe chunks 1–2 of 5). Delete, then insert all: same result every time. See <a href="#idempotent">12</a>.</td></tr>
+      <tr><td><code>setDocumentStatus</code> returns a boolean</td><td>"Is the row still there?" and "mark it ready" in <b>one</b> UPDATE, so there's no gap between checking and writing. See <a href="#race">13</a>.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="file">src/repositories/documents.repository.ts · setDocumentStatus()</p>
+<pre><span class="k">const</span> updated = <span class="k">await</span> db.update(documents).set({ status, error })
+  .where(and(eq(documents.id, id), eq(documents.userId, userId)))
+  .returning({ id: documents.id })
+<span class="k">return</span> updated.length &gt; 0      <span class="c">// 0 rows = the document is gone</span></pre>
+</section>
+
+<!-- 12 -->
+<section id="idempotent">
+  <div class="sec-head"><span class="num">12</span><h2>Idempotency: why "delete first"</h2><span class="tag">player · rule 3</span></div>
+  <p class="sub">Attempt 1 stores chunks 1 and 2, then Gemini returns 503 on chunk 3. BullMQ runs the job again. Compare what the chunks table ends up holding.</p>
+  <div class="player" id="id">
+    <div class="tabs" id="id-tabs"></div>
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="step">Step</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" data-progress>0 / 0</span>
+    </div>
+    <div class="say" id="id-say"><b>READY</b>Press Play.</div>
+    <div class="pane"><h4>chunks table, rows for this document</h4><div class="cells" id="id-cells"></div></div>
+  </div>
+  <div class="note">Tested both ways in BG.2 and BG.3: a forced failure on chunk 2 (retry → <code>ready</code>, 5 rows, 5 distinct, 7 embedding calls = 1 ok + 1 throw + 5), and a <b>hard kill</b> mid-job with 2 of 5 chunks stored (resumed → 5 rows, 5 distinct). Idempotency held both times.</div>
+  <div class="grid2">
+    <div class="card"><h4>Also idempotent: <code>jobId = documentId</code></h4><p>The same document added twice → one job (BG.2 test D). Idempotency at the queue level, delete-first at the database level.</p></div>
+    <div class="card"><h4>Why not "skip chunks that exist"?</h4><p>Chunks have no stable per-chunk key in the table, and a half-written row is possible after a crash. Wiping and redoing is simpler and always correct. The cost: a retry re-embeds every chunk.</p></div>
+  </div>
+</section>
+
+<!-- 13 -->
+<section id="race">
+  <div class="sec-head"><span class="num">13</span><h2>The delete race</h2><span class="tag">player · F24</span></div>
+  <p class="sub">A user can delete a document while its job is still embedding. Two writers, one table, no foreign keys. The order of the route's deletes decides whether chunks get orphaned. Each row of the player is one moment in time.</p>
+  <div class="player" id="dr">
+    <div class="tabs" id="dr-tabs"></div>
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="step">Step</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" data-progress>0 / 0</span>
+    </div>
+    <div class="race">
+      <div class="col"><h4>DELETE /documents/:id</h4><div id="dr-route"></div></div>
+      <div class="col"><h4>Worker (job running)</h4><div id="dr-worker"></div></div>
+      <div class="col"><h4>Database after</h4><div id="dr-db"></div></div>
+    </div>
+    <div class="say" id="dr-say" style="margin-top:12px;margin-bottom:0"></div>
+  </div>
+  <p class="file">src/routes/documents.routes.ts · DELETE (BG.3 order)</p>
+<pre><span class="k">const</span> document = <span class="k">await</span> getDocumentForUser(documentId, userId)   <span class="c">// ownership once, up front (404 if not yours)</span>
+<span class="k">if</span> (!document) <span class="k">return</span> res.status(404).json(…)
+<span class="hl"><span class="k">await</span> deleteDocument(documentId, userId)          <span class="c">// the ROW first</span></span>
+<span class="k">await</span> deleteChunksByDocumentId(documentId)        <span class="c">// then its chunks</span>
+<span class="k">await</span> deleteMessagesByDocumentId(documentId, userId)</pre>
+  <div class="note">Found while writing BG.2's tests, before it ever happened live. Whichever side runs last cleans up: if the row is gone, the worker's final UPDATE hits 0 rows and it deletes its own chunks; if the worker finished first, the route's chunk delete runs after it and gets them all. BG.2 test C deleted a document after its first chunk: 0 chunks left.</div>
+</section>
+
+<!-- 14 -->
+<section id="failed">
+  <div class="sec-head"><span class="num">14</span><h2>The failed handler: ask the state, don't count</h2><span class="tag">widget</span></div>
+  <p class="sub">The <code>failed</code> event fires after <b>every</b> failed attempt, including the ones BullMQ will retry. Only the last one should mark the document failed. How do you know it's the last?</p>
+  <div class="player" id="fh">
+    <div class="tabs" id="fh-tabs"></div>
+    <div class="grid2">
+      <div class="pane"><h4>The plan's sketch: arithmetic</h4><div id="fh-a" class="db"></div></div>
+      <div class="pane"><h4>What was built: the job's state</h4><div id="fh-b" class="db"></div></div>
+    </div>
+    <div class="say" id="fh-say" style="margin-top:12px;margin-bottom:0"></div>
+  </div>
+  <p class="file">src/workers/ingest.worker.ts · onJobFailed() (shortened)</p>
+<pre><span class="k">async function</span> onJobFailed(job, err) {
+  failed(<span class="c">`ingest job ${id8} attempt ${job.attemptsMade}/${attempts}`</span>)
+  console.error(summarizeError(err))           <span class="c">// the real cause: terminal only, never the client</span>
+  <span class="k">try</span> {
+<span class="hl">    <span class="k">const</span> state = <span class="k">await</span> job.getState()</span>
+    <span class="k">if</span> (state !== <span class="c">'failed'</span>) { detail(<span class="c">`will be retried (job state: ${state})`</span>); <span class="k">return</span> }
+    <span class="k">await</span> deleteChunksByDocumentId(documentId)                                   <span class="c">// partial chunks</span>
+    <span class="k">await</span> setDocumentStatus(documentId, userId, <span class="c">'failed'</span>, INGEST_FAILED_MESSAGE)   <span class="c">// short + safe</span>
+  } <span class="k">catch</span> (cleanupErr) {
+    <span class="c">// nothing awaits an event handler: an uncaught rejection here would crash Node</span>
+    console.error(<span class="c">`[ingest worker] could not mark document … failed: …`</span>)
+  }
+}
+worker.on(<span class="c">'failed'</span>, (job, err) =&gt; <span class="k">void</span> onJobFailed(job, err))</pre>
+  <div class="grid2">
+    <div class="card"><h4>User sees</h4><p><code>Could not process this PDF. Delete it and upload it again.</code> The Gemini 503 or the SQL error with its parameters stays in the terminal (<code>summarizeError()</code>).</p></div>
+    <div class="card"><h4>Off-by-one trap (T5)</h4><p>Inside the processor, <code>attemptsMade</code> doesn't include the current run yet (hence <code>+ 1</code>). In the <code>completed</code> event it already does, so <code>+ 1</code> there double-counted in the BG.1 script.</p></div>
+  </div>
+</section>
+
+<!-- 15 -->
+<section id="stalled">
+  <div class="sec-head"><span class="num">15</span><h2>Stalled jobs: why a crash costs ~10 minutes</h2><span class="tag">player · measured 624 s</span></div>
+  <p class="sub">A running job holds a lock that the worker renews in the background. If the process dies (crash, out of memory, a kill), the renewals stop, the lock expires, and some worker's <b>stalled check</b> puts the job back in the queue. With <code>stalledInterval</code> at 5 min, that took 624 s in the BG.3 crash test.</p>
+  <div class="player" id="st">
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" id="st-clock">t = 0 s</span>
+    </div>
+    <div class="say" id="st-say"><b>READY</b>Press Play: a worker is killed with the job at chunk 2 of 5.</div>
+    <div class="tl" id="st-tl"></div>
+    <p class="caption">Kill and resume times are measured (15:54:11 → 16:04:35, +624 s). The positions of the two checks in between are the model that explains the number, not measured times.</p>
+  </div>
+  <div class="grid3">
+    <div class="card"><h4>Pass 1 marks</h4><p>A stalled check copies every <code>active</code> job id into a <code>stalled</code> set. It doesn't move anything yet.</p></div>
+    <div class="card"><h4>Pass 2 moves</h4><p>The next check looks at that set. A job whose lock is gone is moved back to <code>wait</code>. If it had already stalled once (<code>maxStalledCount</code> 1), bullmq 6 tags it with a deferred failure, and the next worker to take it fails it at once.</p></div>
+    <div class="card"><h4>The throttle</h4><p>Each check sets a <code>stalled-check</code> key for one interval. The dead process's last key can block the restarted worker's first check. So: up to ~2 intervals, ~10 min.</p></div>
+  </div>
+  <div class="note"><b>A stalled re-run doesn't use an attempt</b> (the log said "attempt 1/3" after the crash). And normal deploys never hit this: Render sends SIGTERM, and <code>worker.close()</code> waits for the job (<a href="#shutdown">16</a>). Kept at 5 min on purpose: a check costs ~1 command, and the slow recovery only happens after a real crash. Logged as open item #15 in ISSUES.md.</div>
+</section>
+
+<!-- 16 -->
+<section id="shutdown">
+  <div class="sec-head"><span class="num">16</span><h2>Graceful shutdown</h2><span class="tag">player · shutdown.ts</span></div>
+  <p class="sub">Render sends <code>SIGTERM</code> on every deploy and restart and kills the process about 30 s later. Ctrl+C sends <code>SIGINT</code>. Without a handler, Node exits on the spot, possibly mid-job.</p>
+  <div class="player" id="sd">
+    <div class="tabs" id="sd-tabs"></div>
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="step">Step</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" data-progress>0 / 0</span>
+    </div>
+    <div class="chips" id="sd-chips"></div>
+    <div class="term" id="sd-term" style="margin-top:12px;min-height:90px"></div>
+  </div>
+  <p class="file">src/queue/shutdown.ts · closeQueueOnShutdown()</p>
+<pre><span class="k">async function</span> shutdown(signal: string) {
+  <span class="k">if</span> (closing) <span class="k">return</span>                  <span class="c">// a second Ctrl+C changes nothing</span>
+  closing = <span class="k">true</span>
+  setTimeout(() =&gt; { console.error(<span class="c">'Shutdown took longer than 20 s — exiting anyway'</span>); process.exit(1) },
+             SHUTDOWN_TIMEOUT_MS).unref()   <span class="c">// unref: this timer alone mustn't keep the process alive</span>
+  <span class="k">await</span> worker?.close()                <span class="c">// stop taking jobs, WAIT for the one in progress</span>
+  <span class="k">await</span> closeIngestQueue()
+  <span class="k">await</span> closeRedisConnections()        <span class="c">// quit() each connection</span>
+  process.exit(0)
+}
+process.once(<span class="c">'SIGTERM'</span>, () =&gt; <span class="k">void</span> shutdown(<span class="c">'SIGTERM'</span>))
+process.once(<span class="c">'SIGINT'</span>,  () =&gt; <span class="k">void</span> shutdown(<span class="c">'SIGINT'</span>))</pre>
+  <div class="note">Why 20 s: Render waits about 30 s after SIGTERM before it kills the process, so the app gives up first and exits on its own terms. A job cut off at 20 s isn't lost: it stalls, the restarted worker picks it up (<a href="#stalled">15</a>), and delete-first makes the re-run safe. Order matters too: the worker closes before the connections it runs on.</div>
+</section>
+
+<!-- 17 -->
+<section id="budget">
+  <div class="sec-head"><span class="num">17</span><h2>The command budget</h2><span class="tag">calculator · measured rates</span></div>
+  <p class="sub">Upstash's free plan counts every Redis command: 500K a month. Jobs are cheap. An idle worker is not, because it keeps waiting for jobs and checking for stalled ones.</p>
+  <div class="grid4">
+    <div class="stat"><b>118</b><span>commands per 5 idle minutes, BullMQ defaults</span></div>
+    <div class="stat"><b>19</b><span>per 5 idle minutes, tuned (<code>drainDelay</code> 30, <code>stalledInterval</code> 5 min)</span></div>
+    <div class="stat"><b>~6</b><span>commands per job attempt (30 for 3 jobs / 5 attempts)</span></div>
+    <div class="stat"><b>~22</b><span>commands per process start</span></div>
+  </div>
+  <div class="player" id="bd">
+    <div class="calc">
+      <div>
+        <div class="field"><label for="bd-hours">Hours a day the worker is awake</label><output id="bd-hours-o">24 h</output><input type="range" id="bd-hours" min="0" max="24" step="1" value="24"><span class="hint">Render free sleeps the API, and the worker inside it, after ~15 min without requests.</span></div>
+        <div class="field"><label for="bd-up">Uploads a day</label><output id="bd-up-o">20</output><input type="range" id="bd-up" min="0" max="300" step="5" value="20"></div>
+        <div class="field"><label for="bd-att">Average attempts per upload</label><output id="bd-att-o">1.0</output><input type="range" id="bd-att" min="1" max="3" step="0.1" value="1"></div>
+        <div class="field"><label for="bd-starts">Process starts a day (deploys, wake-ups)</label><output id="bd-starts-o">10</output><input type="range" id="bd-starts" min="0" max="100" step="1" value="10"></div>
+      </div>
+      <div class="bars" id="bd-bars"></div>
+    </div>
+    <p class="caption">Projection = measured rates × your inputs × 30 days. Idle: 118 or 19 commands per 5 min. Jobs: 6 per attempt. Starts: 22 each. The black line is the 500K free limit.</p>
+  </div>
+  <div class="note"><b>Real usage:</b> 3.5K of 500K for the month on 2026-10-15, every test run included. The busiest day (~2.25K, nearly all testing) would be ~14% of the limit if every day looked like it. If the limit were ever hit, Upstash refuses commands (no card = no bill): uploads get 503, chat keeps working. On days not spent on the queue, <code>RUN_WORKER=false</code> in the local <code>.env</code> keeps the laptop's worker from spending commands.</div>
+  <div class="note warn"><b>How the commands were counted.</b> The BG.1 script wraps <code>Redis.prototype.sendCommand</code>, which catches single commands, pipelines and the extra connections BullMQ opens itself. Upstash's own <code>INFO stats</code> counter said 7 after 17 had been sent, so it wasn't used. The rule from the plan: measure the budget, don't assume it. The plan's estimate (~20K/day default) was low; the measurement was ~34K.</div>
+</section>
+
+<!-- 18 -->
+<section id="status">
+  <div class="sec-head"><span class="num">18</span><h2>What "processing" means for the rest of the app</h2><span class="tag">decision D5</span></div>
+  <p class="sub">A processing document has <i>some</i> of its chunks stored. Everything that reads chunks has to know that.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Route</th><th>Not yours</th><th>processing</th><th>failed</th><th>ready</th></tr></thead>
+    <tbody>
+      <tr><td>chat, one document</td><td>404</td><td>409 "still processing"</td><td>409 "failed to process"</td><td>200</td></tr>
+      <tr><td>chat, all documents</td><td>(not searched)</td><td>skipped by search</td><td>skipped</td><td>searched</td></tr>
+      <tr><td><code>POST /quiz</code></td><td>404</td><td>409</td><td>409</td><td>200</td></tr>
+      <tr><td><code>GET /documents</code></td><td>(not listed)</td><td>listed + status</td><td>listed + <code>error</code></td><td>listed</td></tr>
+      <tr><td><code>DELETE /documents/:id</code></td><td>404</td><td>allowed (see <a href="#race">13</a>)</td><td>allowed</td><td>allowed</td></tr>
+      <tr><td>upload cap (5 / 10)</td><td>n/a</td><td>counts</td><td>counts</td><td>counts</td></tr>
+    </tbody>
+  </table></div>
+  <p class="file">src/services/documents.service.ts · checkDocumentReady()</p>
+<pre><span class="k">const</span> document = <span class="k">await</span> getDocumentForUser(documentId, userId)
+<span class="k">if</span> (!document)                         <span class="k">return</span> { ok: false, status: 404, … }   <span class="c">// ownership FIRST</span>
+<span class="k">if</span> (document.status === <span class="c">'processing'</span>) <span class="k">return</span> { ok: false, status: 409, error: DOCUMENT_PROCESSING_MESSAGE }
+<span class="k">if</span> (document.status === <span class="c">'failed'</span>)     <span class="k">return</span> { ok: false, status: 409, error: DOCUMENT_FAILED_MESSAGE }
+<span class="k">return</span> { ok: true }</pre>
+  <div class="grid3">
+    <div class="card"><h4>409, not 404</h4><p>The document exists and it's yours; it just isn't usable yet. 409 Conflict says exactly that.</p></div>
+    <div class="card"><h4>Ownership before status</h4><p>Telling a stranger "still processing" would confirm the id exists. Someone else's document stays a plain 404 (auth rule).</p></div>
+    <div class="card"><h4>Before any Gemini call</h4><p>Checked before the question is embedded, so a request that can't succeed doesn't spend an API call. <code>searchSimilar</code> and <code>sampleChunks</code> also filter <code>status = 'ready'</code> in their join.</p></div>
+  </div>
+  <div class="note"><b>The column itself:</b> <code>ALTER TABLE documents ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'</code> plus a nullable <code>error</code>. The default made it safe on a live table: every old row became ready at once, and the then-deployed code, which never wrote the column, kept inserting ready documents.</div>
+</section>
+
+<!-- 19 -->
+<section id="frontend">
+  <div class="sec-head"><span class="num">19</span><h2>Frontend: polling, and an upload that waits for ready</h2><span class="tag">player · useDocuments.ts</span></div>
+  <p class="sub">No new route (decision D3): <code>GET /documents</code> already returns every row, so it carries <code>status</code> and <code>error</code>. The hook polls it only while something is processing.</p>
+  <div class="player" id="fe">
+    <div class="tabs" id="fe-tabs"></div>
+    <div class="controls">
+      <button class="btn primary" type="button" data-act="play">Play</button>
+      <button class="btn" type="button" data-act="step">Step</button>
+      <button class="btn" type="button" data-act="reset">Reset</button>
+      <span class="progress" data-progress>0 / 0</span>
+    </div>
+    <div class="say" id="fe-say"><b>READY</b>Press Play.</div>
+    <div class="panes">
+      <div class="pane"><h4>Sidebar (React state)</h4><div class="kv" id="fe-list"></div></div>
+      <div class="pane"><h4>Browser console · [DocMind:useDocuments]</h4><div class="term" id="fe-term" style="min-height:140px"></div></div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="card"><h4><code>uploadFile()</code> resolves on READY</h4><p>Not on the 202. The upload chip ("Reading &amp; indexing…"), a question typed during the upload ("Will ask") and opening the new chat all kept working unchanged, as if it were still one long request.</p></div>
+    <div class="card"><h4>A <code>setTimeout</code> chain, not <code>setInterval</code></h4><p>The next poll is scheduled after the previous answer arrives, so a slow response can't stack polls. 2 s, slowing to 10 s after a minute. The effect is keyed on the boolean "anything processing?", not on the list, so each poll doesn't restart the timer.</p></div>
+    <div class="card"><h4><code>listVersion</code> ref</h4><p>Bumped on every local change (upload, delete). A poll answer that started before the change is older than the state, so it's dropped. Without it, a just-uploaded document could vanish for 2 s.</p></div>
+    <div class="card"><h4>Deploy order can't break it</h4><p><code>api/documents.ts</code> treats a missing <code>status</code> as <code>ready</code>, so a new frontend against an old API still works. BG.3 and BG.4 were pushed together anyway: the API alone would have made the live frontend's queued question hit 409.</p></div>
+  </div>
+</section>
+
+<!-- 20 -->
+<section id="startup">
+  <div class="sec-head"><span class="num">20</span><h2>Startup, and where the worker runs</h2><span class="tag">decision D4 · index.ts</span></div>
+  <p class="sub">Render's free tier has web services, Postgres and Key Value, but no background-worker service. So the worker runs inside the API process.</p>
+  <p class="file">src/index.ts</p>
+<pre>getJwtSecret()          <span class="c">// Auth.1: no JWT_SECRET → refuse to start</span>
+getQueueSettings()      <span class="c">// BG.3: no REDIS_URL / BULLMQ_PREFIX → refuse to start</span>
+getIngestQueue()        <span class="c">// open the queue now: the first upload doesn't pay for the handshake,</span>
+                        <span class="c">// and a broken Redis shows up in the log at startup</span>
+<span class="k">const</span> worker = RUN_WORKER ? startIngestWorker() : <span class="k">null</span>   <span class="c">// RUN_WORKER=false → jobs wait in the queue</span>
+closeQueueOnShutdown(worker)
+app.listen(PORT, …)</pre>
+  <div class="grid3">
+    <div class="card"><h4>One process on Render</h4><p>API and worker share 512 MB and 0.1 CPU. A heavy ingest can slow chat a little. Their logs interleave in one terminal; the green <code>queue</code> colour keeps the worker's lines readable.</p></div>
+    <div class="card"><h4><code>src/worker.ts</code> exists anyway</h4><p><code>npm run worker</code> starts only the worker. Moving it to a paid worker service later means running this file: a config change, not a rewrite.</p></div>
+    <div class="card"><h4>Careful with two workers</h4><p>A local <code>npm run worker</code> plus an API with its own worker, on the same prefix, share the jobs between them. That's the prefix bug in <a href="#upstash">05</a> in another form.</p></div>
+  </div>
+</section>
+
+<!-- 21 -->
+<section id="gotchas">
+  <div class="sec-head"><span class="num">21</span><h2>What bit</h2><span class="tag">ISSUES.md F22–F28, T5–T10</span></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Step</th><th>What happened</th><th>Lesson</th></tr></thead>
+    <tbody>
+      <tr><td>BG.0</td><td>Copied Upstash's <code>redis-cli --tls -u …</code> line instead of the URL; then used <code>redis://</code> (no TLS), and Upstash hung up; a <code>verify-fulle</code> typo that <code>pg</code> silently accepted</td><td>The <code>rediss://</code> URL from the ioredis tab. Typos in connection options can fail silently</td></tr>
+      <tr><td>BG.0</td><td>Two copies of ioredis installed → TypeScript "incompatible connection" errors</td><td>Dedupe to one copy. Also checked bullmq 6's types before trusting a plan researched on v5's docs</td></tr>
+      <tr><td>BG.1</td><td>BullMQ defaults: ~1.02M commands a month with zero uploads, 204% of the free plan</td><td>Measure idle cost first. Tuned to 33%</td></tr>
+      <tr><td>BG.1</td><td><code>attemptsMade + 1</code> in the <code>completed</code> event double-counted</td><td>It already includes the successful attempt there; in the processor it doesn't yet</td></tr>
+      <tr><td>BG.1</td><td>Two measurements on one queue name: "Cannot obliterate non-paused queue"</td><td>One queue per experiment</td></tr>
+      <tr><td>BG.2</td><td>The route deleted chunks before the row: a finishing job could leave orphan chunks</td><td>Row first; the worker cleans up when its UPDATE finds nothing</td></tr>
+      <tr><td>BG.3</td><td>A drawn-only PDF came back as 12 characters and 1 chunk: pdf-parse v2 adds a <code>-- 1 of N --</code> marker per page</td><td>Check text per page (<code>hasText</code>), not the joined string</td></tr>
+      <tr><td>BG.3</td><td>With Redis unreachable since startup, <code>add()</code> waited forever</td><td>Race it against a 5 s timer</td></tr>
+      <tr><td>BG.3</td><td>Crash recovery took ~2 stalled intervals, not one</td><td>Mark pass + move pass + throttle key (<a href="#stalled">15</a>)</td></tr>
+      <tr><td>BG.5</td><td><b>Render had <code>BULLMQ_PREFIX=docmind-dev</code></b> (copied from <code>.env</code>): production shared a queue with the laptop. A local <code>npm run dev</code> would have competed for live users' jobs</td><td>Found by counting keys (0 under <code>docmind:</code>), not by a PASS</td></tr>
+      <tr><td>BG.5</td><td>The live check asserted "job hash gone", which is true under <i>any</i> prefix</td><td>Assert the specific thing: the job's events under <code>docmind:ingest-pdf:events</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 22 -->
+<section id="tests">
+  <div class="sec-head"><span class="num">22</span><h2>Tests and numbers</h2><span class="tag">background-jobs-plan §9</span></div>
+  <div class="grid4">
+    <div class="stat"><b>9/9</b><span>BG.2 in-process: retry, give-up, delete mid-job, duplicate add</span></div>
+    <div class="stat"><b>16/16</b><span>BG.3 over HTTP: 202, 409s, 404s, 400, delete while processing</span></div>
+    <div class="stat"><b>11/11</b><span>BG.4 in headless Chromium, light/dark/mobile</span></div>
+    <div class="stat"><b>10/10</b><span>BG.5 live, after the prefix fix</span></div>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Measurement</th><th class="num">Value</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td>Upload answer (202), live</td><td class="num">2.0–2.5 s</td><td>BG.5</td></tr>
+      <tr><td>Upload → ready, live (5 chunks)</td><td class="num">4.4–4.8 s</td><td>BG.5 (Render ↔ Upstash both in Oregon)</td></tr>
+      <tr><td>Upload → ready, laptop</td><td class="num">~10 s</td><td>BG.3 (India → Oregon/Ohio)</td></tr>
+      <tr><td>Upload answer with Redis down</td><td class="num">503 in 7.4 s</td><td>BG.3</td></tr>
+      <tr><td>Crash → job resumed</td><td class="num">624 s</td><td>BG.3, hard kill, result correct</td></tr>
+      <tr><td>Idle commands / 5 min, default → tuned</td><td class="num">118 → 19</td><td>BG.1, 300 s windows</td></tr>
+      <tr><td>Monthly projection awake 24/7, default → tuned</td><td class="num">~1.02M → ~164K</td><td>BG.1</td></tr>
+      <tr><td>Upstash commands used that month</td><td class="num">3.5K / 500K</td><td>dashboard, 2026-10-15</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">How tests ran: throwaway guests, a generated 3-page PDF (5 chunks), the <code>docmind-test</code> prefix, and real Neon, Upstash and Gemini. Every guest, document and Redis key was deleted <b>by recorded id</b> afterwards. A time-window cleanup had once deleted a real user, so "delete only what your test made" is a rule.</div>
+</section>
+
+<!-- 23 -->
+<section id="open">
+  <div class="sec-head"><span class="num">23</span><h2>Limits and open ends</h2><span class="tag">fair game in an interview</span></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Limit</th><th>Why it's like this</th><th>The fix, if it mattered</th></tr></thead>
+    <tbody>
+      <tr><td>Polling instead of push</td><td>Simple, no new route, works through every proxy</td><td>SSE or WebSocket for job progress</td></tr>
+      <tr><td>Worker shares 0.1 CPU with the API</td><td>Render free has no worker service</td><td>One more Render service running <code>src/worker.ts</code>, no code change</td></tr>
+      <tr><td>Concurrency 1</td><td>Gemini's free tier is rate limited anyway</td><td>Raise it alongside a rate limiter</td></tr>
+      <tr><td>Crash recovery up to ~10 min (#15)</td><td>The price of the Upstash tuning</td><td>Shorter <code>stalledInterval</code>, ~+4 commands per idle 5 min at 60 s</td></tr>
+      <tr><td>Embedding limit close (#12)</td><td>Uploads already peaked at 25.85K of the 30K tokens/min; the worker has no pacing</td><td>BullMQ's worker <code>limiter</code>, or a delay between chunks</td></tr>
+      <tr><td>No timeout on Gemini <code>fetch</code> (#8)</td><td>Never built</td><td>An <code>AbortSignal.timeout()</code>. Without it, a hung call keeps renewing the lock and holds the only worker slot</td></tr>
+      <tr><td>A retry re-embeds every chunk</td><td>Delete-first is simple and always correct</td><td>Per-chunk keys + upsert</td></tr>
+      <tr><td>One embedding call per chunk</td><td>Built before batch embeddings existed in the code</td><td><code>getEmbeddings()</code> (AG.1) saves round trips, but each text still counts against the per-minute limits</td></tr>
+      <tr><td>No job dashboard</td><td>Upstash's data browser is enough at this size</td><td>Bull Board</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">What comes next: ISSUES.md #36 plans to have this same worker also write a <code>documents.summary</code> at upload time, so "summarize this PDF" stops depending on a top-3 search.</div>
+</section>
+
+<!-- 24 -->
+<section id="files">
+  <div class="sec-head"><span class="num">24</span><h2>File map</h2><span class="tag">where it lives</span></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>File</th><th>Job</th></tr></thead>
+    <tbody>
+      <tr><td><code>src/queue/connection.ts</code></td><td>Two ioredis connections (lazy), <code>getQueueSettings()</code> fail-fast, deduped error logs, <code>closeRedisConnections()</code></td></tr>
+      <tr><td><code>src/queue/ingest.queue.ts</code></td><td><code>IngestJobData</code>, <code>getIngestQueue()</code>, <code>enqueueIngest()</code> (jobId + 5 s race), <code>closeIngestQueue()</code></td></tr>
+      <tr><td><code>src/queue/shutdown.ts</code></td><td>SIGTERM/SIGINT → worker → queue → connections → exit, 20 s cap</td></tr>
+      <tr><td><code>src/workers/ingest.worker.ts</code></td><td><code>processIngestJob</code>, <code>onJobFailed</code>, <code>startIngestWorker</code></td></tr>
+      <tr><td><code>src/services/ingestion.service.ts</code></td><td><code>parsePdf</code> (request), <code>embedAndStoreChunks</code> (worker), <code>queuePdfIngestion</code> (400 / 503 / ok)</td></tr>
+      <tr><td><code>src/services/documents.service.ts</code></td><td><code>checkDocumentReady</code>: 404 → 409 → ok</td></tr>
+      <tr><td><code>src/repositories/documents.repository.ts</code></td><td><code>DocumentStatus</code>, <code>insertDocument(…, status)</code>, <code>setDocumentStatus</code> → boolean</td></tr>
+      <tr><td><code>src/repositories/chunks.repository.ts</code></td><td><code>searchSimilar</code> / <code>sampleChunks</code> filter <code>status = 'ready'</code></td></tr>
+      <tr><td><code>src/routes/documents.routes.ts</code></td><td><code>/upload</code> → 202, <code>DELETE</code> row first</td></tr>
+      <tr><td><code>src/config.ts</code></td><td>Queue name, env, job + worker options, timeouts, user messages</td></tr>
+      <tr><td><code>src/index.ts</code> · <code>src/worker.ts</code></td><td>Start everything / start only the worker</td></tr>
+      <tr><td><code>src/step5-bullmq.ts</code></td><td>BG.1 learning script: toy jobs, retries, idle command counts (prefix <code>docmind-learn</code>)</td></tr>
+      <tr><td><code>frontend/src/hooks/useDocuments.ts</code></td><td>Polling, <code>listVersion</code>, <code>uploadFile()</code> waits for ready</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 25 -->
+<section id="check">
+  <div class="sec-head"><span class="num">25</span><h2>Check yourself</h2><span class="tag">answer out loud, then open</span></div>
+  <details class="q"><summary>1. Why does <code>/upload</code> return 202 and not 201?</summary><div><p>201 means "created and ready". The document exists, but it isn't usable yet: it's <code>processing</code> until the worker finishes. 202 Accepted means "got it, still working on it", and the client finds out the rest by polling <code>GET /documents</code>.</p></div></details>
+  <details class="q"><summary>2. Why does parsing stay in the request while embedding moves to the worker?</summary><div><p>Parsing needs the PDF bytes, which only exist in the request (multer memory storage), and it's fast. Embedding is one Gemini call per chunk: slow, and the part that fails. Keeping parsing in the request also means a scanned PDF gets an immediate 400, and the job carries only text, never a 10 MB file.</p></div></details>
+  <details class="q"><summary>3. What makes the job idempotent, and which two situations needed it?</summary><div><p>It deletes the document's chunks before inserting all of them, so any number of runs leaves the same rows. Needed for BullMQ's retries after a throw (chunks 1–2 already stored) and for a stalled re-run after a crash. Plus <code>jobId = documentId</code> so the same document can't be queued twice.</p></div></details>
+  <details class="q"><summary>4. Why two Redis connections with opposite settings?</summary><div><p>The upload side wants to fail fast (<code>enableOfflineQueue: false</code>): a 503 now beats a hanging request. The worker wants to survive reconnects (<code>maxRetriesPerRequest: null</code>, required by BullMQ) because it lives in long blocking waits.</p></div></details>
+  <details class="q"><summary>5. Why <code>getState() === 'failed'</code> instead of <code>attemptsMade &gt;= attempts</code>?</summary><div><p>A job that stalls more than <code>maxStalledCount</code> (1) times is failed by BullMQ with "job stalled more than allowable limit", an unrecoverable error, before its attempts run out (stalls don't count as attempts). The arithmetic would say "will retry" and the document would stay <code>processing</code> forever. The state is the truth.</p></div></details>
+  <details class="q"><summary>6. A user deletes a document while chunk 4 of 5 is embedding. Why are no chunks orphaned, whichever side finishes first?</summary><div><p>The route deletes the row first. If the worker's final UPDATE comes after that, it updates 0 rows, sees <code>false</code>, and deletes its own chunks. If the worker finishes first, the route's chunk delete runs afterwards and removes them all. The old order (chunks, then row) let a worker store its last chunk in between and leave orphans.</p></div></details>
+  <details class="q"><summary>7. Why does an idle worker cost Redis commands, and which settings fixed it?</summary><div><p>It keeps doing blocking "next job?" waits (one per <code>drainDelay</code>) and stalled checks (one per <code>stalledInterval</code>). Defaults 5 s and 30 s cost 118 commands per 5 idle minutes (204% of the free plan 24/7). 30 s and 5 min cost 19 (33%).</p></div></details>
+  <details class="q"><summary>8. Why can crash recovery take ~10 minutes with a 5-minute <code>stalledInterval</code>?</summary><div><p>One check only marks active jobs; the next one moves those whose lock expired. And each check sets a throttle key for one interval, so the dead process's last key can make the restarted worker skip its first check. Measured: 624 s.</p></div></details>
+  <details class="q"><summary>9. What happens on a Render deploy while a job is running?</summary><div><p>SIGTERM → <code>worker.close()</code> stops taking jobs and waits for the current one → queue and connections close → exit 0. If it takes over 20 s, the app exits anyway; the job stalls and is re-run after the restart, safely, because of delete-first.</p></div></details>
+  <details class="q"><summary>10. Redis is down. What does an upload get? What about chat?</summary><div><p>Upload: the enqueue fails (at once, or after the 5 s race if Redis was never reachable), the new row is deleted, and the user gets 503. Chat keeps working: it never touches Redis.</p></div></details>
+  <details class="q"><summary>11. Why must the Redis behind a queue be <code>noeviction</code>?</summary><div><p>Under memory pressure an evicting Redis deletes keys, and a deleted job hash is a lost upload with no error anywhere. <code>noeviction</code> refuses new writes instead, which surfaces as a failed <code>add()</code> → 503.</p></div></details>
+  <details class="q"><summary>12. How did production end up sharing a queue with the laptop, and how was it caught?</summary><div><p>Render's <code>BULLMQ_PREFIX</code> was <code>docmind-dev</code>, copied from <code>.env</code>. The live test passed, because it only checked "job hash gone". Counting keys showed 0 under <code>docmind:</code>. Fix: set <code>docmind</code> on Render, re-test asserting the job's events in <code>docmind:ingest-pdf:events</code>. Lesson: an assertion has to be able to fail.</p></div></details>
+  <details class="q"><summary>13. Why is the worker in the API process, and what would change to move it out?</summary><div><p>Render's free tier has no background-worker service. Moving it out means starting a second service with <code>npm run worker</code> (<code>src/worker.ts</code>) and setting <code>RUN_WORKER=false</code> on the API. No code change.</p></div></details>
+  <details class="q"><summary>14. Why is 409 the right status for chatting with a processing document, and why is ownership checked first?</summary><div><p>The document exists and it's yours; it's in the wrong state for the request, which is what 409 Conflict means. Ownership comes first because answering "still processing" to someone else would confirm the id exists. Theirs stays a 404.</p></div></details>
+</section>
+
+<p class="caption" style="margin-top:40px">DocMind · Phase 6 walkthrough · built from the code on <code>main</code> and <code>background-jobs-plan.md</code> §9. Companion pages: the Phase 7 walkthrough and the whole-project walkthrough.</p>
+</main>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, html) { var e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+  // ── generic step player: events applied one at a time ─────────────────
+  function Player(root, opts) {
+    var i = 0, timer = null, events = opts.events || [];
+    var prog = root.querySelector('[data-progress]');
+    function update() { if (prog) prog.textContent = i + ' / ' + events.length; }
+    function stop() { clearTimeout(timer); timer = null; }
+    function stepOnce(animate) { if (i >= events.length) return false; opts.apply(events[i], i, animate); i++; update(); return true; }
+    function reset() { stop(); i = 0; opts.reset(); update(); }
+    function showAll() { reset(); while (stepOnce(false)) {} }
+    function play() {
+      reset();
+      if (reduce) { while (stepOnce(false)) {} return; }
+      (function tick() { if (!stepOnce(true)) { stop(); return; } timer = setTimeout(tick, opts.delay || 1500); })();
+    }
+    function step() { stop(); if (i >= events.length) reset(); stepOnce(true); }
+    root.querySelectorAll('[data-act]').forEach(function (b) {
+      b.addEventListener('click', function () { ({ play: play, step: step, reset: reset })[b.dataset.act](); });
+    });
+    return { showAll: showAll, reset: reset, play: play, setEvents: function (e) { stop(); events = e; reset(); } };
+  }
+  function tabs(container, items, onPick, startKey) {
+    var buttons = {};
+    items.forEach(function (it) {
+      var b = el('button', 'btn', esc(it.label));
+      b.type = 'button';
+      b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', function () { pick(it.key); });
+      container.appendChild(b); buttons[it.key] = b;
+    });
+    function pick(key) {
+      Object.keys(buttons).forEach(function (k) { buttons[k].setAttribute('aria-pressed', k === key ? 'true' : 'false'); });
+      onPick(key);
+    }
+    pick(startKey);
+  }
+  function termLine(term, cls, text, animate) {
+    var d = el('div', cls + (animate ? ' new' : ''), esc(text));
+    term.appendChild(d); term.scrollTop = term.scrollHeight;
+  }
+  function litChips(box, steps, animate, timers) {
+    box.innerHTML = '';
+    var chips = steps.map(function (s, n) {
+      if (n) box.appendChild(el('span', 'arrow', '→'));
+      var c = el('span', 'chip' + (s[1] ? ' ' + s[1] : ''), esc(s[0])); box.appendChild(c); return c;
+    });
+    chips.forEach(function (c, n) {
+      if (!animate || reduce) { c.classList.add('lit'); return; }
+      timers.push(setTimeout(function () { c.classList.add('lit'); }, 150 + n * 230));
+    });
+  }
+
+  // ── time-scaled timeline player ───────────────────────────────────────
+  // scenario: { T, unit (ms of real time per unit), clock(t), lanes: [{ name, segs: [{ s, e, t, c }] }], says: [{ at, text }] }
+  function Timeline(root, tlBox, clockEl, sayEl) {
+    var sc = null, segEls = [], heads = [], raf = null, t0 = 0;
+    function build(s) {
+      sc = s; tlBox.innerHTML = ''; segEls = []; heads = [];
+      s.lanes.forEach(function (lane) {
+        var row = el('div', 'tl-row');
+        row.appendChild(el('span', null, esc(lane.name)));
+        var track = el('div', 'track');
+        lane.segs.forEach(function (g) {
+          var seg = el('div', 'seg' + (g.c ? ' ' + g.c : ''), esc(g.t || ''));
+          seg.style.left = (g.s / s.T * 100) + '%';
+          if (!/\bdot\b/.test(g.c || '')) seg.style.width = Math.max(.6, (g.e - g.s) / s.T * 100) + '%';
+          seg.title = (g.t || '') + ' (' + s.clock(g.s) + ')';
+          track.appendChild(seg); segEls.push({ el: seg, s: g.s });
+        });
+        var head = el('div', 'playhead'); head.style.left = '0%'; track.appendChild(head); heads.push(head);
+        row.appendChild(track); tlBox.appendChild(row);
+      });
+      var axis = el('div', 'tl-axis');
+      axis.appendChild(el('span'));
+      axis.appendChild(el('div', null, '<span>' + esc(s.clock(0)) + '</span><span>' + esc(s.clock(s.T / 2)) + '</span><span>' + esc(s.clock(s.T)) + '</span>'));
+      tlBox.appendChild(axis);
+      setT(s.T);
+    }
+    function setT(t) {
+      segEls.forEach(function (g) { g.el.classList.toggle('lit', g.s <= t + 1e-9); });
+      heads.forEach(function (h) { h.style.left = Math.min(100, t / sc.T * 100) + '%'; });
+      if (clockEl) clockEl.textContent = 't = ' + sc.clock(t);
+      var said = null;
+      sc.says.forEach(function (x) { if (x.at <= t + 1e-9) said = x; });
+      sayEl.innerHTML = said ? said.text : '<b>READY</b>Press Play.';
+    }
+    function stop() { if (raf) cancelAnimationFrame(raf); raf = null; }
+    function play() {
+      stop();
+      if (reduce) { setT(sc.T); return; }
+      t0 = performance.now();
+      (function frame(now) {
+        var t = (now - t0) / sc.unit;
+        if (t >= sc.T) { setT(sc.T); raf = null; return; }
+        setT(t); raf = requestAnimationFrame(frame);
+      })(t0);
+    }
+    root.querySelectorAll('[data-act]').forEach(function (b) {
+      b.addEventListener('click', function () { if (b.dataset.act === 'play') play(); else { stop(); setT(0); } });
+    });
+    return { load: function (s) { stop(); build(s); } };
+  }
+  function secs(t) { return t.toFixed(1) + ' s'; }
+
+  // ── 02 before / after ─────────────────────────────────────────────────
+  function embeds(start, n, w, failAt) {
+    var out = [];
+    for (var k = 1; k <= n; k++) {
+      var s = start + (k - 1) * w;
+      if (failAt === k) { out.push({ s: s, e: s + .45, t: '✗ 503', c: 'bad' }); return out; }
+      out.push({ s: s, e: s + w - .05, t: 'embed ' + k });
+    }
+    return out;
+  }
+  function polls(from, to, every) { var o = []; for (var t = from; t <= to; t += every) o.push({ s: t, e: t, t: 'poll', c: 'dot' }); return o; }
+  var BA = {
+    normal: { label: 'Normal upload', T: 11, unit: 450, clock: secs,
+      lanes: [
+        { name: 'Old · browser', segs: [{ s: 0, e: 8.2, t: 'waiting… request still open', c: 'wait' }, { s: 8.2, e: 9.2, t: '200', c: 'good' }] },
+        { name: 'Old · request', segs: [{ s: 0, e: .4, t: 'parse' }, { s: .4, e: .6, t: 'chunk' }].concat(embeds(.6, 5, 1.4), [{ s: 7.6, e: 8.2, t: 'row' }]) },
+        { name: 'New · request', segs: [{ s: 0, e: .4, t: 'parse' }, { s: .4, e: .6, t: 'chunk' }, { s: .6, e: .8, t: 'row' }, { s: .8, e: 1, t: 'add' }, { s: 1, e: 1.6, t: '202', c: 'good' }] },
+        { name: 'New · worker', segs: [{ s: 1.15, e: 1.3, t: 'del' }].concat(embeds(1.3, 5, 1.4), [{ s: 8.3, e: 8.8, t: 'ready', c: 'good' }]) },
+        { name: 'New · browser', segs: polls(3, 9, 2).concat([{ s: 9.1, e: 10.8, t: 'ready ✓', c: 'good' }]) }
+      ],
+      says: [
+        { at: 0, text: '<b>t 0</b>Both uploads start. Parsing and chunking are fast in both versions.' },
+        { at: 1, text: '<b>NEW</b>The new request answers <b>202</b> after about a second. The worker picks the job up and starts embedding. The user can keep chatting.' },
+        { at: 3, text: '<b>NEW</b>The browser polls <code>GET /documents</code> every 2 s: still <code>processing</code>.' },
+        { at: 8.2, text: '<b>OLD</b>The old request only answers now, after every embedding call. All that time one HTTP request was held open.' },
+        { at: 9.1, text: '<b>NEW</b>The next poll sees <code>ready</code>, polling stops, and the upload promise resolves.' }
+      ] },
+    fail: { label: 'Gemini 503 on chunk 3', T: 19, unit: 330, clock: secs,
+      lanes: [
+        { name: 'Old · browser', segs: [{ s: 0, e: 3.9, t: 'waiting…', c: 'wait' }, { s: 3.9, e: 4.6, t: '500', c: 'bad' }, { s: 4.6, e: 19, t: 'upload again from scratch…', c: 'wait' }] },
+        { name: 'Old · request', segs: [{ s: 0, e: .4, t: 'parse' }, { s: .4, e: .6, t: 'chunk' }].concat(embeds(.6, 5, 1.4, 3)) },
+        { name: 'New · request', segs: [{ s: 0, e: .4, t: 'parse' }, { s: .4, e: .6, t: 'chunk' }, { s: .6, e: .8, t: 'row' }, { s: .8, e: 1, t: 'add' }, { s: 1, e: 1.6, t: '202', c: 'good' }] },
+        { name: 'New · worker', segs: embeds(1.3, 5, 1.4, 3).concat([{ s: 4.5, e: 9.5, t: 'delayed: backoff 5 s', c: 'delay' }, { s: 9.5, e: 9.8, t: 'del', c: 'key' }], embeds(9.8, 5, 1.4), [{ s: 16.8, e: 17.3, t: 'ready', c: 'good' }]) },
+        { name: 'New · browser', segs: polls(3, 17, 2).concat([{ s: 17.4, e: 19, t: 'ready ✓', c: 'good' }]) }
+      ],
+      says: [
+        { at: 0, text: '<b>t 0</b>Same PDF. This time Gemini answers 503 "high demand" on chunk 3.' },
+        { at: 1, text: '<b>NEW</b>202 as before. The failure hasn\'t happened yet, and when it does the user won\'t be in a request.' },
+        { at: 3.9, text: '<b>OLD</b>Chunk 3 fails, so the whole upload fails. Chunks 1 and 2 are thrown away; the user has to upload again.' },
+        { at: 4.5, text: '<b>NEW</b>Attempt 1 throws. BullMQ moves the job to <code>delayed</code> for 5 s. No code of ours retries anything.' },
+        { at: 9.5, text: '<b>NEW</b>Attempt 2 starts by deleting the chunks attempt 1 stored (idempotency), then embeds all 5.' },
+        { at: 17.4, text: '<b>NEW</b>Ready. The user never saw an error; the polls just kept saying <code>processing</code> a little longer.' }
+      ] }
+  };
+  var baTL = Timeline($('ba'), $('ba-tl'), $('ba-clock'), $('ba-say'));
+  tabs($('ba-tabs'), [{ key: 'normal', label: BA.normal.label }, { key: 'fail', label: BA.fail.label }], function (k) { baTL.load(BA[k]); }, 'normal');
+
+  // ── 05 prefixes ───────────────────────────────────────────────────────
+  var PX = {
+    ok: { label: 'Correct: docmind-dev / docmind',
+      laptop: [['docmind-dev:ingest-pdf:wait', 'list'], ['docmind-dev:ingest-pdf:events', 'stream'], ['worker listens on', 'docmind-dev']],
+      render: [['docmind:ingest-pdf:wait', 'list'], ['docmind:ingest-pdf:events', 'stream'], ['worker listens on', 'docmind']],
+      say: '<b>OK</b>Same Upstash database, two prefixes, so two separate queues. A test upload on the laptop can only be taken by the laptop\'s worker, and a live upload only by Render\'s.' },
+    bug: { label: 'The BG.5 bug: Render had docmind-dev',
+      laptop: [['docmind-dev:ingest-pdf:wait', 'list (shared!)'], ['worker listens on', 'docmind-dev']],
+      render: [['docmind-dev:ingest-pdf:wait', 'list (shared!)'], ['worker listens on', 'docmind-dev'], ['docmind:ingest-pdf:*', '0 keys']],
+      say: '<b>BUG</b>Render\'s <code>BULLMQ_PREFIX</code> was copied from <code>.env</code>. Both workers pulled from one list: whichever asked first got the job, so a live upload could run on the laptop\'s work-in-progress code. Caught because there were <b>0 keys under <code>docmind:</code></b>, while the test itself had passed. Fixed 2026-10-15 and re-checked 10/10.' }
+  };
+  function kvRows(box, rows, bad) {
+    box.innerHTML = '';
+    rows.forEach(function (r) {
+      var row = el('div', 'row' + (bad && /shared|0 keys/.test(r[1]) ? ' chg' : ''));
+      row.appendChild(el('span', null, esc(r[0]))); row.appendChild(el('span', 't', esc(r[1]))); box.appendChild(row);
+    });
+  }
+  tabs($('px-tabs'), [{ key: 'ok', label: PX.ok.label }, { key: 'bug', label: PX.bug.label }], function (k) {
+    kvRows($('px-laptop'), PX[k].laptop, k === 'bug'); kvRows($('px-render'), PX[k].render, k === 'bug'); $('px-say').innerHTML = PX[k].say;
+  }, 'ok');
+
+  // ── 06 lifecycle simulator ────────────────────────────────────────────
+  var J = '3f2a91c0';
+  var R0 = { wait: [], active: [], delayed: [], failed: [], job: null, lock: null, stalled: false, throttle: false, ev: '—' };
+  function R(o) { var r = {}; Object.keys(R0).forEach(function (k) { r[k] = o.hasOwnProperty(k) ? o[k] : R0[k]; }); return r; }
+  function range(a, b) { var o = []; for (var k = a; k <= b; k++) o.push(k); return o; }
+  var JOB0 = 'attemptsMade=0 · data: 5 chunks';
+  var LOCK = 'TTL 60 s, renewed';
+  var startLog = function (n) { return [['q', '▶ ingest job ' + J + ' — attempt ' + n + '/3'], ['q', '[1/3] Checking the document still exists...'], ['d', '  "guide.pdf", 5 chunk(s), user a81c03d2']]; };
+  var queued = { st: 'waiting', say: '<b>ADD</b><code>POST /upload</code> saved the row as <code>processing</code>. <code>add()</code> writes the job hash and pushes its id onto <code>wait</code>. The request answers 202.',
+    log: [['u', '[upload 4/4] Queueing the embedding job (5 chunk(s))...'], ['u', '  queued — the worker embeds the chunks in the background']],
+    r: R({ wait: [J], job: JOB0, ev: 'added, waiting' }), doc: 'processing', chunks: [] };
+  var LC = {
+    happy: { label: 'Success first try', events: [
+      queued,
+      { st: 'active', say: '<b>TAKE</b>The worker\'s blocking wait returns. One atomic script moves the id from <code>wait</code> to <code>active</code> and sets a lock that expires in 60 s unless renewed.', log: startLog(1), r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [] },
+      { st: 'active', say: '<b>WORK</b>Delete-first finds nothing on a first run. Then one Gemini call per chunk, each stored as soon as it\'s embedded. BullMQ renews the lock in the background.', log: [['q', '[2/3] Embedding + storing 5 chunk(s)...'], ['d', '  chunk 1/5 → 3072-dim vector, stored'], ['d', '  … chunk 5/5 → 3072-dim vector, stored']], r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'processing', chunks: range(1, 5) },
+      { st: 'active', say: '<b>MARK</b>One UPDATE sets <code>status = \'ready\'</code> and reports that it found the row.', log: [['q', '[3/3] Marking the document ready...']], r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'ready', chunks: range(1, 5) },
+      { st: 'completed', say: '<b>DONE</b>The processor returned, so the job is <code>completed</code>. <code>removeOnComplete</code> deletes its hash and lock straight away: from now on the <code>documents</code> row is the only record. The next poll shows the document as ready.', log: [['q', '■ Total job time …']], r: R({ ev: 'completed' }), doc: 'ready', chunks: range(1, 5) }
+    ] },
+    retry: { label: '503 once, then a retry', events: [
+      queued,
+      { st: 'active', say: '<b>TAKE</b>Attempt 1 of 3 starts.', log: startLog(1), r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [] },
+      { st: 'active', say: '<b>THROW</b>Chunk 1 is stored. Chunk 2\'s embedding call gets a Gemini 503 and throws, so the processor rejects: this attempt failed.', log: [['q', '[2/3] Embedding + storing 5 chunk(s)...'], ['d', '  chunk 1/5 → 3072-dim vector, stored'], ['e', '  Gemini API error: 503']], r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [1] },
+      { st: 'delayed', say: '<b>BACKOFF</b>BullMQ records the attempt, releases the lock and puts the job in <code>delayed</code>, due in 5 s. The <code>failed</code> event fires anyway; the handler asks the job\'s state, gets <code>delayed</code>, and only logs.', log: [['e', '✗ ingest job ' + J + ' attempt 1/3'], ['e', '  Gemini API error: 503'], ['d', '  will be retried (job state: delayed)']], r: R({ delayed: [J + ' @ +5 s'], job: 'attemptsMade=1 · failedReason: …503', ev: 'failed, delayed' }), doc: 'processing', chunks: [1] },
+      { st: 'waiting', say: '<b>PROMOTE</b>5 s later the job is moved back to <code>wait</code>.', log: [], r: R({ wait: [J], job: 'attemptsMade=1 · failedReason: …503', ev: 'waiting' }), doc: 'processing', chunks: [1] },
+      { st: 'active', say: '<b>CLEAN</b>Attempt 2. The first thing it does is delete the chunk attempt 1 left behind: a clean slate.', log: startLog(2).concat([['d', '  (old chunks deleted: clean slate)']]), r: R({ active: [J], job: 'attemptsMade=1 · failedReason: …503', lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [] },
+      { st: 'active', say: '<b>WORK</b>All 5 chunks embedded and stored, then the row is marked ready.', log: [['q', '[2/3] Embedding + storing 5 chunk(s)...'], ['d', '  chunk 1/5 … 5/5 stored'], ['q', '[3/3] Marking the document ready...']], r: R({ active: [J], job: 'attemptsMade=1 · failedReason: …503', lock: LOCK, ev: 'active' }), doc: 'ready', chunks: range(1, 5) },
+      { st: 'completed', say: '<b>DONE</b>Completed on attempt 2: 5 rows, 5 distinct. BG.2\'s test A did exactly this: 7 embedding calls (1 ok + 1 throw + 5).', log: [['q', '■ Total job time …']], r: R({ ev: 'completed' }), doc: 'ready', chunks: range(1, 5) }
+    ] },
+    giveup: { label: 'Fails 3 times', events: [
+      queued,
+      { st: 'active', say: '<b>1/3</b>Attempt 1 stores chunks 1–2, then chunk 3 throws.', log: startLog(1).concat([['d', '  chunk 1/5, 2/5 stored'], ['e', '  Gemini API error: 503']]), r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'delayed', say: '<b>WAIT 5 s</b>State is <code>delayed</code>, so the failed handler only logs.', log: [['e', '✗ ingest job ' + J + ' attempt 1/3'], ['d', '  will be retried (job state: delayed)']], r: R({ delayed: [J + ' @ +5 s'], job: 'attemptsMade=1', ev: 'failed, delayed' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'active', say: '<b>2/3</b>Attempt 2 deletes chunks 1–2, stores them again, and fails on chunk 3 again.', log: startLog(2).concat([['d', '  chunk 1/5, 2/5 stored'], ['e', '  Gemini API error: 503']]), r: R({ active: [J], job: 'attemptsMade=1', lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'delayed', say: '<b>WAIT 10 s</b>Exponential backoff: the second wait is twice the first.', log: [['e', '✗ ingest job ' + J + ' attempt 2/3'], ['d', '  will be retried (job state: delayed)']], r: R({ delayed: [J + ' @ +10 s'], job: 'attemptsMade=2', ev: 'failed, delayed' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'active', say: '<b>3/3</b>The last attempt. Same result.', log: startLog(3).concat([['d', '  chunk 1/5, 2/5 stored'], ['e', '  Gemini API error: 503']]), r: R({ active: [J], job: 'attemptsMade=2', lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'failed', say: '<b>FAILED</b>No attempts left. <code>getState()</code> now says <code>failed</code>, so the handler deletes the partial chunks and marks the row failed with a short, safe message. The job stays in Redis (<code>removeOnFail: 50</code>) with its <code>failedReason</code>, for debugging in Upstash.', log: [['e', '✗ ingest job ' + J + ' attempt 3/3'], ['d', '  no attempts left — document ' + J + ' marked failed']], r: R({ failed: [J], job: 'attemptsMade=3 · failedReason kept', ev: 'failed' }), doc: 'failed', err: 'error: "Could not process this PDF. Delete it and upload it again."', chunks: [] }
+    ] },
+    crash: { label: 'Process killed mid-job', events: [
+      { st: 'active', say: '<b>RUNNING</b>Attempt 1 has stored chunks 1–2 and is embedding chunk 3. The worker\'s own periodic stalled check has set its throttle key.', log: startLog(1).concat([['d', '  chunk 1/5, 2/5 stored']]), r: R({ active: [J], job: JOB0, lock: LOCK, throttle: true, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'active', say: '<b>KILLED</b>The process is killed (a crash, not a deploy: no SIGTERM handler runs). Nobody renews the lock any more, but Redis still lists the job as active.', log: [['e', '[process killed]']], r: R({ active: [J], job: JOB0, lock: 'TTL running out, no renewals', throttle: true, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'active', say: '<b>LOCK GONE</b>Within 60 s the lock key expires and disappears. The job is still in <code>active</code>: nothing has noticed yet.', log: [], r: R({ active: [J], job: JOB0, throttle: true, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'active', say: '<b>RESTART</b>A new process starts its worker. Its first stalled check is skipped: the dead process\'s <code>stalled-check</code> key is still live. (Model of the timing, not measured.)', log: [['y', '[ingest worker] started — queue "docmind:ingest-pdf"']], r: R({ active: [J], job: JOB0, throttle: true, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'active', say: '<b>PASS 1</b>A stalled check copies the ids in <code>active</code> into the <code>stalled</code> set. It only marks; nothing moves yet.', log: [], r: R({ active: [J], job: JOB0, stalled: true, throttle: true, ev: 'active' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'waiting', say: '<b>PASS 2</b>One interval later the job is still in <code>stalled</code> and has no lock, so it\'s moved back to <code>wait</code> (its first stall: within <code>maxStalledCount</code> 1). Measured in BG.3: the job resumed <b>624 s</b> after the kill.', log: [], r: R({ wait: [J], job: 'attemptsMade=0 · stalled 1×', throttle: true, ev: 'stalled' }), doc: 'processing', chunks: [1, 2] },
+      { st: 'active', say: '<b>RE-RUN</b>The worker takes it again. The log still says <b>attempt 1/3</b>: a stall doesn\'t use up an attempt. Delete-first removes the 2 chunks from before the crash.', log: startLog(1).concat([['d', '  (old chunks deleted: clean slate)']]), r: R({ active: [J], job: 'attemptsMade=0 · stalled 1×', lock: LOCK, throttle: true, ev: 'active' }), doc: 'processing', chunks: [] },
+      { st: 'completed', say: '<b>DONE</b>5 rows, 5 distinct: idempotency held after a real crash.', log: [['q', '[2/3] Embedding + storing 5 chunk(s)...'], ['q', '[3/3] Marking the document ready...'], ['q', '■ Total job time …']], r: R({ throttle: true, ev: 'completed' }), doc: 'ready', chunks: range(1, 5) }
+    ] },
+    deleted: { label: 'Deleted while processing', events: [
+      { st: 'active', say: '<b>RUNNING</b>Attempt 1 has stored chunk 1.', log: startLog(1).concat([['d', '  chunk 1/5 stored']]), r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'processing', chunks: [1] },
+      { st: 'active', say: '<b>DELETE</b>The user deletes the document. The route checks ownership, deletes the <b>row first</b>, then its chunks and messages.', log: [['d', 'route: DELETE /documents/' + J + ' → row, then chunks + messages']], r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'gone', chunks: [] },
+      { st: 'active', say: '<b>STILL WORKING</b>The worker doesn\'t know. It keeps going and stores chunks 2–5, rows that now belong to nothing.', log: [['d', '  chunk 2/5 … 5/5 stored']], r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'gone', chunks: [2, 3, 4, 5], orphan: true },
+      { st: 'active', say: '<b>0 ROWS</b>The final UPDATE matches no row, so <code>setDocumentStatus</code> returns <code>false</code>, and the worker deletes the chunks it just stored.', log: [['q', '[3/3] Marking the document ready...'], ['y', '✗ document ' + J + ' was deleted while processing — removing its chunks']], r: R({ active: [J], job: JOB0, lock: LOCK, ev: 'active' }), doc: 'gone', chunks: [] },
+      { st: 'completed', say: '<b>DONE</b>The job <i>completes</i> rather than fails: retrying can\'t bring a deleted document back. 0 chunks left. This is BG.2\'s test C.', log: [['q', '■ Total job time …']], r: R({ ev: 'completed' }), doc: 'gone', chunks: [] }
+    ] }
+  };
+  function redisRows(r) {
+    var rows = [['meta', 'hash', 'queue settings']];
+    if (r.wait.length) rows.push(['wait', 'list', '[' + r.wait.join(', ') + ']']);
+    if (r.active.length) rows.push(['active', 'list', '[' + r.active.join(', ') + ']']);
+    if (r.delayed.length) rows.push(['delayed', 'zset', r.delayed.join(', ')]);
+    if (r.failed.length) rows.push(['failed', 'zset', r.failed.join(', ')]);
+    if (r.job) rows.push([J, 'hash', r.job]);
+    if (r.lock) rows.push([J + ':lock', 'string', r.lock]);
+    if (r.stalled) rows.push(['stalled', 'set', '[' + J + ']']);
+    if (r.throttle) rows.push(['stalled-check', 'string', 'TTL 5 min']);
+    rows.push(['events', 'stream', 'last: ' + r.ev]);
+    return rows;
+  }
+  var lcPrev = {};
+  function renderRedis(r, animate) {
+    var box = $('lc-redis'); box.innerHTML = '';
+    var now = {};
+    redisRows(r).forEach(function (row) {
+      now[row[0]] = row[2];
+      var changed = animate && lcPrev[row[0]] !== row[2];
+      var d = el('div', 'row' + (changed ? ' chg' : ''));
+      d.appendChild(el('span', null, esc(row[0]) + ' <span class="t">' + esc(row[1]) + '</span>'));
+      d.appendChild(el('span', 't', esc(row[2])));
+      box.appendChild(d);
+    });
+    if (animate) Object.keys(lcPrev).forEach(function (k) {
+      if (!(k in now)) { var d = el('div', 'row gone'); d.appendChild(el('span', null, esc(k))); d.appendChild(el('span', 't', 'deleted')); box.appendChild(d); }
+    });
+    lcPrev = now;
+  }
+  function renderCells(box, list, cls) {
+    box.innerHTML = '';
+    list.forEach(function (c) {
+      var lab = Array.isArray(c) ? c[0] : c, extra = Array.isArray(c) ? c[1] : cls;
+      box.appendChild(el('div', 'cell' + (extra ? ' ' + extra : ''), esc(lab)));
+    });
+  }
+  function setStates(box, st) { box.querySelectorAll('.state').forEach(function (s) { s.classList.toggle('on', s.dataset.s === st); }); }
+  var lcScenario = 'happy';
+  var lc = Player($('lc'), {
+    events: LC.happy.events, delay: 2300,
+    reset: function () {
+      $('lc-say').innerHTML = '<b>READY</b>' + esc(LC[lcScenario].label) + '. Press Play or Step.';
+      setStates($('lc-states'), null); lcPrev = {};
+      renderRedis(R({}), false); $('lc-term').innerHTML = '';
+      var first = LC[lcScenario].events[0];
+      $('lc-doc').innerHTML = '<span class="pill processing">processing</span>'; $('lc-err').textContent = '';
+      $('lc-n').textContent = first.chunks.length; renderCells($('lc-cells'), first.chunks, first.orphan ? 'orphan' : '');
+    },
+    apply: function (ev, i, animate) {
+      $('lc-say').innerHTML = ev.say;
+      setStates($('lc-states'), ev.st);
+      renderRedis(ev.r, animate);
+      ev.log.forEach(function (l) { termLine($('lc-term'), l[0], l[1], animate); });
+      $('lc-doc').innerHTML = ev.doc === 'gone' ? '<span class="pill gone">deleted</span>' : '<span class="pill ' + ev.doc + '">' + ev.doc + '</span>';
+      $('lc-err').textContent = ev.err || '';
+      $('lc-n').textContent = ev.chunks.length; renderCells($('lc-cells'), ev.chunks, ev.orphan ? 'orphan' : '');
+    }
+  });
+  tabs($('lc-tabs'), Object.keys(LC).map(function (k) { return { key: k, label: LC[k].label }; }), function (k) { lcScenario = k; lc.setEvents(LC[k].events); }, 'happy');
+
+  // ── 08 upload paths ───────────────────────────────────────────────────
+  var UPHEAD = [['u', '▶ POST /upload'], ['u', '[1/4] File received: "guide.pdf" (… bytes)'], ['d', '  user: a81c03d2']];
+  var UP = {
+    happy: { label: '202 · normal PDF',
+      chips: [['requireAuth ✓', ''], ['checkDocumentCap 2/5 ✓', ''], ['multer reads file', ''], ['mimetype pdf ✓', ''], ['parsePdf → 5 chunks', ''], ['hasText ✓', 'good'], ["insert row 'processing'", 'key'], ['enqueueIngest', 'key'], ['202', 'good']],
+      log: UPHEAD.concat([['u', '[2/4] Extracting text from PDF...'], ['u', '[3/4] Split into 5 chunk(s)'], ['d', "  documentId: 3f2a91c0-… (saved as 'processing')"], ['u', '[4/4] Queueing the embedding job (5 chunk(s))...'], ['d', '  queued — the worker embeds the chunks in the background']]),
+      out: '<b>202</b><code>{ documentId, filename, fileSizeBytes, textLength, chunkCount: 5, createdAt, status: "processing" }</code>. Live: 2.0–2.5 s.' },
+    scanned: { label: '400 · scanned PDF',
+      chips: [['requireAuth ✓', ''], ['checkDocumentCap ✓', ''], ['multer reads file', ''], ['mimetype pdf ✓', ''], ['parsePdf → 12 chars, 1 chunk', ''], ['hasText ✗', 'bad'], ['400', 'bad']],
+      log: UPHEAD.concat([['u', '[2/4] Extracting text from PDF...'], ['d', '  extracted 12 characters'], ['u', '[3/4] Split into 1 chunk(s)'], ['e', '✗ no text layer in this PDF (scanned image?)']]),
+      out: '<b>400</b>"This PDF has no text layer (is it a scanned image?)…" No row, no job. The 12 characters were pdf-parse\'s own <code>-- 1 of 1 --</code> page marker: that\'s why <code>hasText</code> checks every page\'s text instead.' },
+    cap: { label: '403 · over the cap',
+      chips: [['requireAuth ✓', ''], ['checkDocumentCap 5/5 ✗', 'bad'], ['403', 'bad']],
+      log: [['e', '✗ upload cap — user a81c03d2 already has 5/5 documents']],
+      out: '<b>403</b>"Guests can keep up to 5 documents. Delete one, or sign up to keep up to 10." The cap runs <b>before</b> multer, so the file is never read. Processing and failed documents count.' },
+    redis: { label: '503 · Redis down',
+      chips: [['requireAuth ✓', ''], ['checkDocumentCap ✓', ''], ['parsePdf → 5 chunks', ''], ["insert row 'processing'", 'key'], ['enqueueIngest ✗ (5 s)', 'bad'], ['delete row', 'key'], ['503', 'bad']],
+      log: UPHEAD.concat([['u', '[2/4] Extracting text from PDF...'], ['u', '[3/4] Split into 5 chunk(s)'], ['u', '[4/4] Queueing the embedding job (5 chunk(s))...'], ['e', "[upload] could not queue the job: Redis didn't accept the job within 5 s"], ['e', '✗ upload queue unavailable — documents row removed again']]),
+      out: '<b>503</b>"The upload queue is unavailable right now. Try again shortly." Measured: 7.4 s, no leftover row, and chat still answered 200 (it never touches Redis).' },
+    notpdf: { label: '400 · not a PDF',
+      chips: [['requireAuth ✓', ''], ['checkDocumentCap ✓', ''], ['multer reads file', ''], ['mimetype image/png ✗', 'bad'], ['400', 'bad']],
+      log: [['u', '▶ POST /upload'], ['e', '✗ wrong mimetype (image/png)']],
+      out: '<b>400</b>"Only PDF files are supported".' }
+  };
+  var upTimers = [];
+  tabs($('up-tabs'), Object.keys(UP).map(function (k) { return { key: k, label: UP[k].label }; }), function (k) {
+    upTimers.forEach(clearTimeout); upTimers = [];
+    litChips($('up-chips'), UP[k].chips, true, upTimers);
+    var term = $('up-term'); term.innerHTML = '';
+    UP[k].log.forEach(function (l, n) {
+      if (reduce) termLine(term, l[0], l[1], false);
+      else upTimers.push(setTimeout(function () { termLine(term, l[0], l[1], true); }, 150 + n * 180));
+    });
+    $('up-out').innerHTML = UP[k].out;
+  }, 'happy');
+
+  // ── 09 enqueue race ───────────────────────────────────────────────────
+  var ER = {
+    up: { label: 'Redis up', T: 6, unit: 500, clock: secs,
+      lanes: [{ name: 'add()', segs: [{ s: 0, e: .35, t: 'stored', c: 'good' }] }, { name: '5 s timer', segs: [{ s: 0, e: .35, t: 'cleared', c: 'wait' }] }, { name: 'response', segs: [{ s: .35, e: .9, t: '202', c: 'good' }] }],
+      says: [{ at: 0, text: '<b>RACE</b><code>add()</code> and the 5 s timer start together.' }, { at: .35, text: '<b>WIN</b><code>add()</code> resolves after one round trip. <code>finally</code> clears the timer, so it never fires.' }] },
+    dropped: { label: 'Redis dropped after connecting', T: 6, unit: 500, clock: secs,
+      lanes: [{ name: 'add()', segs: [{ s: 0, e: .2, t: 'refused', c: 'bad' }] }, { name: '5 s timer', segs: [{ s: 0, e: .2, t: 'cleared', c: 'wait' }] }, { name: 'response', segs: [{ s: .25, e: .5, t: 'row', c: 'key' }, { s: .5, e: 1.1, t: '503', c: 'bad' }] }],
+      says: [{ at: 0, text: '<b>RACE</b>Redis was connected once, then dropped.' }, { at: .2, text: '<b>FAST</b><code>enableOfflineQueue: false</code>: ioredis refuses the command at once instead of holding it in memory. The catch deletes the row and answers 503.' }] },
+    never: { label: 'Redis never reachable', T: 6, unit: 500, clock: secs,
+      lanes: [{ name: 'add()', segs: [{ s: 0, e: 6, t: 'waiting for a first connection… forever', c: 'wait' }] }, { name: '5 s timer', segs: [{ s: 0, e: 5, t: 'counting…', c: 'delay' }, { s: 5, e: 5.4, t: 'reject', c: 'bad' }] }, { name: 'response', segs: [{ s: 5.4, e: 5.65, t: 'row', c: 'key' }, { s: 5.65, e: 6, t: '503', c: 'bad' }] }],
+      says: [{ at: 0, text: '<b>RACE</b>Redis has been unreachable since the server started.' }, { at: 2, text: '<b>HANG</b>BullMQ is still waiting for a first <code>ready</code> event. On its own, <code>add()</code> would never settle.' }, { at: 5, text: '<b>TIMEOUT</b>The timer rejects, so <code>Promise.race</code> rejects. The catch deletes the row and answers 503.' }] }
+  };
+  var erTL = Timeline($('er'), $('er-tl'), $('er-clock'), $('er-say'));
+  tabs($('er-tabs'), Object.keys(ER).map(function (k) { return { key: k, label: ER[k].label }; }), function (k) { erTL.load(ER[k]); }, 'never');
+
+  // ── 12 idempotency ────────────────────────────────────────────────────
+  var ID = {
+    with: { label: 'With delete-first (built)', events: [
+      { c: [], say: '<b>ATTEMPT 1</b>Delete this document\'s chunks: nothing there yet.' },
+      { c: [1], say: '<b>STORE</b>Chunk 1 embedded and stored.' },
+      { c: [1, 2], say: '<b>STORE</b>Chunk 2 embedded and stored.' },
+      { c: [1, 2], say: '<b>THROW</b>Chunk 3: Gemini 503. The attempt fails; BullMQ waits 5 s.' },
+      { c: [], say: '<b>ATTEMPT 2</b>Delete-first removes chunks 1–2. Clean slate.' },
+      { c: [1, 2, 3, 4, 5], say: '<b>STORE</b>All 5 chunks embedded and stored.' },
+      { c: [1, 2, 3, 4, 5], say: '<b>RESULT</b>5 rows, 5 distinct. One run or three, the table looks the same.' }
+    ] },
+    without: { label: 'Without it (naive retry)', events: [
+      { c: [], say: '<b>ATTEMPT 1</b>Starts inserting straight away.' },
+      { c: [1], say: '<b>STORE</b>Chunk 1 stored.' },
+      { c: [1, 2], say: '<b>STORE</b>Chunk 2 stored.' },
+      { c: [1, 2], say: '<b>THROW</b>Chunk 3: Gemini 503. The attempt fails; BullMQ waits 5 s.' },
+      { c: [1, 2], say: '<b>ATTEMPT 2</b>Starts inserting from chunk 1 again. Chunks 1–2 are still there.' },
+      { c: [1, 2, [1, 'dup'], [2, 'dup'], 3, 4, 5], say: '<b>STORE</b>All 5 stored again.' },
+      { c: [1, 2, [1, 'dup'], [2, 'dup'], 3, 4, 5], say: '<b>RESULT</b>7 rows for 5 chunks. A search can now return the same passage twice, filling 2 of its top 3 slots with one passage, and the quiz can sample it twice. A crash re-run makes it worse each time.' }
+    ] }
+  };
+  var idCur = 'with';
+  var idp = Player($('id'), {
+    events: ID.with.events, delay: 1300,
+    reset: function () { $('id-say').innerHTML = '<b>READY</b>' + esc(ID[idCur].label) + '. Press Play.'; renderCells($('id-cells'), []); },
+    apply: function (ev) { $('id-say').innerHTML = ev.say; renderCells($('id-cells'), ev.c); }
+  });
+  tabs($('id-tabs'), [{ key: 'with', label: ID.with.label }, { key: 'without', label: ID.without.label }], function (k) { idCur = k; idp.setEvents(ID[k].events); }, 'without');
+
+  // ── 13 delete race ────────────────────────────────────────────────────
+  var DR = {
+    old: { label: 'Old order: chunks, then row', steps: [
+      { w: 'stores chunk 4', db: 'row: processing · chunks: 4' },
+      { r: 'delete chunks', db: 'row: processing · chunks: 0' },
+      { w: 'stores chunk 5', db: 'row: processing · chunks: 1' },
+      { w: "UPDATE status='ready' → 1 row ✓", db: 'row: ready · chunks: 1' },
+      { r: 'delete row', db: 'row: none · chunks: 1 orphan', c: 'bad' }
+    ], end: '<b>ORPHAN</b>Chunk 5 belongs to nothing, and no foreign key stops it. The worker\'s UPDATE found the row because the route hadn\'t deleted it yet. Orphans like this once piled up to 65 rows.' },
+    workerFirst: { label: 'Row first · worker finishes first', steps: [
+      { w: 'stores chunk 5', db: 'row: processing · chunks: 5' },
+      { w: "UPDATE status='ready' → 1 row ✓", db: 'row: ready · chunks: 5' },
+      { r: 'delete row', db: 'row: none · chunks: 5' },
+      { r: 'delete chunks', db: 'row: none · chunks: 0', c: 'good' }
+    ], end: '<b>CLEAN</b>The worker finished first, so the route\'s chunk delete, which comes after the row, gets every chunk.' },
+    userFirst: { label: 'Row first · user deletes first', steps: [
+      { w: 'stores chunk 4', db: 'row: processing · chunks: 4' },
+      { r: 'delete row', db: 'row: none · chunks: 4' },
+      { r: 'delete chunks', db: 'row: none · chunks: 0' },
+      { w: 'stores chunk 5', db: 'row: none · chunks: 1' },
+      { w: "UPDATE status='ready' → 0 rows → false", db: 'row: none · chunks: 1' },
+      { w: 'deleteChunksByDocumentId', db: 'row: none · chunks: 0', c: 'good' }
+    ], end: '<b>CLEAN</b>The worker stored a chunk after the route cleaned up, but its final UPDATE found no row, so it removed its own chunks.' }
+  };
+  var drCur = 'old', drEls = [];
+  var drp = Player($('dr'), {
+    events: DR.old.steps, delay: 1300,
+    reset: function () {
+      var rt = $('dr-route'), wk = $('dr-worker'), db = $('dr-db');
+      rt.innerHTML = ''; wk.innerHTML = ''; db.innerHTML = ''; drEls = [];
+      DR[drCur].steps.forEach(function (s) {
+        var a = el('div', 'act' + (s.r ? '' : ' spacer'), esc(s.r || '·'));
+        var b = el('div', 'act' + (s.w ? '' : ' spacer'), esc(s.w || '·'));
+        var c = el('div', 'act' + (s.c ? ' ' + s.c : ''), esc(s.db));
+        rt.appendChild(a); wk.appendChild(b); db.appendChild(c); drEls.push([a, b, c]);
+      });
+      $('dr-say').innerHTML = '<b>READY</b>' + esc(DR[drCur].label) + '. Press Play.';
+    },
+    apply: function (s, i) {
+      drEls[i].forEach(function (x) { x.classList.add('lit'); });
+      $('dr-say').innerHTML = i === DR[drCur].steps.length - 1 ? DR[drCur].end : '<b>' + (i + 1) + '</b>' + esc(s.r ? 'Route: ' + s.r : 'Worker: ' + s.w) + '.';
+    }
+  });
+  tabs($('dr-tabs'), Object.keys(DR).map(function (k) { return { key: k, label: DR[k].label }; }), function (k) { drCur = k; drp.setEvents(DR[k].steps); }, 'old');
+
+  // ── 14 failed handler ─────────────────────────────────────────────────
+  var FH = {
+    retry: { label: 'Attempt 1 of 3 failed',
+      a: ['attemptsMade = 1, attempts = 3', '1 >= 3? no → "will retry"', ['✓ right', 'good']],
+      b: ["job.getState() → 'delayed'", "not 'failed' → only log", ['✓ right', 'good']],
+      say: '<b>SAME</b>A normal retry. Both answers agree.' },
+    last: { label: 'Attempt 3 of 3 failed',
+      a: ['attemptsMade = 3, attempts = 3', '3 >= 3? yes → mark failed', ['✓ right', 'good']],
+      b: ["job.getState() → 'failed'", 'mark failed, delete chunks', ['✓ right', 'good']],
+      say: '<b>SAME</b>The last attempt. Both answers agree again.' },
+    stalled: { label: 'Stalled twice',
+      a: ['attemptsMade ≤ 1, attempts = 3 (stalls don\'t count)', '1 >= 3? no → "will retry"', ['✗ nothing will retry: the document stays processing forever', 'bad']],
+      b: ["job.getState() → 'failed'", 'mark failed, delete chunks', ['✓ the user sees "Failed" and can delete it', 'good']],
+      say: '<b>DIFFERENT</b>The worker died mid-job twice. The second stall is over <code>maxStalledCount</code> (1): bullmq 6 tags the job with a deferred failure, and the next worker to take it fails it with "job stalled more than allowable limit", an unrecoverable error. The <code>failed</code> event fires with attempts to spare, so only the job\'s state tells the truth.' }
+  };
+  function fhBox(box, lines) {
+    box.innerHTML = '';
+    lines.forEach(function (l) {
+      if (Array.isArray(l)) { var p = el('div', null, '<span class="pill ' + (l[1] === 'good' ? 'ready' : 'failed') + '">' + esc(l[0]) + '</span>'); box.appendChild(p); }
+      else box.appendChild(el('div', null, esc(l)));
+    });
+  }
+  tabs($('fh-tabs'), Object.keys(FH).map(function (k) { return { key: k, label: FH[k].label }; }), function (k) {
+    fhBox($('fh-a'), FH[k].a); fhBox($('fh-b'), FH[k].b); $('fh-say').innerHTML = FH[k].say;
+  }, 'stalled');
+
+  // ── 15 stalled timeline ───────────────────────────────────────────────
+  var stTL = Timeline($('st'), $('st-tl'), $('st-clock'), $('st-say'));
+  stTL.load({ T: 700, unit: 11, clock: function (t) { return Math.round(t) + ' s'; },
+    lanes: [
+      { name: 'Process', segs: [{ s: 0, e: 12, t: 'killed', c: 'bad' }, { s: 12, e: 700, t: 'restarted: new worker running', c: 'wait' }] },
+      { name: 'Job lock', segs: [{ s: 0, e: 60, t: 'expiring', c: 'delay' }] },
+      { name: 'Stall checks', segs: [{ s: 0, e: 320, t: 'old throttle key: checks skipped', c: 'wait' }, { s: 324, e: 324, t: 'pass 1: mark', c: 'dot' }, { s: 624, e: 624, t: 'pass 2: move', c: 'dot' }] },
+      { name: 'Job', segs: [{ s: 0, e: 624, t: 'stuck in active, owned by nobody', c: 'wait' }, { s: 624, e: 700, t: 'wait → active → ready', c: 'good' }] }
+    ],
+    says: [
+      { at: 0, text: '<b>0 s</b>The process is killed with chunks 1–2 stored. Nobody renews the job\'s lock any more.' },
+      { at: 60, text: '<b>≤60 s</b>The lock has expired (<code>lockDuration</code> 60 s). Redis still lists the job as <code>active</code>.' },
+      { at: 150, text: '<b>WAITING</b>The restarted worker\'s first check is skipped: the dead process\'s <code>stalled-check</code> key hasn\'t expired yet (model).' },
+      { at: 324, text: '<b>PASS 1</b>A check marks the active job as a suspect in the <code>stalled</code> set (model timing).' },
+      { at: 624, text: '<b>624 s</b>Pass 2: the suspect still has no lock, so it goes back to <code>wait</code>. Measured: resumed 624 s after the kill (15:54:11 → 16:04:35).' },
+      { at: 660, text: '<b>RE-RUN</b>"attempt 1/3", delete-first, 5 chunks stored, <code>ready</code>: 5 rows, 5 distinct.' }
+    ] });
+
+  // ── 16 shutdown ───────────────────────────────────────────────────────
+  var SD = {
+    ok: { label: 'Job finishes in time', steps: [
+      { c: ['Render deploy → SIGTERM', 'key'], log: [['y', 'SIGTERM received — closing the queue (waiting for the job in progress)...']] },
+      { c: ['worker.close(): no new jobs, waits', ''], log: [['d', '  chunk 4/5 → stored'], ['d', '  chunk 5/5 → stored'], ['q', '[3/3] Marking the document ready...']] },
+      { c: ['closeIngestQueue()', ''], log: [] },
+      { c: ['closeRedisConnections(): quit()', ''], log: [] },
+      { c: ['exit 0', 'good'], log: [['y', 'Queue closed cleanly.']] },
+      { c: ['new instance starts', 'good'], log: [['d', '(new deploy) [ingest worker] started — queue "docmind:ingest-pdf"']] }
+    ] },
+    slow: { label: 'Job runs past 20 s', steps: [
+      { c: ['Render deploy → SIGTERM', 'key'], log: [['y', 'SIGTERM received — closing the queue (waiting for the job in progress)...']] },
+      { c: ['worker.close(): waits…', ''], log: [['d', '  chunk 2/5 → stored'], ['d', '  chunk 3/5 … (slow Gemini call)']] },
+      { c: ['20 s timer fires', 'bad'], log: [['e', 'Shutdown took longer than 20 s — exiting anyway']] },
+      { c: ['exit 1 (before Render kills at ~30 s)', 'bad'], log: [] },
+      { c: ['job stays in active, its lock expires', ''], log: [] },
+      { c: ['new instance: stalled check re-queues it (up to ~10 min)', 'key'], log: [['d', '(new deploy) [ingest worker] started — queue "docmind:ingest-pdf"']] },
+      { c: ['delete-first re-run → ready', 'good'], log: [['q', '▶ ingest job 3f2a91c0 — attempt 1/3']] }
+    ] }
+  };
+  var sdCur = 'ok', sdChips = [];
+  var sdp = Player($('sd'), {
+    events: SD.ok.steps, delay: 1300,
+    reset: function () {
+      var box = $('sd-chips'); box.innerHTML = ''; sdChips = [];
+      SD[sdCur].steps.forEach(function (s, n) {
+        if (n) box.appendChild(el('span', 'arrow', '→'));
+        var c = el('span', 'chip' + (s.c[1] ? ' ' + s.c[1] : ''), esc(s.c[0])); box.appendChild(c); sdChips.push(c);
+      });
+      $('sd-term').innerHTML = '';
+    },
+    apply: function (s, i, animate) { sdChips[i].classList.add('lit'); s.log.forEach(function (l) { termLine($('sd-term'), l[0], l[1], animate); }); }
+  });
+  tabs($('sd-tabs'), [{ key: 'ok', label: SD.ok.label }, { key: 'slow', label: SD.slow.label }], function (k) { sdCur = k; sdp.setEvents(SD[k].steps); }, 'ok');
+
+  // ── 17 budget calculator ──────────────────────────────────────────────
+  function fmt(n) { return n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'K' : String(Math.round(n)); }
+  function budget() {
+    var h = +$('bd-hours').value, up = +$('bd-up').value, att = +$('bd-att').value, st = +$('bd-starts').value;
+    $('bd-hours-o').textContent = h + ' h'; $('bd-up-o').textContent = up; $('bd-att-o').textContent = att.toFixed(1); $('bd-starts-o').textContent = st;
+    var jobs = 30 * up * att * 6, starts = 30 * st * 22;
+    var tuned = 30 * h * 12 * 19 + jobs + starts;
+    var def = 30 * h * 12 * 118 + jobs + starts;
+    var scale = Math.max(1100000, def * 1.05);
+    var box = $('bd-bars'); box.innerHTML = '';
+    [['Tuned (DocMind)', tuned, 30 * h * 12 * 19], ['BullMQ defaults', def, 30 * h * 12 * 118]].forEach(function (b) {
+      var pct = b[1] / 500000 * 100;
+      var bar = el('div', 'bar');
+      bar.appendChild(el('div', 'lbl', '<span>' + esc(b[0]) + '</span><b>' + fmt(b[1]) + ' / month · ' + Math.round(pct) + '%</b>'));
+      var tr = el('div', 'track2');
+      var f = el('div', 'fill' + (b[1] > 500000 ? ' over' : '')); f.style.width = Math.min(100, b[1] / scale * 100) + '%'; tr.appendChild(f);
+      var lim = el('div', 'limit'); lim.style.left = (500000 / scale * 100) + '%'; lim.title = '500K free limit'; tr.appendChild(lim);
+      bar.appendChild(tr);
+      bar.appendChild(el('div', 'caption', 'idle ' + fmt(b[2]) + ' · jobs ' + fmt(jobs) + ' · starts ' + fmt(starts)));
+      box.appendChild(bar);
+    });
+  }
+  ['bd-hours', 'bd-up', 'bd-att', 'bd-starts'].forEach(function (id) { $(id).addEventListener('input', budget); });
+  budget();
+
+  // ── 19 frontend polling ───────────────────────────────────────────────
+  var FE = {
+    normal: { label: 'Normal upload', events: [
+      { list: [['guide.pdf', 'processing'], ['notes.pdf', 'ready']], say: '<b>0 s</b><code>POST /upload</code> answers 202. The document goes into state as <code>processing</code>, and <code>uploadFile()</code> keeps waiting.', log: [['d', 'upload accepted, adding to state'], ['d', '"guide.pdf" is processing — waiting for it to be ready'], ['d', 'a document is processing — polling GET /documents every 2 s']] },
+      { list: [['guide.pdf', 'processing'], ['notes.pdf', 'ready']], say: '<b>2 s</b>Poll: still processing. The next poll is scheduled only after this answer arrived.', log: [] },
+      { list: [['guide.pdf', 'ready'], ['notes.pdf', 'ready']], say: '<b>4 s</b>Poll: <code>ready</code>. The waiter for guide.pdf resolves with the document.', log: [['d', '"guide.pdf" is ready']] },
+      { list: [['guide.pdf', 'ready'], ['notes.pdf', 'ready']], say: '<b>DONE</b>Nothing is processing, so the effect\'s cleanup clears the timer. <code>uploadFile()</code> returns, and a question typed during the upload ("Will ask") is sent now.', log: [['d', 'nothing processing — polling stopped']] }
+    ] },
+    stale: { label: 'A stale poll', events: [
+      { list: [['a.pdf', 'processing']], say: '<b>POLL</b>Polling because a.pdf is processing. A poll starts and remembers <code>listVersion</code> = 4.', log: [] },
+      { list: [['b.pdf', 'processing'], ['a.pdf', 'processing']], say: '<b>UPLOAD</b>While that poll is in flight, b.pdf\'s upload answers 202. b.pdf is added to state, and <code>listVersion</code> becomes 5.', log: [['d', 'upload accepted, adding to state']] },
+      { list: [['b.pdf', 'processing'], ['a.pdf', 'processing']], say: '<b>DROP</b>The old poll\'s answer arrives. It was read before b.pdf existed. Version at start (4) ≠ now (5), so it\'s ignored.', log: [['y', 'poll answer is older than a local change — ignored, next poll will catch up']] },
+      { list: [['b.pdf', 'gone'], ['a.pdf', 'processing']], say: '<b>WITHOUT THE REF</b>State would have been replaced by that old list: b.pdf would vanish from the sidebar until the next poll, 2 s later. (Shown struck through.)', log: [] },
+      { list: [['b.pdf', 'processing'], ['a.pdf', 'ready']], say: '<b>NEXT POLL</b>A fresh answer with the current version: applied. a.pdf is ready, b.pdf still processing.', log: [] }
+    ] },
+    slow: { label: 'A slow document', events: [
+      { list: [['big.pdf', 'processing']], say: '<b>0–60 s</b>Polls every 2 s.', log: [['d', 'a document is processing — polling GET /documents every 2 s']] },
+      { list: [['big.pdf', 'processing']], say: '<b>60 s</b>Still processing after a minute (a stuck job, or one waiting for a crashed worker\'s ~10 min recovery): polls slow to every 10 s.', log: [] },
+      { list: [['big.pdf', 'processing']], say: '<b>120 s</b><code>READY_WAIT_MS</code>: the upload stops holding the chip and shows a banner: "big.pdf is taking longer than usual. It keeps processing: once it\'s ready in the sidebar, you can ask about it."', log: [['y', '"big.pdf" still processing after 120 s — not waiting any longer']] },
+      { list: [['big.pdf', 'failed']], say: '<b>FAILED</b>If all 3 attempts fail, the sidebar shows Failed (the reason in its tooltip), and only Delete is offered. Had the upload still been waiting, the server\'s message would show in the banner and a queued question would go back into the box.', log: [] }
+    ] }
+  };
+  function feList(list) {
+    var box = $('fe-list'); box.innerHTML = '';
+    list.forEach(function (d) {
+      var gone = d[1] === 'gone';
+      var row = el('div', 'row' + (gone ? ' gone' : ''));
+      row.appendChild(el('span', null, esc(d[0])));
+      row.appendChild(el('span', null, gone ? '<span class="t">would vanish</span>' : '<span class="pill ' + d[1] + '">' + (d[1] === 'processing' ? 'Processing…' : d[1] === 'failed' ? 'Failed' : 'ready') + '</span>'));
+      box.appendChild(row);
+    });
+  }
+  var feCur = 'normal';
+  var fep = Player($('fe'), {
+    events: FE.normal.events, delay: 1800,
+    reset: function () { $('fe-say').innerHTML = '<b>READY</b>' + esc(FE[feCur].label) + '. Press Play.'; feList(FE[feCur].events[0].list); $('fe-term').innerHTML = ''; },
+    apply: function (ev, i, animate) { $('fe-say').innerHTML = ev.say; feList(ev.list); ev.log.forEach(function (l) { termLine($('fe-term'), l[0], '[DocMind:useDocuments] ' + l[1], animate); }); }
+  });
+  tabs($('fe-tabs'), Object.keys(FE).map(function (k) { return { key: k, label: FE[k].label }; }), function (k) { feCur = k; fep.setEvents(FE[k].events); }, 'normal');
+
+  // Complete at rest: show the end state of the main players on load.
+  lc.showAll(); idp.showAll(); drp.showAll(); fep.showAll(); sdp.showAll();
+})();
+</script>
+</body>
+</html>
