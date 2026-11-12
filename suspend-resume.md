@@ -458,6 +458,8 @@ CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout
 | D6 | Quiz generation fails twice | **End the run** with an error reply ("say 'quiz me' to try again") | Simple. Re-suspending a failed run needs time-travel/restart APIs that aren't worth learning yet |
 | D7 | Mastra's own logger | **Off** (`logger: false`) or warn-level, decided in WF.0 after seeing its output | `pipelineLogger` is the project's log, and two loggers interleaving is noise |
 | D8 | Old snapshot rows | **Keep for now** (inspectable while learning). The test cleanup deletes its own | Pruning can come later with Mastra's `retention` option |
+| D9 | *(found 2026-11-12 while building the Phase 8 walkthrough page)* How does a typed "cancel" end the run? §4.2 resumes with `{ action: 'cancel' }` → `bail()` → status **`success`** + `outcome: 'cancelled'`; §4.6 (`op: 'cancel'`) and the §8 checklist expect `run.cancel()` → status **`canceled`** | Decide in WF.3; use one path for both the button and typed replies | Logs, tests and the `outcome` check should mean the same thing everywhere |
+| D10 | *(found 2026-11-12)* 0 ready documents: `resolve-document` bails `nothing_ready`, but the §8 checklist says "no run created" (check before `start()`) | Check before `start()` (no run, no rows); keep the bail as a guard for documents deleted in between | No snapshot row for a quiz that could never start |
 
 ---
 

@@ -11,3 +11,8 @@ social posts/
 .history
 # Claude Code chat transcripts (contain email/context; move between laptops by hand)
 .claude-sessions/
+
+# learning material, revision artifacts and post drafts — kept local, not part of the app
+topics/
+revision/
+posts/

