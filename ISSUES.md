@@ -11,7 +11,7 @@ When an open item gets fixed, move it to "Fixed" with the date and the commit.
 
 | | Count |
 |---|---|
-| **Open** | **37**: ⚠️ important 2 · bugs 9 · robustness 8 · known gaps 8 · slowness 3 · hygiene 7 |
+| **Open** | **38**: ⚠️ important 2 · bugs 9 · robustness 8 · known gaps 8 · slowness 3 · hygiene 8 |
 | **Fixed** | **44** app bugs, design problems and doc fixes, plus 12 testing/tooling traps and 5 environment problems |
 
 ---
@@ -86,6 +86,7 @@ Both found on 2026-11-10 while reading the agent code. Neither is a crash: the a
 | 31 | `sendChatMessage` in `frontend/src/api/chat.ts` is unused | Delete it, or keep it as the non-streaming example |
 | 32 | The roadmap and walkthrough still say `text-embedding-004` / 768 dims | The code uses `gemini-embedding-001` / 3072 |
 | 34 | CLAUDE.md has no work-log entry for the UI.1–UI.6 frontend redesign (2026-10-06 → 10-09) | Found in BG.6 |
+| 40 | `npm audit` reports 11 vulnerable packages (1 critical, 4 high, 6 moderate): `proxy-addr` (critical, IP spoofing via an IPv4-mapped IPv6 trusted *subnet*), `multer`, `zod`, `body-parser`, `brace-expansion` (high), and `drizzle-kit`'s old `esbuild` chain, `qs`, `ip-address` (moderate) | Found 2026-11-24 in WF.0. **None come from Mastra:** the lockfile from before the install had the same 11. Not yet checked which actually apply here (e.g. `trust proxy` is a hop count, not a subnet; `multer` uses memory storage, not disk). Next: `npm audit fix` for the non-breaking ones, then re-test upload, auth and chat |
 
 ---
 

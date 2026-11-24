@@ -5,7 +5,12 @@ import * as schema from './schema'
 
 // this file is responsible for creating a connection to the database using the connection string provided in the environment variable DATABASE_URL
 // it uses the drizzle-orm library to create a connection pool and exports the db object that can be used to interact with the database in a type-safe manner
-const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+//
+// WF.0 — exported (it used to be private to this file) so Mastra's workflow
+// storage (WorkflowsPG in Phase 8) can share this ONE pool instead of opening
+// its own connections to Neon. Repositories still go through `db` below; only
+// src/mastra/ will import `pool` directly.
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL })
 
 export const db = drizzle(pool, { schema })
 // this db object is used in every repository functions

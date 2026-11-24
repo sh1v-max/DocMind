@@ -1,6 +1,6 @@
 # Suspend/Resume Plan: a durable quiz workflow on Mastra (Phase 8)
 
-**Status:** 📝 **plan only, nothing built** (written 2026-11-07, facts re-checked 2026-11-10). No package installed, no code or schema changed. This is Phase 8 of the roadmap (topic [11-workflows-suspend-resume](topics/11-workflows-suspend-resume)). Reading: the topic's [README.md](topics/11-workflows-suspend-resume/README.md) (the short version), then [More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md) Part 1 §3–§14 (the concepts) and **Part 2 §25–§45 (Mastra in depth: what it is, where it fits, every building block, a run traced across three requests)**. This file is the *build* plan: what changes in DocMind, in which order, and how each step is tested.
+**Status:** 📝 **plan only, nothing built** (written 2026-11-07, facts re-checked 2026-11-10, **revised 2026-11-24** after a review against the code: 5 fixes + 1 simplification and a redesigned Phase 8b, listed in §0.1). No package installed, no code or schema changed. This is Phase 8 of the roadmap (topic [11-workflows-suspend-resume](topics/11-workflows-suspend-resume)). Reading: the topic's [README.md](topics/11-workflows-suspend-resume/README.md) (the short version), then [More_on_Workflows.md](topics/11-workflows-suspend-resume/More_on_Workflows.md) Part 1 §3–§14 (the concepts) and **Part 2 §25–§45 (Mastra in depth: what it is, where it fits, every building block, a run traced across three requests)**. This file is the *build* plan: what changes in DocMind, in which order, and how each step is tested.
 
 Same shape as [agents-plan.md](agents-plan.md) and [background-jobs-plan.md](background-jobs-plan.md): tracker, the brief, the problem, how Mastra works, design, rules, steps with tests, what's left out, decisions, results log, code facts, research facts.
 
@@ -16,7 +16,7 @@ Same shape as [agents-plan.md](agents-plan.md) and [background-jobs-plan.md](bac
 7. File edits, file by file
 8. Test checklist
 9. What this phase deliberately does NOT cover
-10. Decisions (open, with recommendations)
+10. Decisions (D1–D7 recommended, D8–D10 decided)
 11. Results log
 12. Code facts (what the code looks like today)
 13. Research facts + sources (checked 2026-11-07)
@@ -33,11 +33,11 @@ Same shape as [agents-plan.md](agents-plan.md) and [background-jobs-plan.md](bac
 
 | Step | What | Status | Est. |
 |---|---|---|---|
-| WF.0 | Install + compatibility check (CJS, Node, TS, telemetry off) | ⬜ not started | 0.5–1 h |
+| WF.0 | Install + compatibility check (CJS, Node, TS, telemetry off) | ✅ 2026-11-24 (§11) | 0.5–1 h |
 | WF.1 | **Proof of concept** (`npm run step8`): suspend → persist → kill → resume in a new process → duplicate resume → crash mid-step | ⬜ | 1.5–2 h |
-| WF.2 | Pointer table `quiz_workflow_runs` + repository (SQL on Neon by hand) | ⬜ | 1 h |
-| WF.3 | The real quiz workflow (steps call the existing services) + in-process tests | ⬜ | 2 h |
-| WF.4 | Reply reader ("yes", "second one", "the React document", "cancel") + eval | ⬜ | 2 h |
+| WF.2 | Pointer table `quiz_workflow_runs` + repository (SQL on Neon by hand; one active run per chat, `waiting` or `running`) | ⬜ | 1 h |
+| WF.3 | The real quiz workflow (3 steps, one `ask-user` pause; steps call the existing services; errors become an `outcome`; Mastra on first use + fallback) + in-process tests | ⬜ | 2–3 h |
+| WF.4 | Reply reader ("yes", "second one", "the React document", "cancel"; free rules only for short non-questions) + eval with a trap set | ⬜ | 2 h |
 | WF.5 | Wire into `prepareChat` + both chat routes + the button's resume route | ⬜ | 2–3 h |
 | WF.6 | Frontend: `quiz` SSE event opens the modal, the button resumes the same run | ⬜ | 1.5–2 h |
 | WF.7 | Full test pass (HTTP, browser, restart, race) + live check on Render/Vercel | ⬜ | 2 h |
@@ -47,8 +47,25 @@ Estimates assume Claude writes the code and Shiv reviews. Legend: ⬜ not starte
 
 ### Before WF.0, Shiv does (outside the code)
 
-- [ ] Answer §10 (D1–D8), or "go with the recommendations".
+- [x] Confirm §10 D1–D7: **accepted as recommended on 2026-11-24.** D8–D10 were decided the same day.
 - [ ] Decide whether the PoC may create Mastra's tables in the **production Neon database** (local `.env` = production, CLAUDE.md §5). The recommendation (D3) keeps them in a separate Postgres schema `mastra`, so they never mix with yours.
+
+---
+
+### 0.1 Review of 2026-11-24: what changed, and why
+
+Shiv's call: build 8a as planned, with all of these. Each problem was checked against the code that day.
+
+| # | Problem found | Fix | Where |
+|---|---|---|---|
+| 1 | A Gemini HTTP error (503, 429) throws straight out of `generateQuiz`: its retry loop only covers invalid JSON ([quiz.service.ts:154-169](src/services/quiz.service.ts#L154-L169), [llm.service.ts:27-29](src/services/llm.service.ts#L27-L29)), and the call has no timeout. Inside a step that ends the run `failed` and leaves the pointer `running` | `generate-quiz` catches every error → `{ outcome: 'error' }`; the quiz's Gemini call gets a 60 s timeout (optional `timeoutMs`, additive) | §4.2, §4.8, rule 15 |
+| 2 | Only `waiting` runs were looked up, so the "already being made" and 3-min stale rules had nothing to read, and a second "quiz me" during generation would start a second quiz | "active" = `waiting` or `running`; the unique index covers both; the pointer row is inserted before `run.start()`; a reply claims the row with a conditional `UPDATE` | §4.4, §4.6, rules 7 + 16 |
+| 3 | The free reply rules would hijack real questions: "what is react?" matches a filename, "what does the first chapter say?" matches "first" | rules only take short replies that aren't questions; the rest goes to the LLM; a trap set in the eval | §4.5, WF.4, rule 17 |
+| 4 | Deleting a document or session left pointer rows and snapshots behind, and D8 kept snapshots, which hold quiz questions from that PDF | each run's snapshot is deleted when it ends; document and session deletes cancel and delete the user's active runs | §4.3, §4.4, D8, rule 18 |
+| 5 | A Mastra or storage failure would break the quiz offer, and building Mastra at boot could stop the API from starting | today's `buildQuizOffer` + button stays as the fallback; Mastra is built on first use | §4.3, §4.6, rule 19 |
+| S | Two pause points (`choose-document`, `confirm`), skip-confirm logic and a `waiting_for` column | one `ask-user` step: 1 candidate → "Want it?", several → "Which one?"; picking a document = yes | §4.2, §4.4, §4.5 |
+
+Also decided that day: D8 (changed), D9 and D10 (§10). Phase 8b was redesigned as a Mastra agent inside this workflow (§9). A review loop ("change question 2") was considered and left out (§9).
 
 ---
 
@@ -122,7 +139,7 @@ Mastra is a TypeScript framework for AI apps: agents, tools, memory, RAG, evals,
 
 | Piece | What it is | Why we use it here | DocMind equivalent today |
 |---|---|---|---|
-| **Step** (`createStep`) | One unit of work: an `id`, an `inputSchema` and `outputSchema` (Zod), and an `execute` function | Each stage of the quiz flow (pick a document, confirm, generate) is one step | a service function |
+| **Step** (`createStep`) | One unit of work: an `id`, an `inputSchema` and `outputSchema` (Zod), and an `execute` function | Each stage of the quiz flow (resolve the documents, ask the user, generate) is one step | a service function |
 | **`suspendSchema` / `resumeSchema`** | Zod schemas for what a step saves when it pauses, and what it must be given to continue | They make "what was the user asked?" and "what counts as an answer?" explicit and validated | nothing (it's new) |
 | **`suspend(payload)`** | Called inside `execute`: stops the run *here*, saves `payload`, returns | Pause and wait for the user | — |
 | **`resumeData`** | What `execute` receives when the run continues (validated against `resumeSchema`) | The user's answer, already turned into `{ action, documentId }` by our reply reader | — |
@@ -137,6 +154,8 @@ Mastra is a TypeScript framework for AI apps: agents, tools, memory, RAG, evals,
 
 **What Mastra does NOT know about:** users, sessions, ownership, the router, SSE, Express or your document rules. That stays in DocMind (§4.1).
 
+**Honest tradeoff (written 2026-11-24):** for one pause in a 3-step line, Mastra is more than the problem needs. The pointer table (which DocMind keeps anyway), one conditional `UPDATE … WHERE status = 'waiting'` and a direct `generateQuiz()` call would do the same job in roughly 150 lines of your own code, with no ~89 MB package, no second set of tables, and no recovery, telemetry and logger defaults to switch off. It's chosen anyway because learning a durable workflow engine is the point of this phase. The boundary rule (§4.1) keeps it swappable, and the PoC's `inspect` mode shows what a hand-rolled `state jsonb` would hold. Mastra earns its weight with many workflows, branches and loops, several pauses in one run, retries and run history: none of which this first workflow needs.
+
 ---
 
 ## 4. Design
@@ -148,7 +167,8 @@ Mastra is a TypeScript framework for AI apps: agents, tools, memory, RAG, evals,
 | Who is asking (JWT) | DocMind | `requireAuth`, `req.user.id` (unchanged) |
 | Is this the caller's document? Is it ready? | DocMind | `checkDocumentReady`, `listDocuments` (unchanged, called *from* steps) |
 | Generating + validating + shuffling the quiz | DocMind | `generateQuiz()` in `quiz.service.ts` (unchanged, called from the last step) |
-| "Is a quiz pending in this chat?" | DocMind | the pointer table `quiz_workflow_runs` (§4.4) |
+| "Is a quiz waiting or being made in this chat?" + the claim on a reply | DocMind | the pointer table `quiz_workflow_runs` (§4.4) |
+| Falling back to today's offer + button when Mastra is unavailable | DocMind | `quizWorkflow.service.ts` + the chat routes (§4.6) |
 | What the user's reply means | DocMind | `interpretQuizReply()` (§4.5) |
 | When the pending quiz expires, or is dropped because the subject changed | DocMind | pointer table + `prepareChat` |
 | SSE events, saved history | DocMind | chat routes (additive changes only) |
@@ -158,34 +178,41 @@ Mastra is a TypeScript framework for AI apps: agents, tools, memory, RAG, evals,
 
 ### 4.2 The workflow
 
+*Revised 2026-11-24: one `ask-user` step replaces the first draft's `choose-document` + `confirm` (simplification S), and `generate-quiz` catches every error (fix 1). See §0.1.*
+
 ```
 quiz-workflow  (input: { userId, scope: 'one' | 'all', documentId? })
+DocMind checks for ready documents BEFORE start(): 0 ready → a sentence, no run, no rows (D10)
 
-  resolve-document ──(0 ready)──────────────────────────► bail { outcome: 'nothing_ready' }
-        │ (exactly 1 candidate)          │ (several)
-        │                                ▼
-        │                         choose-document ──suspend { candidates[] }──►  ⏸ waits for the user
-        │                                │ resume { action:'choose', documentId } │ { action:'cancel' } → bail 'cancelled'
-        ▼                                ▼
-     confirm ──suspend { documentId, filename }──► ⏸        (skipped when the user just picked one: picking = yes)
-        │ resume { action:'confirm' }  │ { action:'cancel' } → bail 'cancelled'
+  resolve-document ──(0 ready: only if deleted since that check)──► bail { outcome: 'nothing_ready' }
+        │ candidates = the ready documents in scope (1 or more)
         ▼
-  generate-quiz ── generateQuiz({ documentId, userId })  (re-checks ownership + ready: the world may have changed while paused)
-        │
+  ask-user ──suspend { candidates }──► ⏸ waits for the user
+        │   1 candidate:  "I can make a 5-question quiz from x.pdf. Want it?"
+        │   several:      "Which document? 1. a.pdf  2. b.pdf"
+        │ resume { action: 'choose', documentId }    ("yes" with 1 candidate = choose it; picking one = yes)
+        │ resume { action: 'cancel' }  → bail { outcome: 'cancelled' }    (D9)
+        ▼
+  generate-quiz ── generateQuiz({ documentId, userId, timeoutMs })   re-checks ownership + ready
+        │           ok                                        → { outcome: 'quiz', ... }
+        │           not ok (404 / 409 / 502) OR anything thrown
+        │           (Gemini 503 / 429, timeout, DB error)     → { outcome: 'error', status, message }
         ▼
   output { outcome: 'quiz', documentId, filename, quiz }  |  { outcome: 'error', status, message }
 ```
 
-- **`resolve-document`** never suspends. One-document chat → that document (already checked by `prepareChat`). "All documents" → the caller's **ready** documents via `listDocuments(userId)` (the same logic as `buildQuizOffer`, moved into a shared helper so it isn't duplicated).
-- **`choose-document`** suspends with the **candidate list as it was shown**, so "the second one" means the second one the user saw, not whatever is second now.
-- **`confirm`** suspends with the chosen document. If the user has just picked one, it continues without asking (`resumeData` from the previous step says so).
-- **`generate-quiz`** calls the existing `generateQuiz()`. That already re-runs `checkDocumentReady` (404 if deleted, 409 if not ready) and retries once. A `502` becomes `{ outcome: 'error' }`, and the run **ends** (D6). Mastra step retries stay **off**, because `generateQuiz` already retries once and more retries would spend free-tier calls.
-- **The quiz itself is the run's output**, so it lands in the snapshot (~2–4 KB of JSON). Acceptable. Quizzes still aren't saved anywhere else (same as today).
+- **`resolve-document`** never suspends. One-document chat → that document (already checked by `prepareChat`). "All documents" → the caller's **ready** documents via `listDocuments(userId)` (the same logic as `buildQuizOffer`, moved into a shared helper so it isn't duplicated). Its `nothing_ready` bail is only a guard: the service already checked before `start()` (D10).
+- **`ask-user`** suspends with the **candidate list as it was shown**, so "the second one" means the second one the user saw, not whatever is second now. One step covers both questions: with one candidate it asks "Want it?", with several "Which one?". Its `resumeData` is only ever `choose` or `cancel`; the reply reader (§4.5) turns a "yes" into `choose` of the only candidate. `if (!resumeData) return await suspend(...)` is the step's first line (rule 8b).
+- **`generate-quiz`** calls the existing `generateQuiz()`. That already re-runs `checkDocumentReady` (404 if deleted, 409 if not ready) and retries once on an **invalid** reply. It does **not** catch a Gemini HTTP error: `generateAnswer` throws on any non-OK status ([llm.service.ts:27-29](src/services/llm.service.ts#L27-L29)), and the retry loop ([quiz.service.ts:154-169](src/services/quiz.service.ts#L154-L169)) only handles bad JSON. So the step wraps the call in `try/catch`, and every failure becomes `{ outcome: 'error' }` and **ends** the run (D6). A step never throws (rule 15): a thrown error would end the run as `failed` and leave the pointer `running`.
+- **Timeout (fix 1):** the quiz's Gemini call gets `QUIZ_GENERATE_TIMEOUT_MS` = 60 s (Gemini has taken 25–53 s on slow days, CLAUDE.md §9) through an optional `timeoutMs` on `generateAnswer` (an `AbortSignal.timeout`), passed down by an optional field on `generateQuiz`'s input. Both are additive: `POST /quiz` and every other caller behave exactly as today. (ISSUES.md #8, "no timeout and no retry on any Gemini fetch", stays open for everything else.)
+- Mastra step retries stay **off**: `generateQuiz` already retries once, and more retries would spend free-tier calls.
+- **The quiz is the run's output**, so it sits in the snapshot (~2–4 KB) only until the run ends; then the snapshot is deleted (fix 4, D8). Quizzes still aren't saved anywhere server-side (same as today).
 
 ### 4.3 Storage
 
 ```ts
 // src/mastra/index.ts (sketch, finalised in WF.0/WF.1)
+// built on FIRST USE by getMastra(), not at boot (fix 5)
 new Mastra({
   storage: new MastraCompositeStore({
     id: 'docmind',
@@ -199,11 +226,13 @@ new Mastra({
 ```
 
 - **One connection pool:** `WorkflowsPG` accepts an existing `pg.Pool`. `db/client.ts` creates the pool but doesn't export it yet. WF.0 adds `export const pool`, so there are no extra Neon connections.
-- **A separate Postgres schema `mastra`** (D3): Mastra's tables (`mastra_workflow_snapshot`, plus its run-ownership table) live in `mastra.*`, away from `public.*` where your tables are. Mastra creates them itself when it starts. That's the one exception to "every table by hand SQL" (CLAUDE.md §5), and it gets written down there. WF.0 checks whether it also creates the schema, or whether you run `CREATE SCHEMA mastra` once.
+- **A separate Postgres schema `mastra`** (D3): Mastra's tables (`mastra_workflow_snapshot`, plus its run-ownership table) live in `mastra.*`, away from `public.*` where your tables are. Mastra creates them itself when its storage starts. That's the one exception to "every table by hand SQL" (CLAUDE.md §5), and it gets written down there. WF.0 checks whether it also creates the schema, or whether you run `CREATE SCHEMA mastra` once.
 - **Only the workflows domain is switched on**, so no memory, observability, agent or eval tables.
 - **Telemetry off:** `@mastra/core` sends anonymous usage events to PostHog unless `MASTRA_TELEMETRY_DISABLED=1` (read in its source, §13). Set it in `.env`, `.env.example` and Render.
+- **Started on first use (fix 5).** `getMastra()` builds the instance the first time a quiz needs it, the same way `queue/connection.ts` opens Redis on first use. If building it (or its storage `init()`) fails, the error goes through `summarizeError`, the quiz falls back to today's offer + button (§4.6), and the API keeps running. Nothing Mastra-related runs at boot, so a storage problem can't stop the API from starting.
+- **Snapshots don't outlive their run (fix 4, D8).** When a run ends (quiz sent, cancelled, error, expired, superseded, deleted), `deleteWorkflowRunById` removes its snapshot. The PoC (WF.1) keeps its own runs until `cleanup`, so the JSON can still be inspected while learning.
 
-### 4.4 Finding the pending run: the pointer table
+### 4.4 Finding the active run: the pointer table
 
 Mastra finds runs by `runId` (and can list them by `resourceId`/`status`), but the chat only knows `userId` + `sessionId`, and Mastra knows nothing about ownership. So DocMind keeps a small pointer row per quiz run (D2):
 
@@ -214,37 +243,53 @@ CREATE TABLE quiz_workflow_runs (
   user_id     text NOT NULL,
   session_id  text NOT NULL,
   status      text NOT NULL,              -- 'waiting' | 'running' | 'done'   (DocMind's view; Mastra's snapshot is the truth for the steps)
-  waiting_for text NULL,                  -- 'choose-document' | 'confirm' (which step is suspended)
   created_at  timestamptz NOT NULL DEFAULT now(),
   updated_at  timestamptz NOT NULL DEFAULT now(),
-  expires_at  timestamptz NOT NULL        -- now() + 30 min, refreshed on each suspend
+  expires_at  timestamptz NULL            -- now() + 30 min, set when the run suspends; NULL while running
 );
--- at most ONE waiting quiz per conversation, enforced by Postgres
-CREATE UNIQUE INDEX quiz_workflow_runs_one_waiting ON quiz_workflow_runs (user_id, session_id) WHERE status = 'waiting';
+-- at most ONE active quiz per conversation (waiting for the user OR being generated), enforced by Postgres
+CREATE UNIQUE INDEX quiz_workflow_runs_one_active
+  ON quiz_workflow_runs (user_id, session_id) WHERE status IN ('waiting', 'running');
 ```
 
-- **Every query filters `user_id` AND `session_id`** (auth rule), with `userId` a required parameter. Another user's `sessionId` finds nothing.
-- **Expiry is lazy:** checked when the row is read. No cron, no BullMQ delayed job.
-- **When a new quiz starts while one is waiting:** the old one is cancelled first (pointer → `done`, `run.cancel()`), then the new one starts.
-- **Deleting a session** also deletes its pointer rows (one extra line in `DELETE /sessions/:id`). Mastra snapshot rows are left alone (D8).
+The first draft's `waiting_for` column is gone: with one `ask-user` step there's only one place a run can wait.
+
+**Life of a row (fix 2):**
+
+```
+"quiz me"  INSERT status 'running'          ← BEFORE run.start(); a 23505 = a quiz is already active in this chat
+           run.start() suspends             → UPDATE status 'waiting', expires_at = now() + 30 min
+"yes"      claim: UPDATE … SET status = 'running', expires_at = NULL
+                  WHERE run_id = $1 AND user_id = $2 AND status = 'waiting' RETURNING run_id
+             0 rows → someone else claimed it first: "That quiz is already being made" (Mastra not called)
+           run.resume(…) → quiz sent        → UPDATE status 'done' + snapshot deleted
+```
+
+- **Every query filters `user_id`** together with `session_id` or `run_id`, with `userId` a required parameter. Another user's `sessionId` or `runId` finds nothing.
+- **Why insert before `start()`:** two "quiz me" in one chat at the same moment can't both start a run (the second insert hits the unique index), and a crash right after `start()` still leaves a row the stale rule can close. If `start()` itself fails, the row is marked `done` and the fallback offer is sent (fix 5).
+- **Why DocMind claims as well:** the conditional `UPDATE` answers the loser of a click + typed "yes" race without touching Mastra. Mastra's own claim (`WORKFLOW_RESUME_ALREADY_CLAIMED`) stays as the second guard, proven in WF.1.
+- **Stale running rows:** `running` for longer than `QUIZ_RUN_STALE_MS` (3 min, longer than 2 attempts × the 60 s timeout) means the process died mid-step. Boot recovery is off (D5), so nothing restarts it: the next message marks it `done` (logged) and is handled normally.
+- **Expiry is lazy** for waiting rows: checked when the row is read. No cron, no BullMQ delayed job.
+- **A new quiz while one is waiting:** the old one is cancelled first (pointer `done`, `run.cancel()`, snapshot deleted), then the new one starts. **While one is running:** "Your quiz is still being made", and no second run.
+- **Deletes (fix 4):** `DELETE /sessions/:id` cancels that session's active runs and deletes its pointer rows and snapshots. `DELETE /documents/:id` cancels **all of the user's active runs** and deletes their rows and snapshots: a waiting candidate list may include that document, the pointer row has no document id, and saying "quiz me" again is cheap.
 
 ### 4.5 Reading the user's reply
 
-`interpretQuizReply(message, waitingFor, suspendPayload) → { action: 'confirm' } | { action: 'cancel' } | { action: 'choose', documentId } | { action: 'unclear' } | { action: 'unrelated' }`
+`interpretQuizReply(message, candidates) → { action: 'choose', documentId } | { action: 'cancel' } | { action: 'unclear' } | { action: 'unrelated' }`
 
-Same hybrid idea as the router: **rules first (0 API calls), then the LLM only when unsure.**
+Same hybrid idea as the router: **rules first (0 API calls), then the LLM when the rules aren't sure.** **The rules only fire on a short reply that isn't a question** (fix 3): at most ~6 words, no `?`, and not starting with a question word (what, why, how, who, when, where, which, is, are, does, can, explain, tell). Anything else goes to the LLM, so a filename or a number inside a real question can never hijack it.
 
 | Reply | Rule | Result |
 |---|---|---|
-| "yes", "sure", "go ahead", "ok do it" | yes-word list, whole message short | `confirm` (only valid while `waitingFor = 'confirm'`) |
+| "yes", "sure", "go ahead", "ok do it" | yes-word list | 1 candidate → `choose` it; several → `unclear` ("Which one?") |
 | "no", "cancel", "never mind", "stop" | no-word list | `cancel` |
 | "2", "second one", "the last one", "first" | number / ordinal against `candidates` | `choose` (out of range → `unclear`) |
 | "the React document", "react" | words matched against candidate filenames | exactly one match → `choose`, several → `unclear` (ask again, listing the matches) |
-| "what's chapter 3 about?" | none of the above → **LLM** (Flash-Lite, JSON mode, temp 0, Zod, given the candidates with numbers) | usually `unrelated` |
+| "what is react?", "what does the first chapter say?" | a question, so **no rule fires** → LLM | usually `unrelated` |
+| anything else | **LLM** (Flash-Lite, JSON mode, temp 0, Zod, given the candidates with numbers) | any of the four |
 
 - **`unclear`:** the run stays suspended and the reply asks again ("Which one? 1. react-intro.pdf 2. react-hooks.pdf"). No Mastra call.
-- **`unrelated` (D4):** cancel the run (`run.cancel()`, pointer → `done`) and route the message normally, so it gets a normal answer. A "yes" three messages later is ambiguous, and dropping the offer is the safe reading.
-- **"yes" while choosing a document** (several candidates) isn't a choice → `unclear` → ask which one.
+- **`unrelated` (D4):** cancel the run (`run.cancel()`, pointer `done`, snapshot deleted) and route the message normally, so it gets a normal answer. A "yes" three messages later is ambiguous, and dropping the offer is the safe reading.
 - The LLM's answer is only a label. Code decides what happens next. The LLM's `documentId` must be one of the candidates (checked in code), otherwise `unclear`.
 
 ### 4.6 Where it plugs into the chat
@@ -252,47 +297,57 @@ Same hybrid idea as the router: **rules first (0 API calls), then the LLM only w
 `prepareChat` gets one new step **before the embedding** (today's step 2, [chat.service.ts:254](src/services/chat.service.ts#L254)), so a "yes" costs 0 embedding calls and 0 router calls:
 
 ```
-validate → (one doc: checkDocumentReady) → NEW: pending = findWaitingQuizRun(sessionId, userId)
-   pending, not expired → interpret reply:
-       confirm / choose → kind 'workflow', op 'resume'   (the route does the resume, step 7)
-       cancel           → kind 'workflow', op 'cancel'
-       unclear          → kind 'workflow', op 'ask_again' (no Mastra call)
-       unrelated        → cancel the run, then continue below as normal
-   expired → pointer 'done' (+ run.cancel()), continue below as normal
-   none    → continue below as normal
+validate → (one doc: checkDocumentReady) → NEW: active = findActiveRun(sessionId, userId)
+                                            (a lookup error is logged and treated as "none": chat must not break, fix 5)
+   waiting, not expired → interpret reply:
+       choose     → kind 'workflow', op 'resume'     (the route claims + resumes, step 7)
+       cancel     → kind 'workflow', op 'cancel'     (resume with { action: 'cancel' } → bail, D9)
+       unclear    → kind 'workflow', op 'ask_again'  (no Mastra call)
+       unrelated  → cancel the run, then continue below as normal
+   waiting, expired       → cancel the run, continue below as normal
+   running, < 3 min       → kind 'workflow', op 'busy'  ("Your quiz is still being made…"), no routing
+   running, ≥ 3 min       → stale: pointer 'done' (logged), continue below as normal
+   none                   → continue below as normal
 embed → history → route:
-   quiz_request → kind 'workflow', op 'start'   (replaces kind 'offer' / buildQuizOffer)
+   quiz_request → 0 ready documents → a sentence, no run (D10)
+                  otherwise         → kind 'workflow', op 'start'
    smalltalk / document_question → unchanged
 ```
 
 - **`prepareChat` never runs the workflow itself.** It returns *what to do*, and the route does it at step 7. Starting or resuming can take 5–15 s (quiz generation), and the stream must already be open so the user sees "Writing your quiz…". Services still never touch `res`.
+- **Fallback (fix 5):** if starting the run fails (Mastra can't be built, or its storage errors), the route marks the pointer `done`, logs the cause, and sends today's `buildQuizOffer` text + `quiz` / `quiz_picker` button instead. So `buildQuizOffer` and the old action shapes stay.
 - The user message is saved as today. The assistant reply that's saved is the text the user saw ("Which document? …", "Here's your quiz on **x.pdf**.", "Okay, cancelled.").
-- The `"click the Create quiz button"` lines in the smalltalk prompt ([chat.service.ts:104](src/services/chat.service.ts#L104)) and the agent instruction ([agent.service.ts:76](src/services/agent.service.ts#L76)) are removed in WF.5, since typed answers now work.
+- The `"click the Create quiz button"` lines in the smalltalk prompt ([chat.service.ts:104](src/services/chat.service.ts#L104)) and the agent instruction ([agent.service.ts:76](src/services/agent.service.ts#L76)) are **reworded** in WF.5 ("answer the question above, or use its buttons"), not removed, because the button-only offer can still appear as the fallback.
+- **One-document chats:** `checkDocumentReady` runs before the active-run check, so a deleted document answers 404 first. That's fine: deleting a document also removes the user's active runs (§4.4) and that document's chat messages.
 
 ### 4.7 What the client receives (additive only)
 
 | Channel | Change |
 |---|---|
-| `/chat-stream` | existing `status` event reused: `{ text: 'Writing your quiz from x.pdf…' }` before generating. **New `quiz` event** `{ runId, documentId, filename, quiz }`. Existing `action` event: buttons now carry the `runId`: `{ type: 'quiz_confirm', runId, documentId, filename }`, `{ type: 'quiz_choose', runId, candidates }` |
-| `/chat` JSON | adds `quiz` (same shape) and the new `action` shapes |
-| **New** `POST /quiz-runs/:runId/resume` | JSON `{ action: 'confirm' \| 'cancel' \| 'choose', documentId? }` → `{ quiz }` or `{ text }`. What the **buttons** call. Same ownership check (pointer row must be the caller's), same Mastra resume, so a click and a typed "yes" go through **one path** |
+| `/chat-stream` | existing `status` event reused: `{ text: 'Writing your quiz from x.pdf…' }` before generating. **New `quiz` event** `{ runId, documentId, filename, quiz }`. Existing `action` event gets **one new shape** carrying the `runId`: `{ type: 'quiz_ask', runId, candidates: [{ documentId, filename }] }` (1 candidate → [Create quiz] [Cancel], several → one button per document + [Cancel]). The old `quiz` / `quiz_picker` shapes stay for the fallback (§4.6) |
+| `/chat` JSON | adds `quiz` (same shape) and the new `action` shape |
+| **New** `POST /quiz-runs/:runId/resume` | JSON `{ action: 'choose', documentId } \| { action: 'cancel' }` → `{ quiz }` or `{ text }`. What the **buttons** call. Same pointer claim + Mastra resume as a typed reply, so a click and a typed "yes" go through **one path**. 404 if the run isn't the caller's, 409 if it isn't waiting any more (already claimed, done or expired) |
 | `POST /quiz` | unchanged (the header's "Generate quiz" button still uses it directly; it isn't a conversation) |
 
-The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` and the new `action` types (CLAUDE.md §9). They'd just show the text.
+The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` and the new `action` type (CLAUDE.md §9). They'd just show the text. Buttons aren't saved with the chat history, so after a reload the question shows as plain text; typing still works, because the run is on the server.
 
 ### 4.8 Failures and races
 
 | Situation | What happens | Who handles it |
 |---|---|---|
-| Click + typed "yes" at the same moment | One `resume()` claims `suspended → running`. The other gets `WORKFLOW_RESUME_ALREADY_CLAIMED`, mapped to **409** "That quiz is already being made" (button) or a short sentence (chat) | Mastra's claim (verified in source, §13); proven in WF.1 and WF.7 |
+| Click + typed "yes" at the same moment | The pointer claim (conditional `UPDATE waiting → running`) lets exactly one through. The other gets **409** "That quiz is already being made" (button) or that sentence (chat), and Mastra is never called for it. Mastra's own claim (`WORKFLOW_RESUME_ALREADY_CLAIMED`) is the second guard | DocMind claim + Mastra claim (verified in source, §13); proven in WF.1 and WF.7 |
+| Two "quiz me" in one chat at the same moment | The second pointer `INSERT` hits the unique index (`23505`) → "Your quiz is already being made" | Postgres unique index (fix 2) |
 | Server restarts while a run is **suspended** | Nothing lost: the snapshot is in Postgres, and the next message resumes it | Mastra storage; proven in WF.1 |
-| Server dies **mid-generate** (run left `running`) | Mastra's default boot recovery (`'auto'`) would restart the run with nobody listening, spending a Gemini call on a quiz nobody receives. Plan: recovery **off** (D5), and a pointer stuck `running` for >3 min counts as failed ("That quiz didn't finish, ask again") | DocMind; tested in WF.1 (kill mid-step) |
-| Document deleted / not ready while paused | `generateQuiz` → 404/409 → `{ outcome: 'error' }` → "That document isn't available any more" | existing `checkDocumentReady` |
-| Gemini fails twice | `generateQuiz` → 502 → run ends → "Couldn't make the quiz right now, say 'quiz me' to try again" (D6) | existing `generateQuiz` |
+| Server dies **mid-generate** | Recovery is off (D5), so nothing restarts the run (auto would spend a Gemini call on a quiz nobody receives). The pointer stays `running`; after 3 min the next message marks it `done` and is handled normally | DocMind stale rule; tested in WF.1 (kill mid-step) |
+| Gemini HTTP error (503 "high demand", 429) or a hung call | Caught inside `generate-quiz` (a thrown error would otherwise end the run `failed`), 60 s timeout → `{ outcome: 'error' }` → "Couldn't make the quiz right now, say 'quiz me' to try again" | the step's `try/catch` + timeout (fix 1) |
+| Gemini returns an invalid quiz twice | `generateQuiz` → 502 → `{ outcome: 'error' }` → run ends (D6) | existing `generateQuiz` |
+| Document deleted while waiting | `DELETE /documents/:id` cancels the user's active runs. If it slips through (deleted between the claim and generation), `generateQuiz` → 404 → "That document isn't available any more" | fix 4 + existing `checkDocumentReady` |
 | Expired (30 min) | Lazy: the next message sees it, cancels it, routes normally | DocMind |
 | Another user's `runId` on `/quiz-runs/:id/resume` | **404** (pointer not found for this user). Mastra is never called | DocMind (auth rule: 404 not 403) |
-| Mastra/Postgres error | `withErrorHandling` → 503 JSON / `event: error`, and `summarizeError` logs the cause chain | existing error handling |
-| "cancel" arrives while `generate-quiz` is already running | `run.cancel()` fires `abortSignal`, but `generateQuiz()` doesn't listen, so the in-flight Gemini call finishes; only later steps are stopped. In practice the pointer is `running`, so the reply reader isn't even consulted: the message is answered as "a quiz is already being made" | Mastra cancel semantics (§13) + DocMind |
+| Mastra can't start, or its storage fails at `start()` | Pointer marked `done`, the cause logged through `summarizeError`, and the user gets today's offer + button instead. Chat is unaffected | fallback (fix 5) |
+| Mastra/Postgres error during a resume | `withErrorHandling` → 503 JSON / `event: error`; the pointer is marked `done` so the chat isn't stuck | existing error handling |
+| The active-run lookup itself fails (a DB hiccup) | Logged, treated as "no active run", and the message is routed normally | `prepareChat` (fix 5) |
+| "cancel" typed while the quiz is being generated | The pointer is `running`, so the reply reader isn't consulted: "Your quiz is still being made". (`run.cancel()` wouldn't stop the in-flight Gemini call anyway: `generateQuiz` doesn't listen to `abortSignal`) | DocMind + Mastra cancel semantics (§13) |
 
 ---
 
@@ -300,11 +355,11 @@ The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` 
 
 1. **Mastra orchestrates, DocMind decides.** Steps *call* existing services (`generateQuiz`, `listDocuments`, `checkDocumentReady`); no business logic is rewritten inside a step.
 2. **Only `src/mastra/**` and `quizWorkflow.service.ts` import Mastra.**
-3. **No Mastra agents, tools, memory, server or model providers** in this phase. Gemini stays on plain `fetch`.
-4. **`userId` only from `req.user.id`**, passed into the workflow input, and re-checked by `checkDocumentReady` inside `generate-quiz`. A run is only ever found through the pointer table, filtered by `user_id` AND `session_id`.
+3. **No Mastra agents, tools, memory, server or model providers** in this phase. Gemini stays on plain `fetch`. (Agents and tools come in 8b, §9.)
+4. **`userId` only from `req.user.id`**, passed into the workflow input, and re-checked by `checkDocumentReady` inside `generate-quiz`. A run is only ever found through the pointer table, filtered by `user_id`.
 5. **Someone else's run = 404**, the same as a missing one.
 6. **The model never changes workflow state.** The LLM fallback only labels a reply; code validates it (candidate ids) and calls `resume`/`cancel`.
-7. **Resume is the claim.** Never call `resume()` for a run whose pointer isn't `waiting`, and treat `WORKFLOW_RESUME_ALREADY_CLAIMED` as a normal outcome, not a crash.
+7. **Resume is a claim, twice.** DocMind claims the pointer row (`waiting → running`, one conditional `UPDATE`) before calling `resume()`; never call `resume()` without winning that claim. Treat `WORKFLOW_RESUME_ALREADY_CLAIMED` as a normal outcome, not a crash.
 8. **Every Mastra result is checked by `status`** (`success` / `suspended` / `failed` / `canceled`); no assumption that `start()` finished. A `bail()` also ends as **`success`** (the bail payload becomes the result), so a `success` is read through the output's `outcome` field (`quiz` / `cancelled` / `nothing_ready` / `error`).
 8b. **Nothing with a side effect above the `suspend` check.** A resumed step runs `execute` again from its first line; anything before `if (!resumeData) return suspend(...)` runs twice. Gemini calls and DB writes go below it, or in the next step.
 9. **Suspend payloads hold only what the user was shown** (candidate ids + filenames), never chunks, embeddings or quiz text.
@@ -313,6 +368,11 @@ The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` 
 12. **Logging stays a feature:** every workflow transition logs through `pipelineLogger` (new `workflow` theme), and errors go through `summarizeError`.
 13. **Testing against real data:** local `.env` = production Neon. Tests use throwaway guests, delete **only the ids they created** (users, documents, pointer rows, Mastra runs via `deleteWorkflowRunById`), and the PoC uses its own workflow id (`poc-…`).
 14. **Telemetry off everywhere** (`MASTRA_TELEMETRY_DISABLED=1`).
+15. **A step never throws** (fix 1). Every error inside a step becomes an `outcome`, so a run always ends `success` with a readable result and the pointer can always be closed.
+16. **One active quiz per chat** (`waiting` or `running`), enforced by the unique index, with the pointer row written before `start()` (fix 2).
+17. **The free reply rules only read short replies that aren't questions;** everything else goes to the LLM (fix 3).
+18. **No quiz content outlives its run:** snapshots are deleted when a run ends, and document/session deletes remove active runs (fix 4).
+19. **The quiz never depends on Mastra being up:** Mastra starts on first use, and any failure to start a run falls back to today's offer + button (fix 5).
 
 ---
 
@@ -324,7 +384,7 @@ The frontend's `dispatch()` has no `default` case, so older bundles skip `quiz` 
 - `package.json` `engines.node`: `"22.x"` → `">=22.13 <23"` (Mastra needs ≥ 22.13; check what Render actually runs).
 - `.env` / `.env.example` / Render: `MASTRA_TELEMETRY_DISABLED=1`.
 - `db/client.ts`: `export const pool` (one line).
-- **Checks:** `import { createWorkflow, createStep } from '@mastra/core/workflows'` compiles under your CommonJS `tsconfig` (`npx tsc --noEmit`), runs under `ts-node-dev`, and survives `npm run build && npm start`. Process memory before/after the import (`process.memoryUsage().rss`), since Render free has 512 MB. Find out whether `WorkflowsPG` creates the `mastra` schema itself. (The boot-recovery key is already known: `recovery: { workflows: 'off' }`, §13.)
+- **Checks:** `import { createWorkflow, createStep } from '@mastra/core/workflows'` compiles under your CommonJS `tsconfig` (`npx tsc --noEmit`), runs under `ts-node-dev`, and survives `npm run build && npm start`. Process memory before/after the import (`process.memoryUsage().rss`), since Render free has 512 MB. Find out whether `WorkflowsPG` creates the `mastra` schema itself, and that building the `Mastra` instance can wait until first use (fix 5). (The boot-recovery key is already known: `recovery: { workflows: 'off' }`, §13.)
 - **Explain:** what a CJS/ESM dual package is, and why it decides whether this works at all.
 
 ### WF.1: Proof of concept: `src/step8-mastra-poc.ts` (`npm run step8 <mode>`) — the gate
@@ -341,7 +401,8 @@ A toy 2-step workflow (`poc-approval`): step 1 suspends asking "approve?", step 
 | `crash` | a step that waits 30 s; kill the process mid-step; start again with recovery `off` and `auto` | `off`: run stays `running` (our stale rule handles it). `auto`: Mastra restarts it at boot. Behaviour written down |
 | `cancel <runId>` | `run.cancel()` on a suspended run | status `canceled`, and resume is refused |
 | (all modes) | a counter inside step 1's `execute`, printed each time it runs | proves the paused step runs **again from its first line** on resume (More_on §32) |
-| `bail` | a variant where the resume answer is "no" and the step calls `bail()` | run status `success`, result = the bail payload (so `outcome` is what matters) |
+| `bail` | a variant where the resume answer is "no" and the step calls `bail()` | run status `success`, result = the bail payload (so `outcome` is what matters; this is D9's cancel path) |
+| `throw` | a step that throws | run status `failed`: shows why rule 15 catches errors inside steps |
 | `cleanup` | delete every `poc-approval` run | 0 rows left |
 
 **Explain while building:** what's inside a snapshot, where `suspend()` returns to, why the second process can continue, how the claim works (one conditional UPDATE), and why recovery-on-boot is risky for a step that spends money.
@@ -350,23 +411,23 @@ A toy 2-step workflow (`poc-approval`): step 1 suspends asking "approve?", step 
 
 ### WF.2: Pointer table + repository
 
-SQL from §4.4 run on Neon by Shiv, the table added to `schema.ts` with the SQL in a comment, and `quizWorkflowRuns.repository.ts` with `createWaitingRun`, `findWaitingRun(sessionId, userId)`, `markRunning` / `markWaiting` / `markDone(runId, userId)`, `deleteRunsForSession`. Every function takes a required `userId`. **Test:** in-process, two guests, one waiting run per session (a second insert hits the unique index), expiry check, cleanup by id.
+SQL from §4.4 run on Neon by Shiv, the table added to `schema.ts` with the SQL in a comment, and `quizWorkflowRuns.repository.ts` with `createActiveRun` (insert `running`), `findActiveRun(sessionId, userId)` (`waiting` or `running`), `claimWaitingRun(runId, userId)` (the conditional `UPDATE … RETURNING`), `markWaiting` / `markDone(runId, userId)`, `listActiveRunsForUser(userId)`, `deleteRunsForSession(sessionId, userId)`. Every function takes a required `userId`. **Test:** in-process, two guests: one active run per session (a second insert while the first is `running` **or** `waiting` hits the unique index), two concurrent claims → exactly one row back, expiry and stale checks, another user finds nothing, cleanup by id.
 
 ### WF.3: The real quiz workflow
 
-`src/mastra/workflows/quiz.workflow.ts` (4 steps, §4.2), `src/mastra/index.ts` (§4.3), and `quizWorkflow.service.ts` (`startQuizRun`, `resumeQuizRun`, `cancelQuizRun`, each returning DocMind-shaped results and updating the pointer). **Tests (in-process, real Neon, throwaway guest + small PDF):** one doc → suspends at `confirm` → resume confirm → real quiz; All with 2 ready → `choose-document` → choose → quiz without a confirm; cancel at each step; document deleted while paused → error outcome; 0 ready → `nothing_ready`. One run with a fake `generateQuiz` to keep Gemini calls down.
+`src/mastra/workflows/quiz.workflow.ts` (3 steps, §4.2), `src/mastra/index.ts` (`getMastra()`, built on first use, §4.3), `quizWorkflow.service.ts` (`startQuizRun`: ready check (D10) → pointer insert → `start()`, or a "fallback" result if Mastra fails; `resumeQuizRun`: claim → `resume()`; `cancelQuizRun`; snapshot deleted at every ending; each returns DocMind-shaped results and updates the pointer). Plus the optional `timeoutMs` on `generateAnswer` and `generateQuiz` (fix 1). **Tests (in-process, real Neon, throwaway guest + small PDF):** one doc → suspends at `ask-user` → choose → real quiz; All with 2 ready → choose #2 → quiz, no second question; cancel → `success` + `outcome: 'cancelled'`; document deleted while paused → `error` outcome; 0 ready → no run, no rows; **a faked Gemini 503 and a faked hang (global `fetch` faked, as in AG.4) → `outcome: 'error'`, run `success`, pointer `done`**; snapshot gone after every ending; Mastra storage made to fail → the fallback result. One run with a fake `generateQuiz` to keep Gemini calls down.
 
 ### WF.4: Reply reader
 
-`src/services/quizReply.service.ts` + `src/schemas/quizReply.schema.ts` (Zod + Gemini response schema), and an eval in `step8 replies`: ~35 labelled replies ("yes", "yep go", "2", "second one", "the last one", "react", "the React document" with 2 React files, "cancel", "nah", "what's in chapter 3?", "yes but about chapter 2", …). **Pass:** 0 harmful mistakes (a cancel read as confirm, a wrong document chosen), LLM used only on the unclear ones. The LLM count gets written down.
+`src/services/quizReply.service.ts` + `src/schemas/quizReply.schema.ts` (Zod + Gemini response schema), and an eval in `step8 replies`: ~40 labelled replies ("yes", "yep go", "2", "second one", "the last one", "react", "the React document" with 2 React files, "cancel", "nah", "what's in chapter 3?", "yes but about chapter 2", …) **plus the trap set** (fix 3): "what is react?", "what does the first chapter say?", "is the second one about hooks?", "explain 2 more". **Pass:** 0 harmful mistakes (a cancel read as a choice, a wrong document chosen, a question read as a choice), LLM used only on the replies the rules don't take. The LLM count gets written down.
 
 ### WF.5: Chat + routes
 
-`prepareChat` kind `'workflow'` (§4.6), both chat routes run the op at step 7 with a `status` event + the `quiz` event (§4.7), `POST /quiz-runs/:runId/resume` (new `quizRuns.routes.ts`, behind `requireAuth` like every data route), `DELETE /sessions/:id` also deletes pointer rows, prompt lines removed, `pipelineLogger` `workflow` theme. **Tests (HTTP, local server):** the §8 list.
+`prepareChat` kind `'workflow'` with ops `start` / `resume` / `cancel` / `ask_again` / `busy` (§4.6), both chat routes run the op at step 7 with a `status` event + the `quiz` event (§4.7), the fallback to `buildQuizOffer` when a start fails (fix 5), `POST /quiz-runs/:runId/resume` (new `quizRuns.routes.ts`, behind `requireAuth` like every data route), `DELETE /sessions/:id` and `DELETE /documents/:id` cancel + delete the user's runs (fix 4), the prompt lines reworded, `pipelineLogger` `workflow` theme, config `QUIZ_RUN_TTL_MS` (30 min), `QUIZ_RUN_STALE_MS` (3 min), `QUIZ_GENERATE_TIMEOUT_MS` (60 s). **Tests (HTTP, local server):** the §8 list.
 
 ### WF.6: Frontend
 
-`types/chat.ts` (new action shapes + `quiz` payload), `api/chat.ts` (`quiz` case), `useChat` (`onQuiz`), `useQuiz.show(quiz, filename)` (open the modal with a quiz that already exists; "Regenerate" still uses `POST /quiz`), `ChatTurn` buttons → `POST /quiz-runs/:runId/resume`, and the picker as numbered buttons. **Tests:** headless Chromium: type "quiz me" → "yes" → the modal opens; All docs → "the second one" → modal; click and type at once → one quiz; reload while waiting → typing "yes" still works (state is on the server); light/dark/375 px; 0 console errors.
+`types/chat.ts` (the `quiz_ask` action + `quiz` payload), `api/chat.ts` (`quiz` case), `api/quizRuns.ts` (new), `useChat` (`onQuiz`), `useQuiz.show(quiz, filename)` (open the modal with a quiz that already exists; "Regenerate" still uses `POST /quiz`), `ChatTurn`: `quiz_ask` buttons → `POST /quiz-runs/:runId/resume` (1 candidate → Create quiz + Cancel, several → one per document + Cancel); the old `quiz` / `quiz_picker` buttons keep working for the fallback. **Tests:** headless Chromium: type "quiz me" → "yes" → the modal opens; All docs → "the second one" → modal; click and type at once → one quiz; reload while waiting → typing "yes" still works (state is on the server); light/dark/375 px; 0 console errors.
 
 ### WF.7: Full pass + live
 
@@ -374,9 +435,9 @@ The whole §8 checklist again on a local server, then a restart test (suspend �
 
 ### WF.8: Docs
 
-CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout, §7 API + SSE, §8 data model, §9 gotchas, §13), README (stack table, API, SSE table, decisions, limitations), CODE_EXPLAINED (Phase 8 section with line links), PROGRESS (topic 11 ✅), walkthrough + roadmap (how it turned out), topic 11 README + More_on (status lines, "planned" → what actually happened, a Part 3 like topic 10's), `topics/OVERVIEW.md`, ISSUES.md for anything found. Topic 11 NOTES.md stays Shiv's.
+CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout, §7 API + SSE, §8 data model, §9 gotchas, §13), README (stack table, API, SSE table, decisions, limitations), CODE_EXPLAINED (Phase 8 section with line links), PROGRESS (topic 11 ✅), walkthrough + roadmap (how it turned out), topic 11 README + More_on (status lines, "planned" → what actually happened, a Part 3 like topic 10's, and the one-step `ask-user` design replacing the two-step one described in Part 2), `topics/OVERVIEW.md`, ISSUES.md for anything found. Topic 11 NOTES.md stays Shiv's.
 
-**Already written before the build (2026-11-10, at Shiv's request):** topic 11 [README.md](topics/11-workflows-suspend-resume/README.md) (new), More_on Part 2 (§25–§45, Mastra in depth) + Part 1 refreshed, and "planned on Mastra" notes in PROGRESS, the roadmap, the walkthrough, README, OVERVIEW and CLAUDE.md. WF.8 turns those "planned" notes into "built" ones.
+**Already written before the build (2026-11-10, at Shiv's request):** topic 11 [README.md](topics/11-workflows-suspend-resume/README.md) (new), More_on Part 2 (§25–§45, Mastra in depth) + Part 1 refreshed, and "planned on Mastra" notes in PROGRESS, the roadmap, the walkthrough, README, OVERVIEW and CLAUDE.md. WF.8 turns those "planned" notes into "built" ones. Those pages still describe the first draft's 4 steps (`choose-document` + `confirm`); WF.8 updates them to the 3-step design.
 
 ---
 
@@ -390,43 +451,53 @@ CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout
 | `src/step8-mastra-poc.ts` | new: PoC modes + `replies` eval | WF.1/4 |
 | `src/db/schema.ts` | `quizWorkflowRuns` table + SQL comment | WF.2 |
 | `src/repositories/quizWorkflowRuns.repository.ts` | new | WF.2 |
-| `src/mastra/index.ts` | new: `Mastra` instance + storage | WF.3 |
-| `src/mastra/workflows/quiz.workflow.ts` | new: 4 steps + the workflow | WF.3 |
+| `src/mastra/index.ts` | new: `getMastra()`, built on first use, + storage | WF.3 |
+| `src/mastra/workflows/quiz.workflow.ts` | new: 3 steps + the workflow | WF.3 |
 | `src/services/quizWorkflow.service.ts` | new: start/resume/cancel/find, the only Mastra caller outside `src/mastra` | WF.3 |
-| `src/services/quizOffer.service.ts` | candidate logic shared with `resolve-document`; the template texts move into the workflow's replies | WF.3/5 |
+| `src/services/llm.service.ts` | optional `timeoutMs` on `generateAnswer` (`AbortSignal.timeout`), additive | WF.3 |
+| `src/services/quiz.service.ts` | optional `timeoutMs` on `generateQuiz`'s input, passed through, additive (`POST /quiz` unchanged) | WF.3 |
+| `src/services/quizOffer.service.ts` | candidate logic shared with `resolve-document`; stays as the fallback offer (fix 5) | WF.3/5 |
 | `src/services/quizReply.service.ts`, `src/schemas/quizReply.schema.ts` | new | WF.4 |
-| `src/services/chat.service.ts` | pending-run check before embedding, kind `'workflow'`, prompt line removed | WF.5 |
-| `src/services/agent.service.ts` | the "click the Create quiz button" line removed | WF.5 |
-| `src/routes/chat.routes.ts` | step 7 for kind `'workflow'`, `status` + `quiz` events | WF.5 |
+| `src/services/chat.service.ts` | active-run check before embedding, kind `'workflow'`, prompt line reworded | WF.5 |
+| `src/services/agent.service.ts` | the "click the Create quiz button" line reworded | WF.5 |
+| `src/routes/chat.routes.ts` | step 7 for kind `'workflow'`, `status` + `quiz` events, the fallback offer | WF.5 |
 | `src/routes/quizRuns.routes.ts` + `app.ts` mount | new: `POST /quiz-runs/:runId/resume` | WF.5 |
-| `src/routes/sessions.routes.ts` | delete pointer rows with the session | WF.5 |
+| `src/routes/sessions.routes.ts` | cancel + delete the session's runs | WF.5 |
+| `src/routes/documents.routes.ts` | cancel + delete the user's active runs (fix 4) | WF.5 |
 | `src/utils/pipelineLogger.ts` | `workflow` theme | WF.5 |
-| `src/config.ts` | `QUIZ_RUN_TTL_MS` (30 min), `QUIZ_RUN_STALE_MS` (3 min) | WF.5 |
+| `src/config.ts` | `QUIZ_RUN_TTL_MS` (30 min), `QUIZ_RUN_STALE_MS` (3 min), `QUIZ_GENERATE_TIMEOUT_MS` (60 s) | WF.3/5 |
 | `frontend/src/types/chat.ts`, `api/chat.ts`, `api/quizRuns.ts` (new), `hooks/useChat.ts`, `hooks/useQuiz.ts`, `components/chat/ChatTurn.tsx`, `App.tsx` | §WF.6 | WF.6 |
 | docs | §WF.8 | WF.8 |
 
-**Not touched:** `llm.service.ts`, `agent.service.ts` (except one prompt line), `router.service.ts`, `src/tools/*`, `quiz.service.ts`, `quiz.routes.ts`, every other repository, auth, the queue and worker.
+**Not touched:** `router.service.ts`, `src/tools/*`, `quiz.routes.ts`, every other repository, auth, the queue and worker. `agent.service.ts` changes one prompt line; `llm.service.ts` and `quiz.service.ts` only get the optional timeout.
 
 ---
 
 ## 8. Test checklist
 
-**PoC (WF.1):** suspend → exit → resume in a new process ✓ · duplicate resume → exactly one wins ✓ · resume a finished run → refused ✓ · cancel then resume → refused ✓ · kill mid-step with recovery off/auto → behaviour recorded ✓ · cleanup leaves 0 rows ✓
+**PoC (WF.1):** suspend → exit → resume in a new process ✓ · duplicate resume → exactly one wins ✓ · resume a finished run → refused ✓ · cancel then resume → refused ✓ · `bail` → `success` with the bail payload ✓ · a throwing step → `failed` ✓ · kill mid-step with recovery off/auto → behaviour recorded ✓ · cleanup leaves 0 rows ✓
 
 **Chat (WF.5–WF.7):**
-- [ ] One-doc chat: "quiz me" → offer (suspended at confirm) → "yes" → quiz event, modal data valid (5 × 4, shuffled)
-- [ ] One-doc: "quiz me" → "no thanks" → cancelled, pointer `done`, Mastra status `canceled`
-- [ ] All, 2 ready: "quiz me" → list → "the second one" → quiz from document #2
-- [ ] All, 2 ready: "the React document" with one React file → that one; with two → asks again, still waiting
+- [ ] One-doc chat: "quiz me" → "Want it?" (suspended at `ask-user`) → "yes" → quiz event, modal data valid (5 × 4, shuffled)
+- [ ] One-doc: "quiz me" → "no thanks" → cancelled: run `success` with `outcome: 'cancelled'` (D9), pointer `done`, snapshot deleted
+- [ ] All, 2 ready: "quiz me" → list → "the second one" → quiz from document #2, no second question
+- [ ] All, 2 ready: "react" with one React file → that one; with two → asks again, still waiting
 - [ ] All: "yes" while choosing → asks which one
-- [ ] All, 1 ready → straight to confirm; 0 ready → sentence, **no run created**
+- [ ] Trap replies while waiting: "what is react?", "what does the first chapter say?" → **not** read as a choice; answered normally, run cancelled (fix 3)
+- [ ] All, 1 ready → "Want it?"; 0 ready → sentence, **no run, no rows** (D10)
 - [ ] Waiting, then an unrelated question → normal agent answer + run cancelled
 - [ ] Waiting 31 min (or TTL lowered in the test) → expired, message routed normally
 - [ ] Click **Create quiz** + type "yes" at the same time → one quiz, the other gets 409 / "already being made"
+- [ ] Two "quiz me" at the same time in one chat → one run (unique index)
+- [ ] "cancel" while the quiz is being generated → "still being made"
+- [ ] Gemini 503 / a hang during generation (faked) → "Couldn't make the quiz", run `success` + `outcome: 'error'`, pointer `done` (fix 1)
 - [ ] Restart the server while waiting → "yes" still works
-- [ ] Document deleted while waiting → "isn't available any more", no Gemini call
-- [ ] Guest B: `POST /quiz-runs/<A's runId>/resume` → 404; B's chat with A's `sessionId` finds no pending run
-- [ ] `DELETE /sessions/:id` removes its pointer rows
+- [ ] A pointer stuck `running` for over 3 min (simulated) → the next message is handled normally, the row is `done`
+- [ ] Document deleted while waiting → the user's active runs and their snapshots are gone (fix 4)
+- [ ] `DELETE /sessions/:id` removes its pointer rows and snapshots
+- [ ] After every ending (quiz, cancel, error, expiry, delete): 0 snapshot rows left for that run (fix 4)
+- [ ] Mastra made to fail at start (e.g. a broken storage config in the test) → today's offer + button, chat unaffected (fix 5)
+- [ ] Guest B: `POST /quiz-runs/<A's runId>/resume` → 404; B's chat with A's `sessionId` finds no active run
 - [ ] Old frontend bundle (via `git archive`, like AG.4) still works: text shown, no crash
 - [ ] Log: every transition visible with the `workflow` theme; Gemini calls counted (reply reader: 0 on rule matches)
 - [ ] Live: same core flow on Render + Vercel; memory within limits; test data deleted by id
@@ -435,31 +506,41 @@ CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout
 
 ## 9. What this phase deliberately does NOT cover
 
-- Mastra `createTool()`, a Mastra quiz agent, agents/tools inside workflows (Phase 2 of the brief, later). **Agreed 2026-11-10 as "Phase 8b", after WF.7, not planned in detail yet:** (a) rebuild the existing document-chat agent in Mastra (same two tools via `createTool`, same system instruction) as a script (`npm run step9`, not a route) and run it on the same 9-question set the custom agent scored 9/9 on, to compare code size, model calls, answers and what the framework hides; (b) a small quiz agent with `listDocuments` (Kind A) and `createQuiz` with `requireApproval: true` (reuses `generateQuiz()`), to compare the agent's tool-approval pause with the workflow's `suspend()`. Kept out of the live chat at first: two "wait for yes" mechanisms live at once would fight over a typed "yes". Verified in the 1.82.0 bundled docs: `requireApproval` / `requireToolApproval`, the `tool-call-approval` stream chunk + `approveToolCall()` / `declineToolCall()` (needs storage), and Gemini via a `'google/…'` model string reading `GOOGLE_GENERATIVE_AI_API_KEY` (no provider package).
+- **Mastra agents and tools: that's Phase 8b (redesigned 2026-11-24; after WF.7; not planned in detail yet).** Instead of the 2026-11-10 idea (rebuild the chat agent in Mastra as a `step9` script, now dropped or optional), 8b puts a **Mastra agent inside this quiz workflow** and deploys it if it holds up:
+  - `resolve-document` becomes `pick-document`: a Mastra `Agent` with two **new** `createTool()` tools in `src/mastra/tools/`, calling the same repository functions as the chat tools. `listReadyDocuments` → `listDocuments(userId)`, returning ids and only ready documents (the chat tool hides ids on purpose). `searchDocuments` → `searchSimilar(...)`, returning each hit's `documentId`. `userId` comes from code through Mastra's per-call context (field name to confirm in the 1.82.0 docs), never from a tool argument. The existing `src/tools/` files and the chat agent are not touched.
+  - For "quiz me on the hooks stuff" the agent returns `{ documentId, topic }`; code checks the id is one of the user's ready documents; `ask-user` then asks once.
+  - `generateQuiz` gets an optional `topic` (similarity search inside that document instead of even sampling, [chunks.repository.ts:45-52](src/repositories/chunks.repository.ts#L45-L52)). Without it the agent picks the right PDF and the quiz still ignores the topic.
+  - Rules: skip the agent on a plain "quiz me" or a single candidate; `ask-user`'s `suspend()` stays the only waiting mechanism (no `requireApproval` in the live flow, so two mechanisms never fight over a "yes"); quiz generation stays a code step, not a tool (nothing for the model to decide); the agent's answer is a proposal that code validates (rule 6).
+  - Eval: ~20 "quiz me on X" requests through three versions: 8a's picker, a **vector vote** (group the message's search hits by document, 0 extra model calls) and the agent. Count: right document, right topic, model calls, time.
+  - Costs to accept: ~4–5 Flash-Lite calls per topic quiz (classifier + agent 2–3 + generation) vs ~2 today, out of 15/min and 500/day shared with chat; a second Gemini path (Mastra's `'google/…'` model string through the AI SDK, `GOOGLE_GENERATIVE_AI_API_KEY`) to wire into `pipelineLogger` / `withErrorHandling`; a few seconds before "Want it?" (needs a `status` event); Render memory measured again.
+  - Verified in the 1.82.0 bundled docs on 2026-11-10: `createTool`, `Agent`, `requireApproval` / `requireToolApproval`, the `tool-call-approval` stream chunk + `approveToolCall()` / `declineToolCall()`, Gemini via a `'google/…'` model string with no provider package. A `createQuiz` tool behind `requireApproval` can be tried in a side script only.
 - Mastra's server, playground (`mastra dev`), deployer, memory, observability, evals.
-- Moving `streamAgent`, the router or the tools to Mastra.
+- Moving `streamAgent`, the router or the chat tools to Mastra.
 - Saving quizzes or answers (still not persisted; a reload loses an open quiz, as today).
-- Quiz options (question count, difficulty, chapters). The schema is fixed at 5 × 4, and chunks have no chapters.
+- **A review loop** ("change question 2" after the quiz arrives). Considered 2026-11-24 and left out: it would be a `review` step after `generate-quiz` that suspends again with the quiz, resumes with the change, and loops until "done" or expiry, plus a `regenerateQuestion()` in `quiz.service.ts`. Today the modal's "Regenerate" makes a whole new quiz.
+- Quiz options (question count, difficulty, chapters). The schema is fixed at 5 × 4, and chunks have no chapters. (8b's optional `topic` is the one exception.)
 - Workflows for anything other than the quiz.
-- A hand-rolled version or LangGraph.js. More_on §15–§16 cover the comparison, and the PoC's `inspect` mode shows what a hand-rolled `state jsonb` would hold.
-- Pruning old Mastra snapshot rows (D8; it has a `retention` option for later).
+- A hand-rolled version or LangGraph.js. More_on §15–§16 cover the comparison, §3's "honest tradeoff" note says what a hand-rolled version would cost, and the PoC's `inspect` mode shows what its `state jsonb` would hold.
+- A bulk pruning job for old snapshots: each run's snapshot is deleted when it ends (D8), so none is needed.
 
 ---
 
-## 10. Decisions (open, with recommendations)
+## 10. Decisions
 
-| # | Question | Recommendation | Why |
+All ten are decided. D1–D7: Shiv accepted the recommendations on 2026-11-24. D8–D10 were decided the same day (Shiv: "8a as planned, with all the fixes"). D7 is settled as `logger: false` after WF.0 saw what the default logger prints (§11).
+
+| # | Question | Recommendation / decision | Why |
 |---|---|---|---|
 | D1 | Version pinning | **Exact** `1.82.0` / `1.35.0` | Mastra ships very often (core is at 1.82). A surprise minor version mid-build would make results hard to compare |
-| D2 | How to find the pending run for a chat | **DocMind pointer table** (§4.4). Alternative: Mastra `resourceId = "<userId>:<sessionId>"` + `listWorkflowRuns({ resourceId, status: 'suspended' })`, no new table | Ownership, expiry and "one per session" stay in your code and your SQL (constraint 9), and you can query it without parsing Mastra's JSON |
+| D2 | How to find the active run for a chat | **DocMind pointer table** (§4.4). Alternative: Mastra `resourceId = "<userId>:<sessionId>"` + `listWorkflowRuns({ resourceId, status: 'suspended' })`, no new table | Ownership, expiry, "one per session" and the claim stay in your code and your SQL (constraint 9), and you can query it without parsing Mastra's JSON |
 | D3 | Where Mastra's tables go | **Postgres schema `mastra`** in the same Neon DB, sharing your pool | Kept apart from your tables, no extra connections, no new service |
 | D4 | Unrelated message while waiting | **Cancel the run** and answer normally | A "yes" several messages later is ambiguous |
 | D5 | Mastra boot recovery for `running` runs | **Off**, plus our 3-min stale rule | Auto would restart a quiz generation nobody is waiting for and spend Gemini calls |
-| D6 | Quiz generation fails twice | **End the run** with an error reply ("say 'quiz me' to try again") | Simple. Re-suspending a failed run needs time-travel/restart APIs that aren't worth learning yet |
-| D7 | Mastra's own logger | **Off** (`logger: false`) or warn-level, decided in WF.0 after seeing its output | `pipelineLogger` is the project's log, and two loggers interleaving is noise |
-| D8 | Old snapshot rows | **Keep for now** (inspectable while learning). The test cleanup deletes its own | Pruning can come later with Mastra's `retention` option |
-| D9 | *(found 2026-11-12 while building the Phase 8 walkthrough page)* How does a typed "cancel" end the run? §4.2 resumes with `{ action: 'cancel' }` → `bail()` → status **`success`** + `outcome: 'cancelled'`; §4.6 (`op: 'cancel'`) and the §8 checklist expect `run.cancel()` → status **`canceled`** | Decide in WF.3; use one path for both the button and typed replies | Logs, tests and the `outcome` check should mean the same thing everywhere |
-| D10 | *(found 2026-11-12)* 0 ready documents: `resolve-document` bails `nothing_ready`, but the §8 checklist says "no run created" (check before `start()`) | Check before `start()` (no run, no rows); keep the bail as a guard for documents deleted in between | No snapshot row for a quiz that could never start |
+| D6 | Quiz generation fails (invalid twice, or any error) | **End the run** with an error reply ("say 'quiz me' to try again") | Simple. Re-suspending a failed run needs time-travel/restart APIs that aren't worth learning yet |
+| D7 | Mastra's own logger | **`logger: false`** (settled in WF.0: the default logger only printed a storage warning, and `false` is accepted by the types) | `pipelineLogger` is the project's log, and two loggers interleaving is noise. Mastra's errors still reach us as thrown errors, logged through `summarizeError` |
+| D8 | Old snapshot rows | **Decided 2026-11-24: delete each run's snapshot when the run ends** (quiz sent, cancelled, error, expired, superseded, deleted). The PoC keeps its own until `cleanup`. *(Was: keep for now.)* | Quiz questions from a PDF the user deleted mustn't stay in `mastra.*` (fix 4) |
+| D9 | How does "cancel" end the run? | **Decided 2026-11-24:** a typed or clicked cancel goes through `resume({ action: 'cancel' })` → `bail({ outcome: 'cancelled' })` → status `success`. `run.cancel()` only for runs nobody is answering: expired, unrelated message, superseded by a new "quiz me", deleted | A cancel passes the same claim as a "yes", so the two can't both win |
+| D10 | 0 ready documents | **Decided 2026-11-24:** check before `start()` (no run, no rows); keep `resolve-document`'s bail as a guard for documents deleted in between | No snapshot row for a quiz that could never start |
 
 ---
 
@@ -467,7 +548,7 @@ CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout
 
 | Step | Date | Result | What bit / notes |
 |---|---|---|---|
-| WF.0 | | | |
+| WF.0 | 2026-11-24 | ✅ Installed `@mastra/core@1.82.0` + `@mastra/pg@1.35.0` (exact, D1): +143 packages, `node_modules` 209 → 356 MB (`@mastra` alone 106 MB); npm also bumped `pg` 8.23.0 → 8.23.1 (+3 `pg-*` patch versions). `engines` → `">=22.13 <23"` (local Node 22.14.0; both packages need `>=22.13.0`). `MASTRA_TELEMETRY_DISABLED=1` in `.env` + `.env.example`. `db/client.ts` exports `pool`. Checks with a temporary script (deleted afterwards): `npx tsc --noEmit` clean; under `ts-node --transpile-only` AND as compiled CommonJS (`tsc -p tsconfig.build.json`, run with `node`) an in-memory workflow went `start → suspended → resume → success`, and the paused step's `execute` ran **2 times** (re-run from the top, rule 8b). The real `Mastra` + `MastraCompositeStore` + `WorkflowsPG({ pool, schemaName: 'mastra' })` + `logger: false` + `recovery: { workflows: 'off' }` config type-checks. `npm run build` ok; `node dist/index.js` (worker off) → `GET /` 200, `/documents` 401 | **Memory:** loading Mastra takes ~1.4 s; on its own it's 26 → 119 MB RSS, but on top of the app's own modules it adds **~37 MB** (124 → 161 MB: `pg`, `zod` etc. are shared). Render free has 512 MB. **Schema:** `WorkflowsPG`'s storage runs `CREATE SCHEMA IF NOT EXISTS` itself when the schema is missing (`@mastra/pg` dist, `setupSchema`), so no manual `CREATE SCHEMA mastra`; it needs CREATE privilege on the database (Neon's owner role has it), confirmed live in WF.1. **Logger (D7):** the default logger printed only one warning in this test ("No `storage` configured … falling back to an in-memory store"); `logger: false` is accepted by the types → D7 = `logger: false`. **Suspend payload shape:** `start()` returns `suspendPayload` keyed by step id (`{ ask: { question } }`), not the bare payload. **Telemetry:** read in `isTelemetryEnabled()` (`1`/`true`/`yes`) each time it would send, so it must be in the env before Mastra starts (it is: dotenv loads first). **Audit:** 11 vulnerable packages, the same 11 as before the install (ISSUES.md #40) |
 | WF.1 | | | |
 | WF.2 | | | |
 | WF.3 | | | |
@@ -479,9 +560,12 @@ CLAUDE.md (§3, §4 stack row, §5 env + the Mastra-tables exception, §6 layout
 
 ---
 
-## 12. Code facts (what the code looks like today, 2026-11-07)
+## 12. Code facts (what the code looks like today, 2026-11-07, re-checked 2026-11-24)
 
-- `prepareChat` ([chat.service.ts:203](src/services/chat.service.ts#L203)): validate → `checkDocumentReady` for one document (245–252) → **embed (254–262)** → history (268–270) → route (277–290) → smalltalk (294–300) / **quiz offer (307–316, kind `'offer'`)** / agent (320–354). The pending-run check goes before line 254.
+- `prepareChat` ([chat.service.ts:203](src/services/chat.service.ts#L203)): validate → `checkDocumentReady` for one document (245–252) → **embed (254–262)** → history (268–270) → route (277–290) → smalltalk (294–300) / **quiz offer (307–316, kind `'offer'`)** / agent (320–354). The active-run check goes before line 254.
+- *(2026-11-24)* `generateAnswer` ([llm.service.ts:14-33](src/services/llm.service.ts#L14-L33)) throws on any non-OK status and has no timeout. `generateQuiz`'s loop ([quiz.service.ts:154-169](src/services/quiz.service.ts#L154-L169)) retries only an invalid reply, so a 503 leaves it as an exception (fix 1; ISSUES.md #8).
+- *(2026-11-24)* `DELETE /documents/:id` ([documents.routes.ts:85-87](src/routes/documents.routes.ts#L85-L87)) deletes the row, then chunks, then that document's messages; nothing quiz-run related yet (fix 4).
+- *(2026-11-24)* `sampleChunks` ([chunks.repository.ts:29-53](src/repositories/chunks.repository.ts#L29-L53)) takes evenly spaced chunks across the whole document; there's no topic input (matters for 8b). The chat tool `listDocuments` returns filename, status, chunk count and date, **no id** ([listDocuments.tool.ts](src/tools/listDocuments.tool.ts)); the repository rows do have `id` (used by `buildQuizOffer`).
 - Chat routes: `/chat` handles `kind 'offer'` at [chat.routes.ts:64-70](src/routes/chat.routes.ts#L64-L70), `/chat-stream` at [chat.routes.ts:207-216](src/routes/chat.routes.ts#L207-L216) (text frame + `action` event). The stream opens at line 174, after `prepareChat`, so 4xx errors stay plain JSON.
 - `buildQuizOffer(userId, one?)` ([quizOffer.service.ts:42](src/services/quizOffer.service.ts#L42)): one doc → `quiz` action; All → 1 ready → `quiz`, several → `quiz_picker`, 0 → text only. No LLM.
 - `generateQuiz({ documentId, userId }, t0)` ([quiz.service.ts:101](src/services/quiz.service.ts#L101)): rejects `'all'` (400), `checkDocumentReady` (404/409), `sampleChunks`, structured output, Zod, 2 attempts max (502), shuffle. Never touches `req`/`res`, so a step can call it as-is.
@@ -527,7 +611,9 @@ Read from the **published packages' own type definitions and compiled source** (
 - **Snapshot anatomy:** `runId`, `status`, `context` (input + per-step `payload` / `status` / `suspendPayload` / `resumePayload` / `output` / timestamps), `suspendedPaths`, `serializedStepGraph`, `result`, `timestamp` (`docs-workflows-snapshots.md`). The docs call the table `workflow_snapshots`; the Postgres constant is `TABLE_WORKFLOW_SNAPSHOT = "mastra_workflow_snapshot"` (`dist/storage/constants.d.ts`).
 - **License:** Apache-2.0 (`@mastra/core` and `@mastra/pg`).
 
-**Not yet verified (WF.0/WF.1 will):** whether `WorkflowsPG` creates the `mastra` schema itself; whether TS 5.9 type-checks its `.d.ts` cleanly under `node10` resolution; memory added at runtime; behaviour on Neon's pooled endpoint; what Mastra's default logger prints and whether `logger: false` is accepted; what `resume()` does on a finished or cancelled run.
+**Verified in WF.0 (2026-11-24, installed packages):** `WorkflowsPG`'s storage creates a missing schema itself (`CREATE SCHEMA IF NOT EXISTS`, needs CREATE privilege); the `./workflows`, `./storage`, `./mastra` subpaths resolve under CommonJS + TS 5.9 (`node10` resolution, `skipLibCheck`); `logger?: TLogger | false`; ~37 MB RSS on top of the app; in-memory suspend → resume works and re-runs the paused step. Details in §11.
+
+**Not yet verified (WF.1 will):** behaviour on Neon's pooled endpoint; what `resume()` does on a finished or cancelled run; what the logs look like with real storage.
 
 **Sources**
 - [Mastra: Suspend and resume](https://mastra.ai/docs/workflows/suspend-and-resume.md)
