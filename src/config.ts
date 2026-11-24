@@ -194,3 +194,8 @@ export const QUIZ_RUN_TTL_MS = 30 * 60_000
 // process died mid-step; boot recovery is off, D5). 3 min is longer than the
 // worst real case: 2 quiz attempts x the 60 s Gemini timeout (WF.3).
 export const QUIZ_RUN_STALE_MS = 3 * 60_000
+// WF.3 — fix 1: the quiz workflow's Gemini call gets a time limit (per
+// attempt; generateQuiz makes at most 2). Gemini has taken 25–53 s on slow
+// days (CLAUDE.md §9), so 60 s leaves room for a slow-but-working reply while
+// a hung call still ends. POST /quiz doesn't pass it, so it's unchanged.
+export const QUIZ_GENERATE_TIMEOUT_MS = 60_000

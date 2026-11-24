@@ -20,6 +20,10 @@ const THEMES = {
   // brighter shade of chat's magenta: it's part of a chat request, but its
   // lines should still stand out from the chat pipeline's own steps.
   agent: chalk.magentaBright,
+  // WF.3 — Phase 8's quiz workflow (start / pause / resume / cancel / end).
+  // Plain blue, next to the quiz pipeline's bright blue: the quiz pipeline's
+  // own lines appear INSIDE a workflow run (its last step calls generateQuiz).
+  workflow: chalk.blue,
 }
 
 type Pipeline = keyof typeof THEMES
@@ -52,6 +56,13 @@ export function detail(text: string) {
 // gray plumbing lines around it.
 export function agentDetail(text: string) {
   console.log(THEMES.agent(`      ${text}`))
+}
+
+// WF.3 — a detail line in the workflow theme: every run transition
+// (started, paused, claimed, resumed, ended, cancelled, snapshot deleted) is
+// one of these, so a run can be followed across requests by its runId.
+export function workflowDetail(text: string) {
+  console.log(THEMES.workflow(`      ${text}`))
 }
 
 export function timing(ms: number, extra?: string) {

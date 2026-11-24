@@ -37,8 +37,40 @@ export type QuizOffer = {
   action: ChatAction | null
 }
 
+// WF.3 — a document a quiz could be made from: one of the caller's READY
+// documents. The quiz workflow shows these to the user (and saves exactly
+// this list in its suspend payload, so "the second one" means the second one
+// the user SAW).
+export type QuizCandidate = { documentId: string; filename: string }
+
+// WF.3 — "which of the caller's documents could a quiz use right now?",
+// shared by the offer below and the quiz workflow's resolve-document step, so
+// the rule lives in one place. Only 'ready' documents count (POST /quiz and
+// generateQuiz answer 409 for the others). `processing` says whether any
+// upload is still being embedded, for the "still being processed" sentence.
+export async function listQuizCandidates(userId: string): Promise<{ candidates: QuizCandidate[]; processing: boolean }> {
+  const docs = await listDocuments(userId)
+  return {
+    candidates: docs.filter((d) => d.status === 'ready').map((d) => ({ documentId: d.id, filename: d.filename })),
+    processing: docs.some((d) => d.status === 'processing'),
+  }
+}
+
+// WF.3 — what to say when there's nothing a quiz could use. Shared with the
+// quiz workflow service, which says it BEFORE starting a run (D10: no run,
+// no rows for a quiz that could never start).
+export function nothingReadyText(processing: boolean): string {
+  return processing
+    ? "Your document is still being processed. Once it's ready, I can make a 5-question quiz from it."
+    : 'Upload a PDF first, and I can make a 5-question multiple-choice quiz from it.'
+}
+
 // `one` = the chat's single document (already checked: it's the caller's and
 // it's ready, by checkDocumentReady in prepareChat). Absent = "All documents".
+//
+// WF.3 — since Phase 8 this is the FALLBACK (fix 5): the quiz workflow is the
+// normal path, and this offer + button is what the user gets when a workflow
+// run can't be started (Mastra or its storage failing).
 export async function buildQuizOffer(
   userId: string,
   one?: { documentId: string; filename: string },
@@ -53,15 +85,14 @@ export async function buildQuizOffer(
 
   // "All documents": which of the caller's documents could a quiz use?
   // Only ready ones (POST /quiz answers 409 for the others anyway).
-  const docs = await listDocuments(userId)
-  const ready = docs.filter((d) => d.status === 'ready')
+  const { candidates: ready, processing } = await listQuizCandidates(userId)
 
   if (ready.length === 1) {
     const [doc] = ready
     agentDetail(`quiz offer: all documents, 1 ready → "${doc.filename}"`)
     return {
       text: `I can make a 5-question multiple-choice quiz from **${doc.filename}**. Want it?`,
-      action: { type: 'quiz', documentId: doc.id, filename: doc.filename },
+      action: { type: 'quiz', documentId: doc.documentId, filename: doc.filename },
     }
   }
 
@@ -74,12 +105,6 @@ export async function buildQuizOffer(
   }
 
   // Nothing ready: say why, no button (a button would only lead to an error)
-  const processing = docs.some((d) => d.status === 'processing')
   agentDetail(`quiz offer: no ready documents (${processing ? 'one still processing' : 'none uploaded'}) → no button`)
-  return {
-    text: processing
-      ? "Your document is still being processed. Once it's ready, I can make a 5-question quiz from it."
-      : 'Upload a PDF first, and I can make a 5-question multiple-choice quiz from it.',
-    action: null,
-  }
+  return { text: nothingReadyText(processing), action: null }
 }

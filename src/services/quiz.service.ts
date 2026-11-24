@@ -98,11 +98,16 @@ export type GenerateQuizResult =
 // Auth.3 — `userId` is the verified caller (from the token, not the body).
 // sampleChunks only returns chunks of documents this user owns, so someone
 // else's documentId hits the same 404 as a documentId that doesn't exist.
+//
+// WF.3 — `timeoutMs` (optional) is handed to each Gemini call. Only the quiz
+// workflow passes it; POST /quiz leaves it out, so it behaves as before. A
+// timeout THROWS (like a 503 does): this function's retry only covers an
+// invalid reply, so the workflow step catches errors itself (fix 1).
 export async function generateQuiz(
-  input: { documentId: unknown; userId: string },
+  input: { documentId: unknown; userId: string; timeoutMs?: number },
   t0: number,
 ): Promise<GenerateQuizResult> {
-  const { documentId, userId } = input
+  const { documentId, userId, timeoutMs } = input
 
   if (!documentId || typeof documentId !== 'string') {
     rejected('missing/invalid documentId')
@@ -153,7 +158,7 @@ export async function generateQuiz(
   let lastReason = 'no attempts made'
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const genStart = Date.now()
-    const raw = await generateAnswer(prompt, generationConfig)
+    const raw = await generateAnswer(prompt, generationConfig, { timeoutMs })
     timing(Date.now() - genStart, `attempt ${attempt}/${MAX_ATTEMPTS}`)
 
     const outcome = checkQuizReply(raw)

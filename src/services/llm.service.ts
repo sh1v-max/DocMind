@@ -11,12 +11,20 @@ const STREAM_URL =
 // `generationConfig` is optional (Step 4.1): plain chat leaves it out, while
 // structured output passes { responseMimeType: 'application/json',
 // responseSchema } to make Gemini return JSON in a given shape.
+//
+// WF.3 — `options.timeoutMs` is optional too (fix 1 in suspend-resume.md): the
+// quiz workflow passes 60 s so a hung Gemini call can't keep a run 'running'
+// forever. AbortSignal.timeout() aborts the fetch, including reading the body,
+// and the await below then throws a TimeoutError. Every existing caller leaves
+// it out and behaves exactly as before (no limit; ISSUES.md #8 stays open).
 export async function generateAnswer(
   prompt: string,
   generationConfig?: Record<string, unknown>,
+  options?: { timeoutMs?: number },
 ): Promise<string> {
   const res = await fetch(GENERATE_URL, {
     method: 'POST',
+    ...(options?.timeoutMs && { signal: AbortSignal.timeout(options.timeoutMs) }),
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': API_KEY ?? '' },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
