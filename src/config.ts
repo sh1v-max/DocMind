@@ -199,3 +199,14 @@ export const QUIZ_RUN_STALE_MS = 3 * 60_000
 // days (CLAUDE.md §9), so 60 s leaves room for a slow-but-working reply while
 // a hung call still ends. POST /quiz doesn't pass it, so it's unchanged.
 export const QUIZ_GENERATE_TIMEOUT_MS = 60_000
+
+// WF.4 — the reply reader (quizReply.service.ts, suspend-resume.md §4.5).
+// Its free rules only read SHORT replies that aren't questions (fix 3, rule
+// 17): "yes", "the second one", "react hooks". Anything longer goes to the LLM,
+// so a document name or a number inside a real question ("what does the
+// first chapter say about state?") can never be taken as a pick.
+export const QUIZ_REPLY_RULE_MAX_WORDS = 6
+// The reader's LLM call sits in the chat's hot path (before the answer
+// starts), so it gets a short limit: it only has to return one label. On a
+// timeout the reply is read as "unclear" and the question is asked again.
+export const QUIZ_REPLY_TIMEOUT_MS = 15_000

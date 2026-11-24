@@ -7,6 +7,7 @@ import { MastraCompositeStore } from '@mastra/core/storage'
 import { createStep, createWorkflow } from '@mastra/core/workflows'
 import { WorkflowsPG } from '@mastra/pg'
 import { pool } from './db/client'
+import { runReplyEval } from './step8-replies'
 
 // WF.1 — the proof of concept, and the GATE for Phase 8 (suspend-resume.md §6).
 // Nothing in the chat changes until every mode below behaves as expected.
@@ -35,6 +36,8 @@ import { pool } from './db/client'
 //   npm run step8 crash                kill a process in the middle of a step, then
 //                                      see what recovery 'off' / 'auto' do
 //   npm run step8 cleanup              delete every poc-approval run (0 rows left)
+//   npm run step8 replies [rules]      WF.4: the reply reader eval (step8-replies.ts;
+//                                      no DB, no Mastra; `rules` = 0 API calls)
 //
 // Safe-ish: it writes ONLY to the "mastra" schema (Mastra's own tables), never
 // to users/documents/chunks/chat_messages. `cleanup` removes everything it made.
@@ -460,8 +463,10 @@ async function main() {
     case 'crash': return modeCrash()
     case 'crash-child': return modeCrashChild()
     case 'cleanup': return modeCleanup()
+    // WF.4 — the reply reader eval lives in its own file (no Mastra in it)
+    case 'replies': return runReplyEval(arg1 === 'rules' ? 'rules' : 'all')
     default:
-      console.log('modes: start [label] | inspect <runId> | resume <runId> [no] | race <runId> | again <runId> | cancel [runId] | bail | throw | crash | cleanup')
+      console.log('modes: start [label] | inspect <runId> | resume <runId> [no] | race <runId> | again <runId> | cancel [runId] | bail | throw | crash | cleanup | replies [rules]')
   }
 }
 
