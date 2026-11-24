@@ -184,3 +184,13 @@ export const SEARCH_TOP_K = 3
 // what the user gets if even the last step comes back with a tool call
 // instead of text (code never runs a call on the last step)
 export const AGENT_GAVE_UP_MESSAGE = "Sorry, I couldn't finish looking that up. Try asking again, maybe in other words."
+
+// WF.2 — the quiz workflow's pointer rows (suspend-resume.md §4.4).
+// A quiz offer that's waiting for the user's answer expires after this long:
+// a "yes" 30 minutes later is ambiguous, so the next message is read as a new
+// message instead (checked lazily when the row is read; no cron, no queue).
+export const QUIZ_RUN_TTL_MS = 30 * 60_000
+// A run that has been 'running' for longer than this is treated as dead (the
+// process died mid-step; boot recovery is off, D5). 3 min is longer than the
+// worst real case: 2 quiz attempts x the 60 s Gemini timeout (WF.3).
+export const QUIZ_RUN_STALE_MS = 3 * 60_000

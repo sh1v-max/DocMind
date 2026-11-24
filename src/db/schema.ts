@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import {
   boolean,
   integer,
@@ -5,6 +6,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
   vector,
 } from 'drizzle-orm/pg-core'
 
@@ -119,3 +121,48 @@ export const chatMessages = pgTable('chat_messages', {
 // (Auth.0):
 // ALTER TABLE chat_messages ADD COLUMN user_id TEXT;
 // CREATE INDEX chat_messages_user_session_idx ON chat_messages (user_id, session_id);
+
+// the quiz_workflow_runs table
+// WF.2 — one small "pointer" row per quiz workflow run (suspend-resume.md §4.4).
+// Mastra stores the run itself (its snapshot, in the "mastra" schema), but
+// Mastra finds runs by runId, and the chat only knows userId + sessionId when
+// the next message arrives. This row is how "is there a quiz waiting in THIS
+// chat, for THIS user?" gets answered, with DocMind's own ownership rules.
+// Mastra's snapshot is the truth about the steps; this row is DocMind's view:
+//   'running' = a request is working on it right now (starting or resuming)
+//   'waiting' = paused, waiting for the user's answer (expires_at is set)
+//   'done'    = finished, cancelled, expired or dead (kept as a small history)
+export const quizWorkflowRuns = pgTable(
+  'quiz_workflow_runs',
+  {
+    runId: text('run_id').primaryKey(), // Mastra's runId; we generate it (randomUUID) before start()
+    userId: text('user_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    status: text('status').notNull(), // 'waiting' | 'running' | 'done'
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    // now() + 30 min when the run pauses; NULL while running or done
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+  },
+  (t) => [
+    // At most ONE active quiz per conversation (waiting OR running), enforced
+    // by Postgres itself, not by a check in code: a "partial" unique index
+    // only covers the rows that match its WHERE, so any number of 'done'
+    // rows can share a session, but a second active one can't be inserted.
+    uniqueIndex('quiz_workflow_runs_one_active')
+      .on(t.userId, t.sessionId)
+      .where(sql`status IN ('waiting', 'running')`),
+  ],
+)
+// equivalent sql query (WF.2, run by hand on Neon):
+// CREATE TABLE quiz_workflow_runs (
+//   run_id      TEXT PRIMARY KEY,
+//   user_id     TEXT NOT NULL,
+//   session_id  TEXT NOT NULL,
+//   status      TEXT NOT NULL,
+//   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+//   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+//   expires_at  TIMESTAMPTZ NULL
+// );
+// CREATE UNIQUE INDEX quiz_workflow_runs_one_active
+//   ON quiz_workflow_runs (user_id, session_id) WHERE status IN ('waiting', 'running');
